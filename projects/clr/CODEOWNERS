@@ -1,2 +1,4 @@
 * @cpaquot_amdeng @gandryey_amdeng @skudchad_amdeng @lmoriche_amdeng @axie_amdeng
 
+# API tracing compatibility for rocprofiler-sdk
+hipamd/include/hip/amd_detail/hip_api_trace.hpp @ROCm/ROCM-DevTools-Team

@@ -42,6 +42,7 @@
 /projects/rocr-runtime/runtime/hsa-runtime/loader                     @dayatsin-amd @kzhuravl
 /projects/rocr-runtime/runtime/hsa-runtime/image                      @shwetagkhatri
 /projects/rocr-runtime/runtime/hsa-runtime/pcs                        @shwetagkhatri @dayatsin-amd
+/projects/rocr-runtime/runtime/hsa-runtime/inc                        @ROCm/ROCM-DevTools-Team
 
 # Documentation-specific ownership by project
 
@@ -87,4 +88,3 @@
 /projects/rocr-runtime/**/*.md                                        @kentrussell @dayatsin-amd @ROCm/rocm-documentation
 /projects/rocr-runtime/**/*.rst                                       @kentrussell @dayatsin-amd @ROCm/rocm-documentation
 /projects/rocr-runtime/**/.readthedocs.yaml                           @kentrussell @dayatsin-amd @ROCm/rocm-documentation
-
