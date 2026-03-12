@@ -1,0 +1,475 @@
+# rocprofiler-compute Code Freeze Management
+# This workflow manages the code freeze lifecycle for the rocprofiler-compute project.
+# See: projects/rocprofiler-compute/docs/RFC-code-freeze-automation.md
+
+name: "[rocprofiler-compute] Code Freeze Management"
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        type: choice
+        options:
+          - start
+          - end
+      release_version:
+        description: "Release version (e.g., 7.13) - required for start"
+        required: false
+        type: string
+      reason:
+        description: "Reason for code freeze (optional)"
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Dry run mode - preview changes without applying"
+        required: false
+        type: boolean
+        default: false
+
+  # Future: Jira webhook integration
+  repository_dispatch:
+    types: [rocprofiler-compute-freeze]
+
+env:
+  STATE_FILE: projects/rocprofiler-compute/.code-freeze.json
+  PROJECT_PATH: projects/rocprofiler-compute
+  TEMP_BRANCH_PREFIX: rocprofiler-compute-temp-develop
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  validate-inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      valid: ${{ steps.validate.outputs.valid }}
+      error: ${{ steps.validate.outputs.error }}
+      action: ${{ steps.determine-action.outputs.action }}
+      release_version: ${{ steps.determine-action.outputs.release_version }}
+      reason: ${{ steps.determine-action.outputs.reason }}
+      dry_run: ${{ steps.determine-action.outputs.dry_run }}
+    steps:
+      - name: Determine action source
+        id: determine-action
+        run: |
+          # Handle both workflow_dispatch and repository_dispatch
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            echo "action=${{ github.event.client_payload.action }}" >> $GITHUB_OUTPUT
+            echo "release_version=${{ github.event.client_payload.release_version }}" >> $GITHUB_OUTPUT
+            echo "reason=${{ github.event.client_payload.reason }}" >> $GITHUB_OUTPUT
+            echo "dry_run=${{ github.event.client_payload.dry_run || 'false' }}" >> $GITHUB_OUTPUT
+          else
+            echo "action=${{ inputs.action }}" >> $GITHUB_OUTPUT
+            echo "release_version=${{ inputs.release_version }}" >> $GITHUB_OUTPUT
+            echo "reason=${{ inputs.reason }}" >> $GITHUB_OUTPUT
+            echo "dry_run=${{ inputs.dry_run }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate inputs
+        id: validate
+        run: |
+          ACTION="${{ steps.determine-action.outputs.action }}"
+          VERSION="${{ steps.determine-action.outputs.release_version }}"
+
+          if [[ "$ACTION" == "start" && -z "$VERSION" ]]; then
+            echo "valid=false" >> $GITHUB_OUTPUT
+            echo "error=Release version is required for 'start' action" >> $GITHUB_OUTPUT
+          elif [[ -z "$ACTION" ]]; then
+            echo "valid=false" >> $GITHUB_OUTPUT
+            echo "error=Action is required (start or end)" >> $GITHUB_OUTPUT
+          else
+            echo "valid=true" >> $GITHUB_OUTPUT
+            echo "error=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fail if invalid
+        if: steps.validate.outputs.valid == 'false'
+        run: |
+          echo "::error::${{ steps.validate.outputs.error }}"
+          exit 1
+
+  start-freeze:
+    needs: validate-inputs
+    if: needs.validate-inputs.outputs.action == 'start'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check current state
+        id: check-state
+        run: |
+          if [[ -f "${{ env.STATE_FILE }}" ]]; then
+            ACTIVE=$(jq -r '.active' "${{ env.STATE_FILE }}")
+            if [[ "$ACTIVE" == "true" ]]; then
+              CURRENT_RELEASE=$(jq -r '.release' "${{ env.STATE_FILE }}")
+              echo "::error::Code freeze is already active for release $CURRENT_RELEASE"
+              exit 1
+            fi
+          fi
+          echo "state_exists=$([[ -f "${{ env.STATE_FILE }}" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+      - name: Define branch names
+        id: branches
+        run: |
+          TEMP_BRANCH="${{ env.TEMP_BRANCH_PREFIX }}-${{ needs.validate-inputs.outputs.release_version }}"
+          echo "temp_branch=$TEMP_BRANCH" >> $GITHUB_OUTPUT
+          echo "## Branch Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- Temp branch: \`$TEMP_BRANCH\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create temp branch from develop
+        if: needs.validate-inputs.outputs.dry_run != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Ensure we're on latest develop
+          git checkout develop
+          git pull origin develop
+
+          # Create temp branch
+          git checkout -b "${{ steps.branches.outputs.temp_branch }}"
+          git push -u origin "${{ steps.branches.outputs.temp_branch }}"
+
+          echo "Created branch: ${{ steps.branches.outputs.temp_branch }}"
+
+      - name: Update state file
+        if: needs.validate-inputs.outputs.dry_run != 'true'
+        run: |
+          git checkout develop
+          git pull origin develop
+
+          # Update state file with jq
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          jq --arg date "$DATE" \
+             --arg release "${{ needs.validate-inputs.outputs.release_version }}" \
+             --arg branch "${{ steps.branches.outputs.temp_branch }}" \
+             --arg actor "${{ github.actor }}" \
+             --arg reason "${{ needs.validate-inputs.outputs.reason }}" \
+             '.active = true |
+              .start_date = $date |
+              .release = $release |
+              .temp_branch = $branch |
+              .started_by = $actor |
+              .reason = $reason |
+              .end_date = null |
+              .ended_by = null' \
+             "${{ env.STATE_FILE }}" > tmp.json && mv tmp.json "${{ env.STATE_FILE }}"
+
+          # Commit changes
+          git add "${{ env.STATE_FILE }}"
+          git commit -m "[rocprofiler-compute] Start code freeze for release ${{ needs.validate-inputs.outputs.release_version }}
+
+          Temp branch: ${{ steps.branches.outputs.temp_branch }}
+          Reason: ${{ needs.validate-inputs.outputs.reason }}
+          Started by: ${{ github.actor }}"
+
+          git push origin develop
+
+      - name: Find and retarget open PRs
+        if: needs.validate-inputs.outputs.dry_run != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const projectPath = 'projects/rocprofiler-compute/';
+            const tempBranch = '${{ steps.branches.outputs.temp_branch }}';
+            const release = '${{ needs.validate-inputs.outputs.release_version }}';
+
+            // Find open PRs targeting develop
+            const { data: pulls } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              base: 'develop',
+              per_page: 100
+            });
+
+            console.log(`Found ${pulls.length} open PRs targeting develop`);
+
+            let retargetedCount = 0;
+            const retargetedPRs = [];
+
+            for (const pr of pulls) {
+              // Get files changed in this PR
+              const { data: files } = await github.rest.pulls.listFiles({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100
+              });
+
+              // Check if any files are in our project path
+              const touchesProject = files.some(f => f.filename.startsWith(projectPath));
+
+              if (touchesProject) {
+                console.log(`PR #${pr.number} touches rocprofiler-compute, retargeting...`);
+
+                try {
+                  // Update PR base branch
+                  await github.rest.pulls.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: pr.number,
+                    base: tempBranch
+                  });
+
+                  // Add comment
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    body: `## Code Freeze Notice
+
+            This PR has been automatically retargeted to \`${tempBranch}\` because **code freeze is now active** for rocprofiler-compute release ${release}.
+
+            ### What this means
+            - Your PR will be merged to the temp branch during the freeze period
+            - Once the freeze ends, the temp branch will be merged back to \`develop\`
+            - Your changes will be included in the next development cycle
+
+            ### Need to merge to develop urgently?
+            If this is a critical fix that must go to \`develop\` during the freeze:
+            1. Re-target this PR to \`develop\`
+            2. Request review from a tech lead (\`@ROCm/rocprofiler-compute-leads\`) (This needs to be created)
+            3. Once approved by a tech lead, the PR can be merged
+
+            ---
+            *Automated by rocprofiler-compute code freeze management*`
+                  });
+
+                  retargetedPRs.push(`#${pr.number}: ${pr.title}`);
+                  retargetedCount++;
+                } catch (e) {
+                  console.log(`Failed to retarget PR #${pr.number}: ${e.message}`);
+                }
+              }
+            }
+
+            console.log(`Retargeted ${retargetedCount} PRs to ${tempBranch}`);
+
+            // Write summary
+            core.summary.addHeading('Code Freeze Started', 2);
+            core.summary.addList([
+              `**Release:** ${release}`,
+              `**Temp branch:** \`${tempBranch}\``,
+              `**Started by:** @${context.actor}`,
+              `**PRs retargeted:** ${retargetedCount}`
+            ]);
+
+            if (retargetedPRs.length > 0) {
+              core.summary.addHeading('Retargeted PRs', 3);
+              core.summary.addList(retargetedPRs);
+            }
+
+            await core.summary.write();
+
+      - name: Dry run summary
+        if: needs.validate-inputs.outputs.dry_run == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const projectPath = 'projects/rocprofiler-compute/';
+            const tempBranch = '${{ steps.branches.outputs.temp_branch }}';
+
+            // Find PRs that would be retargeted
+            const { data: pulls } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              base: 'develop',
+              per_page: 100
+            });
+
+            const affectedPRs = [];
+            for (const pr of pulls) {
+              const { data: files } = await github.rest.pulls.listFiles({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100
+              });
+
+              if (files.some(f => f.filename.startsWith(projectPath))) {
+                affectedPRs.push(`#${pr.number}: ${pr.title}`);
+              }
+            }
+
+            core.summary.addHeading('Dry Run - Code Freeze Start', 2);
+            core.summary.addRaw('**No changes were made.** This is a preview of what would happen.\n\n');
+            core.summary.addHeading('Actions that would be taken:', 3);
+            core.summary.addList([
+              `Create branch: \`${tempBranch}\``,
+              `Update state file: \`${{ env.STATE_FILE }}\``,
+              `Retarget ${affectedPRs.length} PRs to temp branch`
+            ]);
+
+            if (affectedPRs.length > 0) {
+              core.summary.addHeading('PRs that would be retargeted:', 3);
+              core.summary.addList(affectedPRs);
+            }
+
+            await core.summary.write();
+
+  end-freeze:
+    needs: validate-inputs
+    if: needs.validate-inputs.outputs.action == 'end'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check current state
+        id: check-state
+        run: |
+          if [[ ! -f "${{ env.STATE_FILE }}" ]]; then
+            echo "::error::State file not found. No active code freeze."
+            exit 1
+          fi
+
+          ACTIVE=$(jq -r '.active' "${{ env.STATE_FILE }}")
+          if [[ "$ACTIVE" != "true" ]]; then
+            echo "::error::No active code freeze to end."
+            exit 1
+          fi
+
+          TEMP_BRANCH=$(jq -r '.temp_branch' "${{ env.STATE_FILE }}")
+          RELEASE=$(jq -r '.release' "${{ env.STATE_FILE }}")
+          START_DATE=$(jq -r '.start_date' "${{ env.STATE_FILE }}")
+
+          echo "temp_branch=$TEMP_BRANCH" >> $GITHUB_OUTPUT
+          echo "release=$RELEASE" >> $GITHUB_OUTPUT
+          echo "start_date=$START_DATE" >> $GITHUB_OUTPUT
+
+      - name: Check for commits on temp branch
+        id: check-commits
+        run: |
+          TEMP_BRANCH="${{ steps.check-state.outputs.temp_branch }}"
+
+          # Count commits on temp branch since it diverged from develop
+          COMMIT_COUNT=$(git rev-list --count develop..$TEMP_BRANCH 2>/dev/null || echo "0")
+          echo "commit_count=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+          echo "Commits on temp branch: $COMMIT_COUNT"
+
+      - name: Create merge PR
+        if: needs.validate-inputs.outputs.dry_run != 'true'
+        id: create-pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tempBranch = '${{ steps.check-state.outputs.temp_branch }}';
+            const release = '${{ steps.check-state.outputs.release }}';
+            const startDate = '${{ steps.check-state.outputs.start_date }}';
+            const commitCount = '${{ steps.check-commits.outputs.commit_count }}';
+
+            // Create PR from temp branch to develop
+            try {
+              const { data: pr } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `[rocprofiler-compute] Merge temp branch after release ${release} code freeze`,
+                body: `## Code Freeze End - Merge Temp Branch
+
+            This PR merges changes from the temp branch back to \`develop\` after the code freeze for release ${release}.
+
+            ### Summary
+            - **Temp branch:** \`${tempBranch}\`
+            - **Freeze started:** ${startDate}
+            - **Commits during freeze:** ${commitCount}
+
+            ### Review checklist
+            - [ ] All changes were properly reviewed during the freeze period
+            - [ ] No merge conflicts with current \`develop\`
+            - [ ] CI tests pass
+
+            ---
+            *Automated by rocprofiler-compute code freeze management*`,
+                head: tempBranch,
+                base: 'develop'
+              });
+
+              console.log(`Created PR #${pr.number}: ${pr.html_url}`);
+              core.setOutput('pr_number', pr.number);
+              core.setOutput('pr_url', pr.html_url);
+
+              core.summary.addHeading('Code Freeze Ended', 2);
+              core.summary.addList([
+                `**Release:** ${release}`,
+                `**Merge PR:** #${pr.number}`,
+                `**URL:** ${pr.html_url}`,
+                `**Commits during freeze:** ${commitCount}`
+              ]);
+              await core.summary.write();
+
+            } catch (e) {
+              if (e.message.includes('No commits between')) {
+                console.log('No commits on temp branch, skipping PR creation');
+                core.summary.addHeading('Code Freeze Ended', 2);
+                core.summary.addRaw('No commits were made to the temp branch during the freeze period. No merge PR needed.\n');
+                await core.summary.write();
+              } else {
+                throw e;
+              }
+            }
+
+      - name: Update state file
+        if: needs.validate-inputs.outputs.dry_run != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout develop
+          git pull origin develop
+
+          # Update state file - add to history and reset active state
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          jq --arg date "$DATE" \
+             --arg actor "${{ github.actor }}" \
+             '
+             .history += [{
+               "release": .release,
+               "start_date": .start_date,
+               "end_date": $date,
+               "temp_branch": .temp_branch,
+               "started_by": .started_by,
+               "ended_by": $actor,
+               "reason": .reason
+             }] |
+             .active = false |
+             .end_date = $date |
+             .ended_by = $actor
+             ' "${{ env.STATE_FILE }}" > tmp.json && mv tmp.json "${{ env.STATE_FILE }}"
+
+          git add "${{ env.STATE_FILE }}"
+          git commit -m "[rocprofiler-compute] End code freeze for release ${{ steps.check-state.outputs.release }}
+
+          Ended by: ${{ github.actor }}"
+
+          git push origin develop
+
+      - name: Dry run summary
+        if: needs.validate-inputs.outputs.dry_run == 'true'
+        run: |
+          echo "## Dry Run - Code Freeze End" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**No changes were made.** This is a preview of what would happen." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Actions that would be taken:" >> $GITHUB_STEP_SUMMARY
+          echo "- Create PR from \`${{ steps.check-state.outputs.temp_branch }}\` to \`develop\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Update state file: \`${{ env.STATE_FILE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Add freeze period to history" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Current freeze details:" >> $GITHUB_STEP_SUMMARY
+          echo "- Release: ${{ steps.check-state.outputs.release }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Temp branch: ${{ steps.check-state.outputs.temp_branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commits on temp branch: ${{ steps.check-commits.outputs.commit_count }}" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,15 @@
+{
+  "active": false,
+  "release": null,
+  "temp_branch": null,
+  "start_date": null,
+  "started_by": null,
+  "reason": null,
+  "end_date": null,
+  "ended_by": null,
+  "bypass_approvers": ["@ROCm/rocprofiler-compute-leads"],
+  "monitored_paths": [
+    "projects/rocprofiler-compute/**"
+  ],
+  "history": []
+}

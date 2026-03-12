@@ -1,0 +1,334 @@
+# rocprofiler-compute Code Freeze Enforcement
+# This workflow enforces code freeze rules on PRs targeting the develop branch.
+# See: projects/rocprofiler-compute/docs/RFC-code-freeze-automation.md
+
+name: "[rocprofiler-compute] Code Freeze Enforcement"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "projects/rocprofiler-compute/**"
+    branches:
+      - develop
+
+  # Re-check when reviews are submitted (for bypass approval)
+  # NOTE: GitHub does not support 'paths' filter on pull_request_review events.
+  # We handle this by checking paths in the 'path-filter' job and skipping early
+  # if the PR doesn't touch rocprofiler-compute files.
+  pull_request_review:
+    types: [submitted]
+
+env:
+  STATE_FILE: projects/rocprofiler-compute/.code-freeze.json
+  PROJECT_PATH: projects/rocprofiler-compute
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # Early path filter for pull_request_review events
+  # GitHub doesn't support 'paths' filter on pull_request_review, so we check manually
+  # and skip the entire workflow if PR doesn't touch rocprofiler-compute
+  path-filter:
+    runs-on: ubuntu-latest
+    # Only run on PRs targeting develop
+    if: github.event.pull_request.base.ref == 'develop'
+    outputs:
+      touches_project: ${{ steps.check-files.outputs.touches_project }}
+      should_run: ${{ steps.determine.outputs.should_run }}
+    steps:
+      - name: Check if PR touches rocprofiler-compute
+        id: check-files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const projectPath = 'projects/rocprofiler-compute/';
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100
+            });
+
+            const touchesProject = files.some(f => f.filename.startsWith(projectPath));
+            console.log(`PR touches rocprofiler-compute: ${touchesProject}`);
+            core.setOutput('touches_project', touchesProject.toString());
+
+      - name: Determine if workflow should continue
+        id: determine
+        run: |
+          TOUCHES_PROJECT="${{ steps.check-files.outputs.touches_project }}"
+          EVENT_NAME="${{ github.event_name }}"
+
+          # For pull_request events, GitHub's path filter already ensures we only
+          # run for rocprofiler-compute changes. But for pull_request_review events,
+          # we need to check manually and skip if PR doesn't touch our project.
+          if [[ "$EVENT_NAME" == "pull_request_review" && "$TOUCHES_PROJECT" != "true" ]]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "Skipping: pull_request_review on PR that doesn't touch rocprofiler-compute"
+          else
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          fi
+
+  check-freeze-status:
+    needs: path-filter
+    runs-on: ubuntu-latest
+    # Skip if path-filter determined this PR doesn't need checking
+    if: needs.path-filter.outputs.should_run == 'true'
+    outputs:
+      freeze_active: ${{ steps.check.outputs.freeze_active }}
+      temp_branch: ${{ steps.check.outputs.temp_branch }}
+      release: ${{ steps.check.outputs.release }}
+      bypass_approved: ${{ steps.check-bypass.outputs.approved }}
+      touches_project: ${{ needs.path-filter.outputs.touches_project }}
+      state_file_tampered: ${{ steps.check-tampering.outputs.tampered }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: develop # Always check state from develop branch
+
+      - name: Check for state file tampering
+        id: check-tampering
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Security: Check if this PR modifies the state file
+            // If so, we should not trust the state file in the PR and must
+            // read from develop branch (which we already do above)
+            const stateFilePath = 'projects/rocprofiler-compute/.code-freeze.json';
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100
+            });
+
+            const modifiesStateFile = files.some(f => f.filename === stateFilePath);
+
+            if (modifiesStateFile) {
+              console.log('WARNING: This PR modifies the code freeze state file');
+              console.log('State will be read from develop branch to prevent tampering');
+              core.setOutput('tampered', 'true');
+            } else {
+              core.setOutput('tampered', 'false');
+            }
+
+      - name: Check freeze state
+        id: check
+        run: |
+          if [[ ! -f "${{ env.STATE_FILE }}" ]]; then
+            echo "freeze_active=false" >> $GITHUB_OUTPUT
+            echo "temp_branch=" >> $GITHUB_OUTPUT
+            echo "release=" >> $GITHUB_OUTPUT
+            echo "State file not found, no freeze active"
+            exit 0
+          fi
+
+          ACTIVE=$(jq -r '.active' "${{ env.STATE_FILE }}")
+          TEMP_BRANCH=$(jq -r '.temp_branch' "${{ env.STATE_FILE }}")
+          RELEASE=$(jq -r '.release' "${{ env.STATE_FILE }}")
+
+          echo "freeze_active=$ACTIVE" >> $GITHUB_OUTPUT
+          echo "temp_branch=$TEMP_BRANCH" >> $GITHUB_OUTPUT
+          echo "release=$RELEASE" >> $GITHUB_OUTPUT
+
+          echo "Freeze active: $ACTIVE"
+          echo "Temp branch: $TEMP_BRANCH"
+          echo "Release: $RELEASE"
+
+      - name: Check for tech lead approval (bypass)
+        id: check-bypass
+        if: steps.check.outputs.freeze_active == 'true' && needs.path-filter.outputs.touches_project == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const stateFileTampered = '${{ steps.check-tampering.outputs.tampered }}' === 'true';
+
+            // Security: If PR modifies state file, do not allow bypass
+            // This prevents attackers from setting active=false in their PR
+            if (stateFileTampered) {
+              console.log('SECURITY: PR modifies state file - bypass not allowed');
+              console.log('PRs that modify .code-freeze.json cannot bypass the freeze');
+              core.setOutput('approved', 'false');
+              return;
+            }
+
+            // Get reviews on this PR
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            // Get bypass approvers from state file
+            const fs = require('fs');
+            const stateFile = JSON.parse(fs.readFileSync('${{ env.STATE_FILE }}', 'utf8'));
+            const bypassApprovers = stateFile.bypass_approvers || [];
+
+            console.log(`Bypass approvers configured: ${bypassApprovers.join(', ')}`);
+
+            // Try to get team members for each team-based approver
+            let approverLogins = [];
+
+            for (const approver of bypassApprovers) {
+              if (approver.startsWith('@') && approver.includes('/')) {
+                // Team reference like @ROCm/rocprofiler-compute-leads
+                const [org, team] = approver.substring(1).split('/');
+                try {
+                  const { data: members } = await github.rest.teams.listMembersInOrg({
+                    org: org,
+                    team_slug: team
+                  });
+                  approverLogins.push(...members.map(m => m.login));
+                  console.log(`Team ${approver} members: ${members.map(m => m.login).join(', ')}`);
+                } catch (e) {
+                  console.log(`Could not fetch team ${approver}: ${e.message}`);
+                }
+              } else if (approver.startsWith('@')) {
+                // Individual user
+                approverLogins.push(approver.substring(1));
+              }
+            }
+
+            // If no team members found, log warning but continue
+            // The @ROCm/rocprofiler-compute-leads team must exist for bypass to work
+            if (approverLogins.length === 0) {
+              console.log('WARNING: Could not fetch team members from @ROCm/rocprofiler-compute-leads');
+              console.log('Bypass approval will not be possible until team access is configured');
+            }
+
+            console.log(`Checking for approvals from: ${approverLogins.length > 0 ? approverLogins.join(', ') : '(none - team access issue)'}`);
+
+            // Check if any approving review is from an authorized approver
+            const approved = reviews.some(review =>
+              review.state === 'APPROVED' && approverLogins.includes(review.user.login)
+            );
+
+            console.log(`Bypass approved: ${approved}`);
+            core.setOutput('approved', approved.toString());
+
+  enforce-freeze:
+    needs: [path-filter, check-freeze-status]
+    if: |
+      needs.path-filter.outputs.should_run == 'true' &&
+      needs.check-freeze-status.outputs.freeze_active == 'true' &&
+      needs.check-freeze-status.outputs.touches_project == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: State file tampering detected - fail check
+        if: needs.check-freeze-status.outputs.state_file_tampered == 'true'
+        run: |
+          echo "## Security Alert: State File Modification Detected" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This PR modifies \`.code-freeze.json\`. For security reasons:" >> $GITHUB_STEP_SUMMARY
+          echo "- The freeze state is read from the \`develop\` branch (not this PR)" >> $GITHUB_STEP_SUMMARY
+          echo "- Bypass approval is not available for PRs that modify the state file" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "If you need to modify the state file, please work with a repo admin." >> $GITHUB_STEP_SUMMARY
+          echo ""
+          echo "::error::Code freeze is active and this PR modifies the state file. Bypass not allowed."
+          exit 1
+
+      - name: Bypass approved - allow merge
+        if: needs.check-freeze-status.outputs.bypass_approved == 'true' && needs.check-freeze-status.outputs.state_file_tampered != 'true'
+        run: |
+          echo "## Code Freeze Bypass Approved" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This PR has been approved by a tech lead and can be merged to \`develop\` during the code freeze." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release:** ${{ needs.check-freeze-status.outputs.release }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Temp branch:** \`${{ needs.check-freeze-status.outputs.temp_branch }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Freeze active - notify and suggest retarget
+        if: needs.check-freeze-status.outputs.bypass_approved != 'true' && needs.check-freeze-status.outputs.state_file_tampered != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tempBranch = '${{ needs.check-freeze-status.outputs.temp_branch }}';
+            const release = '${{ needs.check-freeze-status.outputs.release }}';
+            const prNumber = context.payload.pull_request.number;
+
+            // Check if we already commented
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+
+            const botComment = comments.find(c =>
+              c.user.login === 'github-actions[bot]' &&
+              c.body.includes('Code Freeze Active')
+            );
+
+            const commentBody = `## Code Freeze Active
+
+            **rocprofiler-compute is currently in code freeze for release ${release}.**
+
+            ### Your options
+
+            #### Option 1: Retarget to temp branch (recommended)
+            Change your PR base branch to \`${tempBranch}\`:
+            1. Click "Edit" next to the PR title
+            2. Change "base" from \`develop\` to \`${tempBranch}\`
+            3. Continue with normal review process
+            4. After code freeze ends, temp branch will be merged to \`develop\`
+
+            #### Option 2: Bypass freeze (critical fixes only)
+            If this is an urgent fix that MUST go to \`develop\` during the freeze:
+            1. Keep this PR targeting \`develop\`
+            2. Request review from a tech lead (\`@ROCm/rocprofiler-compute-leads\`) (This needs to be created)
+            3. Once a tech lead approves, this check will pass
+
+            ---
+            *Automated by rocprofiler-compute code freeze management - see \`projects/rocprofiler-compute/docs/RFC-code-freeze-automation.md\`*`;
+
+            if (!botComment) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: commentBody
+              });
+            }
+
+            // Set check as failed with informative message
+            core.summary.addHeading('Code Freeze Active', 2);
+            core.summary.addRaw(`This PR targets \`develop\` but rocprofiler-compute is in code freeze for release ${release}.\n\n`);
+            core.summary.addRaw(`**To proceed:** Either retarget to \`${tempBranch}\` or get tech lead approval for bypass.\n`);
+            await core.summary.write();
+
+            // Fail the check
+            core.setFailed(`Code freeze is active for release ${release}. Retarget to ${tempBranch} or get tech lead approval.`);
+
+  no-freeze:
+    needs: [path-filter, check-freeze-status]
+    # Only run if:
+    # 1. path-filter ran and should_run is true (PR touches our project)
+    # 2. AND either freeze is not active OR PR doesn't touch project
+    # This prevents running on completely unrelated PRs
+    if: |
+      needs.path-filter.outputs.should_run == 'true' &&
+      (needs.check-freeze-status.outputs.freeze_active != 'true' ||
+       needs.check-freeze-status.outputs.touches_project != 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: No enforcement needed
+        run: |
+          FREEZE_ACTIVE="${{ needs.check-freeze-status.outputs.freeze_active }}"
+          TOUCHES_PROJECT="${{ needs.check-freeze-status.outputs.touches_project }}"
+
+          if [[ "$FREEZE_ACTIVE" != "true" ]]; then
+            echo "## No Code Freeze Active" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "rocprofiler-compute is not currently in code freeze. Normal merge process applies." >> $GITHUB_STEP_SUMMARY
+          elif [[ "$TOUCHES_PROJECT" != "true" ]]; then
+            echo "## PR Does Not Affect rocprofiler-compute" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "This PR does not modify files in \`projects/rocprofiler-compute/\`. Code freeze rules do not apply." >> $GITHUB_STEP_SUMMARY
+          fi
