@@ -72,6 +72,11 @@ if(ENABLE_ESMI_LIB)
     add_executable(${ESMI_SAMPLE_EXE} "amdsmi_esmi_intg_example.cc")
     target_link_libraries(${ESMI_SAMPLE_EXE} ${_AMDSMI_LINK_TARGET})
     target_compile_definitions(${ESMI_SAMPLE_EXE} PUBLIC ENABLE_ESMI_LIB)
+
+    set(AINIC_SAMPLE_EXE "amd_smi_ainic_ex")
+    add_executable(${AINIC_SAMPLE_EXE} "amd_smi_ainic_example.cc")
+    target_link_libraries(${AINIC_SAMPLE_EXE} ${_AMDSMI_LINK_TARGET})
+    target_compile_definitions(${AINIC_SAMPLE_EXE} PUBLIC ENABLE_ESMI_LIB)
 endif()
 
 add_executable(ainic amd_smi_nic.cc)
