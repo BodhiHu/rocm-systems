@@ -12255,13 +12255,17 @@ class AMDSMICommands:
                 f"GPU{gpu_id}" for gpu_id in primary_partition_gpu_ids
             )
 
-            print("WARNING: CPER files are only available on primary partitions")
+            self.helpers.cper_print(
+                "WARNING: CPER files are only available on primary partitions", self.logger
+            )
             if len(primary_partition_gpu_ids) > 1:
-                print(f"Try with primary partitions {primary_partitions_str}", end="")
+                self.helpers.cper_print(
+                    f"Try with primary partitions {primary_partitions_str}", self.logger
+                )
             else:
-                print(f"Try with primary partition {primary_partitions_str}", end="")
-
-            print()
+                self.helpers.cper_print(
+                    f"Try with primary partition {primary_partitions_str}", self.logger
+                )
 
         while True:
             for idx, device_handle in enumerate(args.gpu):

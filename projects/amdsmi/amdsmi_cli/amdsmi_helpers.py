@@ -2168,15 +2168,12 @@ class AMDSMIHelpers:
         """
         Display CPER summary lines. If a logger is provided and its destination is
         not stdout, append the output to that file instead of printing to stdout.
+
+        Returns:
+            list: Always returns ``[]``.
         """
         if logger is not None and logger.is_json_format():
             return []
-
-        use_file = (
-            logger is not None
-            and logger.is_human_readable_format()
-            and logger.destination != "stdout"
-        )
 
         # One‐time initialization: warning & header only once
         if not getattr(self, "_cper_display_initialized", False):
@@ -2186,15 +2183,10 @@ class AMDSMIHelpers:
                     "WARNING: No CPER files will be dumped unless "
                     "--folder=<folder_name> is specified and cper entries exist."
                 )
-                if use_file:
-                    with logger.destination.open("a", encoding="utf-8") as output_file:
-                        output_file.write(warning + "\n")
-                else:
-                    print(warning)
+                self.cper_print(warning, logger)
                 self._cper_warning_printed = True
 
-            # Print or log the header
-            self._print_header(folder, logger if use_file else None)
+            self._print_header(folder, logger)
             self._cper_display_initialized = True
 
         # Loop through all entries in the dictionary.
@@ -2223,32 +2215,34 @@ class AMDSMIHelpers:
                 afids_str = " ".join(map(str, afids))
                 output += f" {cper_data_file:<17} {afids_str}"
 
-            if use_file:
-                with logger.destination.open("a", encoding="utf-8") as output_file:
-                    output_file.write(output + "\n")
-            else:
-                print(output)
+            self.cper_print(output, logger)
 
             self.increment_cper_count()
+        return []
 
-    def _print_header(self, folder, logger=None):
+    def cper_print(self, text, logger: Optional["AMDSMILogger"] = None):
+        """Write *text* to the logger's file destination or to stdout.
+
+        When *logger* is provided and its destination is a Path (i.e. the
+        user passed ``--file``), the text is appended to that file.
+        Otherwise it is printed to stdout.
+        """
+        if logger is not None and isinstance(logger.destination, Path):
+            with logger.destination.open("a", encoding="utf-8") as f:
+                f.write(text + "\n")
+        else:
+            print(text)
+
+    def _print_header(self, folder, logger: Optional["AMDSMILogger"] = None):
+        """Print the CPER column header line (skipped for JSON output)."""
         if logger is not None and logger.is_json_format():
             return
 
         header = f"{'timestamp':<20} {'gpu_id':<7} {'severity':<20}"
         if folder:
             header += f" {'file_name':<17} {'list of afids'}"
-        use_file = (
-            logger is not None
-            and logger.is_human_readable_format()
-            and logger.destination != "stdout"
-        )
 
-        if use_file:
-            with logger.destination.open("a", encoding="utf-8") as output_file:
-                output_file.write(header + "\n")
-        else:
-            print(header)
+        self.cper_print(header, logger)
 
     def dump_cper_entries(
         self,
@@ -2258,7 +2252,7 @@ class AMDSMIHelpers:
         device_handle,
         file_limit=None,
         cper_file=None,
-        logger=None,
+        logger: Optional["AMDSMILogger"] = None,
         emit=True,
     ):
         """
@@ -2271,6 +2265,11 @@ class AMDSMIHelpers:
         device_handle: Device handle for GPU identification.
         file_limit (int, optional): Maximum number of files to retain in the folder.
         cper_file (str, optional): Override filename for the CPER binary file.
+        logger (AMDSMILogger, optional): Logger for format detection and output routing.
+        emit (bool): If True and JSON format is active, emit JSON output (default True).
+
+        Returns:
+            list: JSON row dicts when JSON format is active, otherwise ``[]``.
         """
         json_output = logger is not None and logger.is_json_format()
 
@@ -2367,7 +2366,7 @@ class AMDSMIHelpers:
                         }
                     )
                 if emit:
-                    print(json.dumps(json_rows, indent=2))
+                    self.cper_print(json.dumps(json_rows, indent=2), logger)
                 return json_rows
             else:
                 for cper_path, row in output_rows.items():
@@ -2378,7 +2377,10 @@ class AMDSMIHelpers:
                     except Exception as e:
                         afids_str = "Error fetching AFIDs"
                         logging.debug(f"Failed to fetch AFIDs for {cper_path}: {e}")
-                    print(f"{timestamp:<20} {gpu_id:<7} {severity:<20} {fname:<17} {afids_str}")
+                    self.cper_print(
+                        f"{timestamp:<20} {gpu_id:<7} {severity:<20} {fname:<17} {afids_str}",
+                        logger,
+                    )
         else:
             if json_output:
                 try:
@@ -2398,19 +2400,20 @@ class AMDSMIHelpers:
                             }
                         )
                     if emit:
-                        print(json.dumps(json_rows, indent=2))
+                        self.cper_print(json.dumps(json_rows, indent=2), logger)
                     return json_rows
                 except Exception as e:
                     logging.debug(f"Failed to build json summary rows: {e}")
             else:
                 # Print entries as JSON if no folder is specified
                 try:
-                    print(
+                    self.cper_print(
                         json.dumps(
                             entries,
                             indent=2,
                             default=lambda o: o.decode("utf-8") if isinstance(o, bytes) else o,
-                        )
+                        ),
+                        logger,
                     )
                 except Exception as e:
                     logging.debug(f"Failed to dump entries as JSON: {e}")
@@ -2553,36 +2556,65 @@ class AMDSMIHelpers:
             return False
         return True
 
-    def ras_cper(self, args, device_handle, logger, gpu_idx, emit_json=True):
-        # Parse severity mask dynamically from the --severity option.
-        severity_mask = 0
-        # drop duplicates of args
-        logging.debug(args)
+    def _emit_cper_output(
+        self,
+        entries,
+        cper_data,
+        device_handle,
+        args,
+        logger: "AMDSMILogger",
+        collected_json_rows,
+        emit_json,
+    ):
+        """Dispatch CPER output to the appropriate handler.
 
-        for sev in list(set(args.severity)):
-            if sev == "all":
-                # Set bits for NON_FATAL_UNCORRECTED (0), FATAL (1), and NON_FATAL_CORRECTED (2)
-                severity_mask |= (1 << 0) | (1 << 1) | (1 << 2)
-            elif sev == "fatal":
-                # Set bit corresponding to AMDSMI_CPER_SEV_FATAL (which is 1)
-                severity_mask |= 1 << 1
-            elif sev in ("nonfatal", "nonfatal-uncorrected"):
-                # Set bit corresponding to AMDSMI_CPER_SEV_NON_FATAL_UNCORRECTED (which is 0)
-                severity_mask |= 1 << 0
-            elif sev in ("nonfatal-corrected", "corrected"):
-                # Set bit corresponding to AMDSMI_CPER_SEV_NON_FATAL_CORRECTED (which is 2)
-                severity_mask |= 1 << 2
+        When ``--folder`` is specified or JSON format is active, writes CPER files
+        and/or emits structured JSON via dump_cper_entries().
+        Otherwise, prints a human-readable summary via display_cper_files_generated().
 
-        buffer_size = 1048576
+        Note:
+            *collected_json_rows* is mutated in place (extended with new rows).
 
-        # Decide where to send human-readable output
-        dest = getattr(logger, "destination", "stdout") if logger is not None else "stdout"
-        log_to_file = dest != "stdout"
-        if log_to_file:
-            # destination is usually a Path; fall back to Path(string) if needed
-            log_path = dest if isinstance(dest, Path) else Path(dest)
+        This is a transitional method — output dispatch should migrate to the
+        command layer (amdsmi_commands.py) in the future.
+        """
+        if args.folder or logger.is_json_format():
+            cper_rows = self.dump_cper_entries(
+                args.folder,
+                entries,
+                cper_data,
+                device_handle,
+                args.file_limit,
+                logger=logger,
+                emit=emit_json,
+            )
+            collected_json_rows.extend(cper_rows)
         else:
-            log_path = None
+            self.display_cper_files_generated(entries, device_handle, args.folder, logger=logger)
+
+    def ras_cper(self, args, device_handle, logger, gpu_idx, emit_json=True):
+        """Fetch and process CPER entries for a single GPU.
+
+        Handles:
+        - Parsing severity mask from args.severity
+        - Fetching CPER entries from the kernel driver in a loop
+        - Dispatching output via _emit_cper_output()
+
+        Args:
+            args: Parsed CLI arguments (severity, folder, file_limit, follow, cursor, etc.)
+            device_handle: GPU device handle
+            logger: AMDSMILogger instance for format detection and output routing
+            gpu_idx: Index into args.cursor for this GPU
+            emit_json: Whether to emit JSON output (default True)
+
+        Returns:
+            list: Collected JSON rows (empty list if not JSON format)
+
+        Side effects:
+            ``args.cursor[gpu_idx]`` is updated with the new cursor position.
+        """
+        severity_mask = self._parse_cper_severity_mask(args.severity)
+        buffer_size = 1048576
 
         gpu_id = self.get_gpu_id_from_device_handle(device_handle)
         if (
@@ -2590,6 +2622,7 @@ class AMDSMIHelpers:
             and not logger.is_json_format()
             and not getattr(self, "_cper_follow_prompted", False)
         ):
+            # Always print to stdout so the user sees the prompt, even with --file.
             print("Press CTRL + C to stop.")
             self._cper_follow_prompted = True
 
@@ -2601,6 +2634,8 @@ class AMDSMIHelpers:
 
         num_entries = 0
         collected_json_rows = []
+        entries = {}
+        cper_data = []
         while True:
             try:
                 entries, new_cursor, cper_data, _status_code = (
@@ -2635,6 +2670,7 @@ class AMDSMIHelpers:
             args.cursor[gpu_idx] = new_cursor
             if len(entries) == 0:
                 break
+
             # Decode mode: write CPER files from an externally-provided CPER record
             # and skip the normal output dispatch to avoid double-processing.
             if getattr(args, "decode", False) and getattr(args, "cper_file", None):
@@ -2664,89 +2700,41 @@ class AMDSMIHelpers:
                 collected_json_rows.extend(cper_rows)
                 continue
 
-            # When a file destination is set, temporarily redirect stdout
-            # so that helper print() calls go into that file.
-            if log_to_file and log_path is not None:
-                orig_stdout = sys.stdout
-                try:
-                    try:
-                        log_path.parent.mkdir(parents=True, exist_ok=True)
-                    except Exception:
-                        pass
-                    with log_path.open("a", encoding="utf-8") as f:
-                        sys.stdout = f
-                        if args.folder or logger.is_json_format():
-                            cper_rows = self.dump_cper_entries(
-                                args.folder,
-                                entries,
-                                cper_data,
-                                device_handle,
-                                args.file_limit,
-                                logger=logger,
-                                emit=emit_json,
-                            )
-                            collected_json_rows.extend(cper_rows)
-                        else:
-                            self.display_cper_files_generated(entries, device_handle, args.folder)
-                finally:
-                    sys.stdout = orig_stdout
-            else:
-                if args.folder or logger.is_json_format():
-                    cper_rows = self.dump_cper_entries(
-                        args.folder,
-                        entries,
-                        cper_data,
-                        device_handle,
-                        args.file_limit,
-                        logger=logger,
-                        emit=emit_json,
-                    )
-                    collected_json_rows.extend(cper_rows)
-                else:
-                    self.display_cper_files_generated(entries, device_handle, args.folder)
+            self._emit_cper_output(
+                entries, cper_data, device_handle, args, logger, collected_json_rows, emit_json
+            )
 
         if num_entries == 0 and not args.follow:
-            # If nothing was found, still emit the warning/header logic
-            # using the same redirection logic.
-            if log_to_file and log_path is not None:
-                orig_stdout = sys.stdout
-                try:
-                    try:
-                        log_path.parent.mkdir(parents=True, exist_ok=True)
-                    except Exception:
-                        pass
-                    with log_path.open("a", encoding="utf-8") as f:
-                        sys.stdout = f
-                        if args.folder or logger.is_json_format():
-                            cper_rows = self.dump_cper_entries(
-                                args.folder,
-                                entries,
-                                cper_data,
-                                device_handle,
-                                args.file_limit,
-                                logger=logger,
-                                emit=emit_json,
-                            )
-                            collected_json_rows.extend(cper_rows)
-                        else:
-                            self.display_cper_files_generated(entries, device_handle, args.folder)
-                finally:
-                    sys.stdout = orig_stdout
-            else:
-                if args.folder or logger.is_json_format():
-                    cper_rows = self.dump_cper_entries(
-                        args.folder,
-                        entries,
-                        cper_data,
-                        device_handle,
-                        args.file_limit,
-                        logger=logger,
-                        emit=emit_json,
-                    )
-                    collected_json_rows.extend(cper_rows)
-                else:
-                    self.display_cper_files_generated(entries, device_handle, args.folder)
+            # If nothing was found, still emit the warning/header logic.
+            self._emit_cper_output(
+                entries, cper_data, device_handle, args, logger, collected_json_rows, emit_json
+            )
         return collected_json_rows
+
+    @staticmethod
+    def _parse_cper_severity_mask(severity_list):
+        """Convert a list of severity strings into a bitmask.
+
+        Supported values: ``"all"``, ``"fatal"``, ``"nonfatal"`` /
+        ``"nonfatal-uncorrected"``, ``"corrected"`` / ``"nonfatal-corrected"``.
+
+        Args:
+            severity_list: List of severity strings from --severity arg
+
+        Returns:
+            int: Bitmask for CPER severity filtering
+        """
+        severity_mask = 0
+        for sev in set(severity_list):
+            if sev == "all":
+                severity_mask |= (1 << 0) | (1 << 1) | (1 << 2)
+            elif sev == "fatal":
+                severity_mask |= 1 << 1
+            elif sev in ("nonfatal", "nonfatal-uncorrected"):
+                severity_mask |= 1 << 0
+            elif sev in ("nonfatal-corrected", "corrected"):
+                severity_mask |= 1 << 2
+        return severity_mask
 
     def get_bitmask_ranges(self, bitmask_dict):
         ranges = {}
