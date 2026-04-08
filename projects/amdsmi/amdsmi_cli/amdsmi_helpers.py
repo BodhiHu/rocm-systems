@@ -33,13 +33,16 @@ import glob
 import errno
 import pwd
 import stat
-from typing import Tuple, Optional, Union
+from typing import Tuple, Optional, Union, TYPE_CHECKING
 import tempfile
 
 from enum import Enum
 from pathlib import Path
 from typing import List, Set, Union
 from functools import lru_cache
+
+if TYPE_CHECKING:
+    from amdsmi_logger import AMDSMILogger
 
 # Import amdsmi library
 from amdsmi_init import *
@@ -2159,7 +2162,9 @@ class AMDSMIHelpers:
             return "unknown"
         return "UNKNOWN"
 
-    def display_cper_files_generated(self, entries, device_handle, folder, logger=None):
+    def display_cper_files_generated(
+        self, entries, device_handle, folder, logger: Optional["AMDSMILogger"] = None
+    ):
         """
         Display CPER summary lines. If a logger is provided and its destination is
         not stdout, append the output to that file instead of printing to stdout.
@@ -2193,7 +2198,7 @@ class AMDSMIHelpers:
             self._cper_display_initialized = True
 
         # Loop through all entries in the dictionary.
-        for entry_index, entry in enumerate(entries.values()):
+        for entry in entries.values():
             # Assume 'entry' is a dictionary with keys: "error_severity" and "notify_type".
             timestamp = entry.get("timestamp", "unknown")
             gpu_id = "-"
@@ -2233,7 +2238,6 @@ class AMDSMIHelpers:
         header = f"{'timestamp':<20} {'gpu_id':<7} {'severity':<20}"
         if folder:
             header += f" {'file_name':<17} {'list of afids'}"
-        header += ""
         use_file = (
             logger is not None
             and logger.is_human_readable_format()
@@ -2266,13 +2270,13 @@ class AMDSMIHelpers:
         cper_data (list): List of CPER data objects with 'bytes' and 'size' keys.
         device_handle: Device handle for GPU identification.
         file_limit (int, optional): Maximum number of files to retain in the folder.
-        cper_file (str, optional): cper file name to use when saving to folder
+        cper_file (str, optional): Override filename for the CPER binary file.
         """
         json_output = logger is not None and logger.is_json_format()
 
         # Initialize header display
         if not json_output and not getattr(self, "_cper_display_initialized", False):
-            self._print_header(folder)
+            self._print_header(folder, logger)
             self._cper_display_initialized = True
 
         if folder:
@@ -2593,17 +2597,13 @@ class AMDSMIHelpers:
         if not primary_partition:
             return []
 
-        if args.folder and not getattr(self, "_cper_folder_prompted", False):
-            self._cper_folder_prompted = True
-
         logger.set_cper_exit_message(False)
-        self.stop = False
 
         num_entries = 0
         collected_json_rows = []
         while True:
             try:
-                entries, new_cursor, cper_data, status_code = (
+                entries, new_cursor, cper_data, _status_code = (
                     amdsmi_interface.amdsmi_get_gpu_cper_entries(
                         device_handle, severity_mask, buffer_size, args.cursor[gpu_idx]
                     )
@@ -2635,23 +2635,34 @@ class AMDSMIHelpers:
             args.cursor[gpu_idx] = new_cursor
             if len(entries) == 0:
                 break
-            if args.decode and args.cper_file:
-                if args.json:
-                    self.dump_cper_entries_as_json(entries, cper_data, device_handle)
-                elif args.folder:
-                    self.dump_cper_entries(
-                        args.folder, entries, cper_data, device_handle, args.file_limit
+            # Decode mode: write CPER files from an externally-provided CPER record
+            # and skip the normal output dispatch to avoid double-processing.
+            if getattr(args, "decode", False) and getattr(args, "cper_file", None):
+                decode_folder = args.folder
+                if decode_folder:
+                    cper_rows = self.dump_cper_entries(
+                        decode_folder,
+                        entries,
+                        cper_data,
+                        device_handle,
+                        args.file_limit,
+                        logger=logger,
+                        emit=emit_json,
                     )
                 else:
                     with tempfile.TemporaryDirectory() as tmp_dir:
-                        self.dump_cper_entries(
+                        cper_rows = self.dump_cper_entries(
                             tmp_dir,
                             entries,
                             cper_data,
                             device_handle,
                             args.file_limit,
                             cper_file=os.path.basename(args.cper_file),
+                            logger=logger,
+                            emit=emit_json,
                         )
+                collected_json_rows.extend(cper_rows)
+                continue
 
             # When a file destination is set, temporarily redirect stdout
             # so that helper print() calls go into that file.

@@ -12187,10 +12187,10 @@ class AMDSMICommands:
             args.cper = cper
         if afid:
             args.afid = afid
-        if decode:
-            args.decode = decode
         if severity:
             args.severity = severity
+        if decode:
+            args.decode = decode
         if folder:
             args.folder = folder
         if file_limit:
