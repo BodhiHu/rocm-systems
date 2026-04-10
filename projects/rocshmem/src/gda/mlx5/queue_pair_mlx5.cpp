@@ -23,6 +23,7 @@
  *****************************************************************************/
 
 #include "gda/queue_pair.hpp"
+#include "gda/microtiming.hpp"
 #include "util.hpp"
 #include "containers/free_list_impl.hpp"
 #include "gda/endian.hpp"
@@ -259,7 +260,8 @@ __device__ void QueuePair::mlx5_quiet_single() {
 
 // can be called with all active lanes using any number of different QPs, don't assume anything
 __device__ void QueuePair::mlx5_post_wqe_rma(int32_t length, uintptr_t laddr,
-    uintptr_t raddr, uint8_t opcode, ActiveWFInfo &wf_info) {
+    uintptr_t raddr, uint8_t opcode, ActiveWFInfo &wf_info,
+    microtiming_t *mt) {
   /**
    * since the leader needs to write the first 8 bytes of the LAST WQE to the
    * doorbell register, it's easier if the LAST thread is the leader; does this
@@ -267,6 +269,8 @@ __device__ void QueuePair::mlx5_post_wqe_rma(int32_t length, uintptr_t laddr,
    */
   // TODO: change the leader to first active lane-id, since leader is already calcualted
   bool is_leader = (wf_info.pe_group_logical_lane_id == wf_info.num_pe_group_lanes - 1);
+
+  microtiming_record(mt, 4);  // T4: post_wqe_rma entry
 
   // Pre-compute WQE segments that don't depend on the SQ post counter
   bool send_inline = gda_mlx5_wqe_rma::can_inline(opcode, length, inline_threshold);
@@ -298,9 +302,12 @@ __device__ void QueuePair::mlx5_post_wqe_rma(int32_t length, uintptr_t laddr,
   mlx5_sq.buf[sq_idx].raddr = raddr_seg;
   mlx5_sq.buf[sq_idx].rma = rma_seg;
 
+  microtiming_record(mt, 5);  // T5: WQE written to SQ
+
   if (is_leader) {
     mlx5_sq.post += wf_info.num_pe_group_lanes;
     mlx5_ring_doorbell(mlx5_sq.post, mlx5_sq.buf[sq_idx]);
+    microtiming_record(mt, 6);  // T6: doorbell rung
     release_lock(&mlx5_sq.lock);
   }
 }

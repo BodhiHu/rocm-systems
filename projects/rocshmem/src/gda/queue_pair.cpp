@@ -130,7 +130,8 @@ __device__ uint64_t QueuePair::get_same_qp_lane_mask() {
  ************************ PROVIDER-SPECIFIC HELPERS ***************************
  *****************************************************************************/
 __device__ void QueuePair::post_wqe_rma([[maybe_unused]] int pe, int32_t size, uintptr_t laddr,
-    uintptr_t raddr, uint8_t opcode, ActiveWFInfo &wf_info) {
+    uintptr_t raddr, uint8_t opcode, ActiveWFInfo &wf_info,
+    microtiming_t *mt) {
   switch (constmem.gda_provider) {
 #if defined(GDA_IONIC)
   case gda::provider::IONIC:
@@ -144,7 +145,7 @@ __device__ void QueuePair::post_wqe_rma([[maybe_unused]] int pe, int32_t size, u
 #endif
 #if defined(GDA_MLX5)
   case gda::provider::MLX5:
-    mlx5_post_wqe_rma(size, laddr, raddr, opcode, wf_info);
+    mlx5_post_wqe_rma(size, laddr, raddr, opcode, wf_info, mt);
     return;
 #endif
   default:
@@ -276,10 +277,11 @@ __device__ void QueuePair::quiet_single() {
  ****************************** SHMEM INTERFACE *******************************
  *****************************************************************************/
 __device__ void QueuePair::put_nbi(void *dest, const void *source,
-    size_t nelems, int pe, ActiveWFInfo &wf_info) {
+    size_t nelems, int pe, ActiveWFInfo &wf_info,
+    microtiming_t *mt) {
   uintptr_t src = reinterpret_cast<uintptr_t>(source);
   uintptr_t dst = reinterpret_cast<uintptr_t>(dest);
-  post_wqe_rma(pe, nelems, src, dst, gda_op_rdma_write, wf_info);
+  post_wqe_rma(pe, nelems, src, dst, gda_op_rdma_write, wf_info, mt);
 }
 
 // Used in all to all
