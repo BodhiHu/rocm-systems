@@ -92,7 +92,7 @@ struct hipGDAUncachedAllocator {
   }
 };
 
-using QPAllocator = hipGDAHostAllocator;
+using QPAllocator = hipGDAUncachedAllocator;
 
 static inline bool is_device_ptr(const void* ptr) {
   hipPointerAttribute_t ptr_attr;
