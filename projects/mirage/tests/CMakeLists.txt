@@ -33,6 +33,7 @@ mirage_add_test(mirage_session_manager_test unit/session_manager_test.cpp)
 mirage_add_test(mirage_container_test      unit/container_test.cpp)
 mirage_add_test(mirage_simulator_test      unit/simulator_test.cpp)
 mirage_add_test(mirage_daemon_test         unit/daemon_test.cpp)
+mirage_add_test(mirage_dashboard_service_test unit/dashboard_service_test.cpp)
 
 # --------------------------------------------------------------------------
 # Integration tests

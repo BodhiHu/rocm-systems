@@ -13,6 +13,7 @@
     "@xterm/xterm": "^6.0.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "react-router-dom": "^7.6.1",
     "rete-react-plugin": "^2.1.0",
     "rete-render-utils": "^2.0.3",
     "styled-components": "^6.3.12"
