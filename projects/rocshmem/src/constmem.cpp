@@ -30,7 +30,10 @@ void init_constant_memory(void) {
 
   constmem_values.ipc_first_pe = backend->ipcImpl.ipc_first_pe;
   constmem_values.ipc_stride = backend->ipcImpl.ipc_stride;
-  constmem_values.ipc_shm_size = backend->ipcImpl.shm_size;
+  // ipc_shm_size == 0 means IPC disabled (fast early return on device).
+  // Non-zero when IPC is available, regardless of stride pattern.
+  constmem_values.ipc_shm_size = (backend->ipcImpl.pes_with_ipc_avail != nullptr)
+                                 ? backend->ipcImpl.shm_size : 0;
 
   CHECK_HIP(hipMemcpyToSymbol(HIP_SYMBOL(constmem), &constmem_values, sizeof(constmem_t)));
 }
