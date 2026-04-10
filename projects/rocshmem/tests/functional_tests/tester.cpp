@@ -171,7 +171,7 @@ std::vector<Tester*> Tester::create(TesterArguments args) {
 
   if (rank == 0) std::cout << "### Creating Test: ";
 
-  BackendType backend_type = get_backend_type();
+  BackendType backend_type = rocshmem_query_backend_type();
   TestType type = (TestType)args.algorithm;
 
   switch (type) {
