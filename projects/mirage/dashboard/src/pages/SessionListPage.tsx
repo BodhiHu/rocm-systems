@@ -1,11 +1,17 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
-import { listSessions, createSession, deleteSession } from "../api/client";
-import type { SessionSummary } from "../api/types";
+import {
+  listSessions,
+  listProfiles,
+  createSession,
+  deleteSession,
+} from "../api/client";
+import type { SessionSummary, ProfileDef } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 
 export function SessionListPage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [profiles, setProfiles] = useState<ProfileDef[]>([]);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
 
@@ -14,6 +20,10 @@ export function SessionListPage() {
   }, []);
 
   useEffect(refresh, [refresh]);
+
+  useEffect(() => {
+    listProfiles().then(setProfiles).catch(() => {});
+  }, []);
 
   const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -53,16 +63,37 @@ export function SessionListPage() {
       {error && <div className="error">{error}</div>}
 
       {showForm && (
-        <form className="create-form" onSubmit={handleCreate}>
-          <input name="name" placeholder="Session name" required />
-          <input name="profile" placeholder="Profile name" required />
-          <input
-            name="image"
-            placeholder="Container image (e.g. pytorch:latest)"
-          />
-          <button type="submit" className="btn-primary">
-            Create
-          </button>
+        <form className="create-form labeled-form" onSubmit={handleCreate}>
+          <div className="form-field">
+            <label htmlFor="sf-name">Session Name</label>
+            <input id="sf-name" name="name" required />
+          </div>
+          <div className="form-field">
+            <label htmlFor="sf-profile">Profile</label>
+            <select id="sf-profile" name="profile" required>
+              <option value="" disabled selected>
+                Select profile
+              </option>
+              {profiles.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name} — {p.simulator} / {p.gpu}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="form-field">
+            <label htmlFor="sf-image">Container Image</label>
+            <input
+              id="sf-image"
+              name="image"
+              placeholder="e.g. pytorch:latest"
+            />
+          </div>
+          <div className="form-field form-actions">
+            <button type="submit" className="btn-primary">
+              Create
+            </button>
+          </div>
         </form>
       )}
 

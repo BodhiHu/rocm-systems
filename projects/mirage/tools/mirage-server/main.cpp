@@ -12,15 +12,114 @@
 #include "mirage/daemon.h"
 #include "mirage/dashboard_service.h"
 #include "mirage/json_helpers.h"
+#include "mirage/simulator.h"
 
 #include <httplib.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 namespace {
+
+// ── Dummy simulator for demo / development ─────────────────────────────────
+
+class DummySimulator : public mirage::Simulator {
+public:
+    mirage::SimulatorInfo info() const override {
+        return {
+            .name = "rocjitsu",
+            .version = "0.5.0",
+            .description = "AMD GPU functional & cycle-accurate simulator",
+            .supported_gpus =
+                {
+                    {"MI300X", "gfx942", mirage::GpuFamily::AmdCdna,
+                     "AMD Instinct MI300X — 304 CUs, 192 GB HBM3"},
+                    {"MI325X", "gfx950", mirage::GpuFamily::AmdCdna,
+                     "AMD Instinct MI325X — 304 CUs, 256 GB HBM3e"},
+                    {"MI350X", "gfx960", mirage::GpuFamily::AmdCdna,
+                     "AMD Instinct MI350X — next-gen CDNA"},
+                },
+            .supports_custom_gpus = true,
+            .supported_modes = {mirage::SimulatorMode::Functional,
+                                mirage::SimulatorMode::Clocked,
+                                mirage::SimulatorMode::CycleAccurate},
+        };
+    }
+
+    std::vector<mirage::GpuDef> supported_gpus() const override {
+        return info().supported_gpus;
+    }
+
+    mirage::GpuDef set_custom_gpu(const mirage::CustomGpuDef& gpu) override {
+        return {"custom-" + gpu.name, "gfx9xx", mirage::GpuFamily::AmdCdna,
+                "Custom: " + gpu.name};
+    }
+
+    mirage::ContainerDef create_session(
+        const mirage::SessionDef& session,
+        const mirage::ProfileDef& profile) override {
+        mirage::ContainerDef c;
+        c.image =
+            session.image.empty() ? "ghcr.io/rocm/pytorch:latest" : session.image;
+        c.env.push_back({"ROCJITSU_GPU", profile.gpu});
+        c.env.push_back({"ROCJITSU_MODE",
+                          profile.mode == mirage::SimulatorMode::CycleAccurate
+                              ? "cycle"
+                              : "functional"});
+        sessions_[session.name] = start_clock::now();
+        return c;
+    }
+
+    void delete_session(const std::string& session_id) override {
+        sessions_.erase(session_id);
+    }
+
+    mirage::SessionHealth get_session_health(
+        const std::string& session_id) const override {
+        mirage::SessionHealth h;
+        h.session_id = session_id;
+        if (sessions_.contains(session_id)) {
+            h.status = mirage::HealthStatus::Healthy;
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                start_clock::now() - sessions_.at(session_id));
+            h.uptime = {static_cast<uint64_t>(elapsed.count()), 0};
+        } else {
+            h.status = mirage::HealthStatus::Unknown;
+        }
+        return h;
+    }
+
+    mirage::SessionPerf get_session_perf(
+        const std::string& session_id) const override {
+        mirage::SessionPerf p;
+        p.session_id = session_id;
+        if (sessions_.contains(session_id)) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                start_clock::now() - sessions_.at(session_id));
+            auto secs = static_cast<uint64_t>(elapsed.count()) + 1;
+            p.ticks = secs * 2400000;
+            p.ipc = 1.85;
+            p.simulation_speed = 0.42;
+            p.active_contexts = 64;
+        }
+        return p;
+    }
+
+    mirage::ExecDef get_run_def(const mirage::RunDef& run) const override {
+        auto exec = run.exec;
+        exec.env.push_back({"LD_PRELOAD", "/usr/lib/librocjitsu_interposer.so"});
+        return exec;
+    }
+
+private:
+    using start_clock = std::chrono::steady_clock;
+    mutable std::unordered_map<std::string, start_clock::time_point> sessions_;
+};
 
 void setup_routes(httplib::Server& srv, mirage::DashboardService& svc) {
     using namespace mirage;
@@ -158,8 +257,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Set up daemon with empty config (simulators register at runtime)
+    // Set up daemon and register the built-in dummy simulator
     mirage::Daemon daemon;
+    daemon.register_simulator(std::make_shared<DummySimulator>());
     mirage::DashboardService svc(daemon);
 
     httplib::Server srv;

@@ -1,17 +1,30 @@
 import { useEffect, useState, useCallback } from "react";
-import { listProfiles, createProfile, deleteProfile } from "../api/client";
-import type { ProfileDef, SimulatorMode } from "../api/types";
+import {
+  listProfiles,
+  listSimulators,
+  createProfile,
+  deleteProfile,
+} from "../api/client";
+import type { ProfileDef, SimulatorSummary } from "../api/types";
 
 export function ProfileListPage() {
   const [profiles, setProfiles] = useState<ProfileDef[]>([]);
+  const [simulators, setSimulators] = useState<SimulatorSummary[]>([]);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [selectedSim, setSelectedSim] = useState("");
 
   const refresh = useCallback(() => {
     listProfiles().then(setProfiles).catch((e) => setError(String(e)));
   }, []);
 
   useEffect(refresh, [refresh]);
+
+  useEffect(() => {
+    listSimulators().then(setSimulators).catch(() => {});
+  }, []);
+
+  const activeSim = simulators.find((s) => s.name === selectedSim);
 
   const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -20,7 +33,7 @@ export function ProfileListPage() {
       name: fd.get("name") as string,
       simulator: fd.get("simulator") as string,
       gpu: fd.get("gpu") as string,
-      mode: (fd.get("mode") as SimulatorMode) || "Functional",
+      mode: (fd.get("mode") as ProfileDef["mode"]) || "Functional",
       num_gpus: Number(fd.get("num_gpus")) || 1,
       num_nodes: Number(fd.get("num_nodes")) || 1,
     };
@@ -54,32 +67,87 @@ export function ProfileListPage() {
       </div>
 
       {showForm && (
-        <form className="create-form" onSubmit={handleCreate}>
-          <input name="name" placeholder="Profile name" required />
-          <input name="simulator" placeholder="Simulator" required />
-          <input name="gpu" placeholder="GPU (e.g. MI300X)" required />
-          <select name="mode" defaultValue="Functional">
-            <option value="Functional">Functional</option>
-            <option value="Clocked">Clocked</option>
-            <option value="CycleAccurate">Cycle Accurate</option>
-          </select>
-          <input
-            name="num_gpus"
-            type="number"
-            min="1"
-            defaultValue="1"
-            placeholder="GPUs"
-          />
-          <input
-            name="num_nodes"
-            type="number"
-            min="1"
-            defaultValue="1"
-            placeholder="Nodes"
-          />
-          <button type="submit" className="btn-primary">
-            Create
-          </button>
+        <form className="create-form labeled-form" onSubmit={handleCreate}>
+          <div className="form-field">
+            <label htmlFor="pf-name">Profile Name</label>
+            <input id="pf-name" name="name" required />
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="pf-simulator">Simulator</label>
+            <select
+              id="pf-simulator"
+              name="simulator"
+              required
+              value={selectedSim}
+              onChange={(e) => setSelectedSim(e.target.value)}
+            >
+              <option value="" disabled>
+                Select simulator
+              </option>
+              {simulators.map((s) => (
+                <option key={s.name} value={s.name}>
+                  {s.name} v{s.version}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="pf-gpu">GPU</label>
+            <select id="pf-gpu" name="gpu" required disabled={!activeSim}>
+              <option value="" disabled>
+                {activeSim ? "Select GPU" : "Pick a simulator first"}
+              </option>
+              {activeSim?.supported_gpus.map((g) => (
+                <option key={g.name} value={g.name}>
+                  {g.name} ({g.arch})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="pf-mode">Mode</label>
+            <select id="pf-mode" name="mode" required disabled={!activeSim}>
+              <option value="" disabled>
+                {activeSim ? "Select mode" : "Pick a simulator first"}
+              </option>
+              {activeSim?.supported_modes.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="pf-gpus">GPU Count</label>
+            <input
+              id="pf-gpus"
+              name="num_gpus"
+              type="number"
+              min="1"
+              defaultValue="1"
+            />
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="pf-nodes">Node Count</label>
+            <input
+              id="pf-nodes"
+              name="num_nodes"
+              type="number"
+              min="1"
+              defaultValue="1"
+            />
+          </div>
+
+          <div className="form-field form-actions">
+            <button type="submit" className="btn-primary">
+              Create
+            </button>
+          </div>
         </form>
       )}
 

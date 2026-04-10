@@ -5,8 +5,11 @@ export function Layout() {
     <div className="layout">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <h1>mirage</h1>
-          <span className="subtitle">GPU Simulator</span>
+          <img src="/favicon.svg" alt="AMD Mirage" className="sidebar-logo" />
+          <div>
+            <h1>Mirage</h1>
+            <span className="subtitle">AMD GPU Simulator</span>
+          </div>
         </div>
         <nav>
           <NavLink to="/" end>
