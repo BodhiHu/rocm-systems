@@ -75,6 +75,9 @@ __host__ GDAContext::GDAContext(Backend *b, unsigned int ctx_id)
   ipcImpl_.shm_size = backend->ipcImpl.shm_size;
   ipcImpl_.shm_rank = backend->ipcImpl.shm_rank;
   ipcImpl_.pes_with_ipc_avail = backend->ipcImpl.pes_with_ipc_avail;
+  ipcImpl_.ipc_first_pe = backend->ipcImpl.ipc_first_pe;
+  ipcImpl_.ipc_stride = backend->ipcImpl.ipc_stride;
+
 }
 
 __host__ GDAContext::~GDAContext() {

@@ -28,6 +28,10 @@ void init_constant_memory(void) {
   constmem_values.gda_provider = static_cast<GDABackend*>(backend)->get_gda_provider();
 #endif
 
+  constmem_values.ipc_first_pe = backend->ipcImpl.ipc_first_pe;
+  constmem_values.ipc_stride = backend->ipcImpl.ipc_stride;
+  constmem_values.ipc_shm_size = backend->ipcImpl.shm_size;
+
   CHECK_HIP(hipMemcpyToSymbol(HIP_SYMBOL(constmem), &constmem_values, sizeof(constmem_t)));
 }
 

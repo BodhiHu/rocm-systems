@@ -130,6 +130,7 @@ __host__ void IpcOnImpl::ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
     delete [] seqranks;
     mpilib_ftable_.Group_free(&shm_grp);
     mpilib_ftable_.Group_free(&thread_grp);
+    ipcDetectPattern();
   }
 }
 
@@ -203,6 +204,7 @@ __host__ void IpcOnImpl::ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
   if (!disable_ipc) {
     CHECK_HIP(hipMalloc(reinterpret_cast<void**>(&pes_with_ipc_avail), shm_size * sizeof(int)));
     std::copy(shm_ranks.begin(), shm_ranks.end(), pes_with_ipc_avail);
+    ipcDetectPattern();
   }
 }
 

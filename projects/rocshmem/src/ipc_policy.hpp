@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "rocshmem/rocshmem_config.h"  // NOLINT(build/include_subdir)
+#include "constmem.hpp"
 #include "mpi_instance.hpp"
 #include "memory/std_allocator.hpp"
 #include "util.hpp"
@@ -53,6 +54,17 @@ class IpcOnImpl {
 
   int *pes_with_ipc_avail{nullptr};
 
+  /**
+   * @brief Fast O(1) IPC availability check.
+   *
+   * IPC-available PEs are either consecutive (e.g., [0,1,2,...,7]) or
+   * strided (e.g., [0,8,16,...]) in world rank. Detected at init time
+   * and stored as first_pe + stride, enabling arithmetic membership
+   * check with zero memory loads.
+   */
+  int ipc_first_pe{0};
+  int ipc_stride{0};    // 0 = pattern invalid
+
   __host__ void ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
                             MPI_Comm thread_comm);
 
@@ -61,16 +73,68 @@ class IpcOnImpl {
 
   __host__ void ipcHostStop();
 
-  __host__ __device__ bool isIpcAvailable([[maybe_unused]] int my_pe, int target_pe, int *local_target_pe) {
-    if (nullptr == pes_with_ipc_avail) { return false; }
+  /**
+   * @brief Detect consecutive or strided pattern in pes_with_ipc_avail.
+   * Called after pes_with_ipc_avail is populated.
+   * Sets ipc_stride > 0 on success, ipc_stride = 0 on failure.
+   */
+  __host__ void ipcDetectPattern() {
+    ipc_stride = 0;
+    if (nullptr == pes_with_ipc_avail || shm_size <= 0) {
+      return;
+    }
+    ipc_first_pe = pes_with_ipc_avail[0];
+    int stride = (shm_size > 1) ? (pes_with_ipc_avail[1] - pes_with_ipc_avail[0]) : 1;
+    if (stride <= 0) {
+      return;
+    }
+    for (int i = 0; i < shm_size; i++) {
+      if (pes_with_ipc_avail[i] != ipc_first_pe + stride * i) {
+        return;
+      }
+    }
+    ipc_stride = stride;
+  }
 
+  __host__ bool isIpcAvailable([[maybe_unused]] int my_pe, int target_pe, int *local_target_pe) {
+    if (nullptr == pes_with_ipc_avail) { return false; }
     for (int i=0; i<shm_size; i++) {
       if (pes_with_ipc_avail[i] == target_pe) {
         *local_target_pe = i;
         return true;
       }
     }
+    return false;
+  }
 
+  __device__ bool isIpcAvailable([[maybe_unused]] int my_pe, int target_pe, int *local_target_pe) {
+    // Fast path: use constmem (scalar loads, SGPR-cached)
+    // ipc_stride == 0 means pattern detection failed at init
+    if (constmem.ipc_stride != 0) {
+      int offset = target_pe - constmem.ipc_first_pe;
+      if (offset < 0) return false;
+      if (constmem.ipc_stride == 1) {
+        if (offset < constmem.ipc_shm_size) {
+          *local_target_pe = offset;
+          return true;
+        }
+      } else {
+        int idx = offset / constmem.ipc_stride;
+        if (idx < constmem.ipc_shm_size && offset == idx * constmem.ipc_stride) {
+          *local_target_pe = idx;
+          return true;
+        }
+      }
+      return false;
+    }
+    // Fallback: linear scan (should not be reached in normal configurations)
+    if (nullptr == pes_with_ipc_avail) { return false; }
+    for (int i=0; i<shm_size; i++) {
+      if (pes_with_ipc_avail[i] == target_pe) {
+        *local_target_pe = i;
+        return true;
+      }
+    }
     return false;
   }
 
@@ -173,6 +237,9 @@ class IpcOffImpl {
 
   int *pes_with_ipc_avail{nullptr};
 
+  int ipc_first_pe{0};
+  int ipc_stride{0};
+
   __host__ void ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
                             MPI_Comm thread_comm) {}
 
@@ -181,7 +248,8 @@ class IpcOffImpl {
 
   __host__ void ipcHostStop() {}
 
-  __host__ __device__ bool isIpcAvailable([[maybe_unused]] int my_pe, int target_pe, int *local_target_pe) { return false; }
+  __host__ bool isIpcAvailable([[maybe_unused]] int my_pe, int target_pe, int *local_target_pe) { return false; }
+  __device__ bool isIpcAvailable([[maybe_unused]] int my_pe, int target_pe, int *local_target_pe) { return false; }
 
   __device__ void ipcGpuInit(Backend *rocshmem_handle, Context *ctx,
                              int thread_id) {}
