@@ -35,6 +35,7 @@ namespace rocshmem {
 
 struct constmem_t {
   BackendType backend_type;
+  gda::provider gda_provider;
   uint64_t alltoall_wg_algo;
 } __attribute__ ((aligned (16)));
 

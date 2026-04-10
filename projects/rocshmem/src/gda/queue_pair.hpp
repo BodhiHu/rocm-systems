@@ -351,9 +351,7 @@ class QueuePair {
   __device__ void ionic_ring_doorbell_single(uint32_t pos);
 #endif
 
-  const int gda_provider_{0};
-
-  /* GDAProvider::BNXT START */
+  /* gda::provider::BNXT START */
   uint64_t *bnxt_dbr;
   struct bnxt_device_cq bnxt_cq;
   struct bnxt_device_sq bnxt_sq;
@@ -361,9 +359,9 @@ class QueuePair {
   __device__ void bnxt_poll_cq_until(uint32_t requested_available_slots);
   __device__ void bnxt_check_cqe_error(struct bnxt_re_req_cqe *cqe);
 
-  /* GDAProvider::BNXT END */
+  /* gda::provider::BNXT END */
 
-  /* GDAProvider::MLX5 START */
+  /* gda::provider::MLX5 START */
 
   gda_mlx5_device_cq mlx5_cq;
   gda_mlx5_device_sq mlx5_sq;
@@ -371,9 +369,9 @@ class QueuePair {
   __device__ void mlx5_poll_cq_until(uint16_t requested_available_slots);
   __device__ void mlx5_check_cqe_error(const mlx5_cqe64* cqe);
 
-  /* GDAProvider::MLX5 END */
+  /* gda::provider::MLX5 END */
 
-  /* GDAProvider::IONIC START */
+  /* gda::provider::IONIC START */
 
   uint64_t *cq_dbreg{nullptr};
   uint64_t cq_dbval{0};
@@ -440,7 +438,7 @@ class QueuePair {
   __device__ __attribute__((noinline))
   void ionic_quiet_internal(ActiveWFInfo &wf_info, uint32_t cons);
 
-  /* GDAProvider::IONIC END */
+  /* gda::provider::IONIC END */
 
   uint32_t inline_threshold{0};
 

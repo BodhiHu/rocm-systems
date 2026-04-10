@@ -29,6 +29,7 @@
 #include "ibv_core.hpp"
 
 #include "backend_bc.hpp"
+#include "gda_enums.hpp"
 #include "containers/free_list_impl.hpp"
 #include "hdp_proxy.hpp" //TODO useless?
 #include "memory/hip_allocator.hpp"
@@ -48,13 +49,6 @@ class GDAHostContext;
 class QueuePair;
 class HostInterface;
 
-enum GDAProvider {
-  UNSET,
-  IONIC,
-  BNXT,
-  MLX5
-};
-
 inline constexpr uint32_t GDA_IONIC_VENDOR_ID = 0x1DD8;
 inline constexpr uint32_t GDA_MLX5_VENDOR_ID  = 0x02c9; //PCI-ID is 15b3
 inline constexpr uint32_t GDA_BNXT_VENDOR_ID  = 0x14E4;
@@ -73,7 +67,7 @@ class GDABackend : public Backend {
   struct ibv_context *context = nullptr;;
   struct ibv_device_attr device_attr;
   struct ibv_pd *pd_orig = nullptr;
-  enum GDAProvider gda_provider = GDAProvider::UNSET;
+  gda::provider gda_provider = gda::provider::UNSET;
 
   struct ibv_port_attr portinfo;
   union ibv_gid gid;
@@ -136,9 +130,11 @@ class GDABackend : public Backend {
   /**
    * @brief return user-preferred GDA provider (or NONE if not specified)
    */
-  static GDAProvider requested_provider();
+  static gda::provider requested_provider();
 
  public:
+  gda::provider get_gda_provider() const { return gda_provider; }
+
   friend GDAContext;
 
   /**
@@ -160,7 +156,7 @@ class GDABackend : public Backend {
    * @param device_name The device name (for debug messages)
    * @return true if the device vendor matches the provider, false otherwise
    */
-  static bool device_matches_provider_vendor(GDAProvider provider,
+  static bool device_matches_provider_vendor(gda::provider provider,
                                              const struct ibv_device_attr &device_attr,
                                              const char *device_name);
 
@@ -172,7 +168,7 @@ class GDABackend : public Backend {
    * @return true if at least one active port on a matching vendor device is found,
    *         false otherwise
    */
-  static bool has_active_ib_interface(GDAProvider provider);
+  static bool has_active_ib_interface(gda::provider provider);
 
   /**
    * @brief Verify whether GDA Backend could run
