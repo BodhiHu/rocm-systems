@@ -83,7 +83,7 @@ export interface ServiceResult {
   error: string;
 }
 
-// ── Run types ──────────────────────────────────────────────────────────────
+// ── Run types (from simulator.fbs — Dashboard.ListRuns / CreateRun) ────────
 
 export interface RunRecord {
   id: string;
@@ -94,7 +94,7 @@ export interface RunRecord {
   output: string;
 }
 
-// ── Terminal types ─────────────────────────────────────────────────────────
+// ── Terminal types (from simulator.fbs — Dashboard.Terminal* RPCs) ─────────
 
 export interface TerminalInfo {
   id: string;

@@ -133,41 +133,20 @@ export async function createRun(
 export async function getSessionLog(
   name: string
 ): Promise<{ log: string; status: string }> {
-  const res = await fetch("/api/session/log", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!res.ok) return { log: "", status: "" };
-  return res.json() as Promise<{ log: string; status: string }>;
+  return rpc<{ log: string; status: string }>("GetSessionLog", { name });
 }
 
 // ── Terminals ──────────────────────────────────────────────────────────────
 
-async function terminalRpc<T>(
-  endpoint: string,
-  body: unknown = {}
-): Promise<T> {
-  const res = await fetch(`/api/terminal/${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    throw new Error(`Terminal ${endpoint} failed (${res.status})`);
-  }
-  return res.json() as Promise<T>;
-}
-
 export async function listTerminals(): Promise<TerminalInfo[]> {
-  const res = await terminalRpc<{ terminals: TerminalInfo[] }>("list");
+  const res = await rpc<{ terminals: TerminalInfo[] }>("ListTerminals");
   return res.terminals ?? [];
 }
 
 export async function createTerminal(
   session: string
 ): Promise<{ ok: boolean; error: string; id: string }> {
-  return terminalRpc<{ ok: boolean; error: string; id: string }>("create", {
+  return rpc<{ ok: boolean; error: string; id: string }>("CreateTerminal", {
     session,
   });
 }
@@ -177,13 +156,13 @@ export async function terminalInput(
   data: string
 ): Promise<void> {
   // data is already base64-encoded
-  await terminalRpc("input", { id, data });
+  await rpc("TerminalInput", { id, data });
 }
 
 export async function terminalOutput(
   id: string
 ): Promise<{ data: string; alive: boolean }> {
-  return terminalRpc<{ data: string; alive: boolean }>("output", { id });
+  return rpc<{ data: string; alive: boolean }>("TerminalOutput", { id });
 }
 
 export async function terminalResize(
@@ -191,9 +170,9 @@ export async function terminalResize(
   rows: number,
   cols: number
 ): Promise<void> {
-  await terminalRpc("resize", { id, rows, cols });
+  await rpc("TerminalResize", { id, rows, cols });
 }
 
 export async function closeTerminal(id: string): Promise<void> {
-  await terminalRpc("close", { id });
+  await rpc("CloseTerminal", { id });
 }

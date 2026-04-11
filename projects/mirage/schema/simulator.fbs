@@ -475,4 +475,177 @@ rpc_service Dashboard {
 
     /// Get detailed session state including health and performance.
     GetSessionDetail(GetSessionDetailRequest): GetSessionDetailReply;
+
+    // ── Runs ───────────────────────────────────────────────────────────
+
+    /// List one-shot run records, optionally filtered by session.
+    ListRuns(ListRunsRequest): ListRunsReply;
+
+    /// Execute a one-shot command inside a session container.
+    CreateRun(CreateRunRequest): CreateRunReply;
+
+    // ── Terminals ──────────────────────────────────────────────────────
+
+    /// List all active interactive terminal sessions.
+    ListTerminals(ListTerminalsRequest): ListTerminalsReply;
+
+    /// Create an interactive PTY terminal attached to a session container.
+    CreateTerminal(CreateTerminalRequest): CreateTerminalReply;
+
+    /// Send base64-encoded keystrokes to a terminal.
+    TerminalInput(TerminalInputRequest): TerminalInputReply;
+
+    /// Read base64-encoded output from a terminal (drains buffer).
+    TerminalOutput(TerminalOutputRequest): TerminalOutputReply;
+
+    /// Resize a terminal's PTY dimensions.
+    TerminalResize(TerminalResizeRequest): TerminalResizeReply;
+
+    /// Close and kill an interactive terminal session.
+    CloseTerminal(CloseTerminalRequest): CloseTerminalReply;
+
+    // ── Session log ────────────────────────────────────────────────────
+
+    /// Get the docker pull/run output log for a session.
+    GetSessionLog(GetSessionLogRequest): GetSessionLogReply;
+}
+
+
+// ===========================================================================
+//  Runs — one-shot command execution inside sessions
+// ===========================================================================
+
+table ListRunsRequest {
+    /// Optional: only return runs for this session.
+    session_filter: string;
+}
+
+/// A record of a command that was executed inside a session container.
+table RunRecord {
+    /// Unique identifier for this run, e.g. "run-1".
+    id: string;
+    /// The session the run executed in.
+    session: string;
+    /// The shell command that was executed.
+    command: string;
+    /// Execution status: "running" or "exited".
+    status: string;
+    /// Process exit code (-1 if still running).
+    exit_code: int;
+    /// Captured stdout + stderr output.
+    output: string;
+}
+
+table ListRunsReply {
+    runs: [RunRecord];
+}
+
+table CreateRunRequest {
+    session: string (required);
+    command: string (required);
+}
+
+table CreateRunReply {
+    ok: bool;
+    error: string;
+    run: RunRecord;
+}
+
+
+// ===========================================================================
+//  Interactive terminals — PTY sessions into containers
+// ===========================================================================
+
+// ── Terminal types ─────────────────────────────────────────────────────────
+
+/// Summary of an interactive terminal session.
+table TerminalInfo {
+    /// Unique terminal identifier, e.g. "term-1".
+    id: string;
+    /// The session this terminal is attached to.
+    session: string;
+    /// Whether the terminal process is still alive.
+    alive: bool;
+}
+
+// ── Terminal RPCs ──────────────────────────────────────────────────────────
+
+table CreateTerminalRequest {
+    /// Session name whose container to exec into.
+    session: string (required);
+}
+
+table CreateTerminalReply {
+    ok: bool;
+    error: string;
+    /// The terminal id to use for subsequent input/output calls.
+    id: string;
+}
+
+table TerminalInputRequest {
+    /// Terminal id returned by CreateTerminal.
+    id: string (required);
+    /// Base64-encoded keystrokes / data to write to the PTY.
+    data: string (required);
+}
+
+table TerminalInputReply {
+    ok: bool;
+}
+
+table TerminalOutputRequest {
+    /// Terminal id returned by CreateTerminal.
+    id: string (required);
+}
+
+table TerminalOutputReply {
+    /// Base64-encoded PTY output since the last read.
+    data: string;
+    /// Whether the terminal process is still alive.
+    alive: bool;
+}
+
+table TerminalResizeRequest {
+    /// Terminal id returned by CreateTerminal.
+    id: string (required);
+    /// Number of rows in the terminal.
+    rows: uint32;
+    /// Number of columns in the terminal.
+    cols: uint32;
+}
+
+table TerminalResizeReply {
+    ok: bool;
+}
+
+table CloseTerminalRequest {
+    /// Terminal id returned by CreateTerminal.
+    id: string (required);
+}
+
+table CloseTerminalReply {
+    ok: bool;
+}
+
+table ListTerminalsRequest {}
+
+table ListTerminalsReply {
+    terminals: [TerminalInfo];
+}
+
+
+// ===========================================================================
+//  Session log — docker pull / run output streamed per session
+// ===========================================================================
+
+table GetSessionLogRequest {
+    /// Session name to retrieve the log for.
+    name: string (required);
+}
+
+table GetSessionLogReply {
+    /// Accumulated docker pull & run output.
+    log: string;
+    /// Current phase: "pulling", "starting", "ready", or "error".
+    status: string;
 }

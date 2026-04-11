@@ -836,6 +836,9 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
                          sess_profile, sess_image]() {
                 std::string cname = "mirage-" + sess_name;
 
+                // Clear any stale daemon state from a previous session
+                svc.delete_session(sess_name);
+
                 // Step 1: docker pull (capture streaming output)
                 session_logs.append(sess_name,
                                     "$ docker pull " + sess_image + "\n");
@@ -1042,7 +1045,7 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
 
     // ── Terminal: Create ─────────────────────────────────────────────
     srv.Post(
-        "/api/terminal/create",
+        prefix + "CreateTerminal",
         [&terms](const httplib::Request& req, httplib::Response& res) {
             auto session =
                 mirage::json::json_get_string(req.body, "session");
@@ -1062,7 +1065,7 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
 
     // ── Terminal: Input (base64-encoded keystrokes) ────────────────────
     srv.Post(
-        "/api/terminal/input",
+        prefix + "TerminalInput",
         [&terms](const httplib::Request& req, httplib::Response& res) {
             auto id = mirage::json::json_get_string(req.body, "id");
             auto data_b64 =
@@ -1076,7 +1079,7 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
 
     // ── Terminal: Output (returns base64-encoded PTY output) ───────────
     srv.Post(
-        "/api/terminal/output",
+        prefix + "TerminalOutput",
         [&terms](const httplib::Request& req, httplib::Response& res) {
             auto id = mirage::json::json_get_string(req.body, "id");
             auto raw = terms.read_output(id);
@@ -1089,7 +1092,7 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
 
     // ── Terminal: Resize ───────────────────────────────────────────────
     srv.Post(
-        "/api/terminal/resize",
+        prefix + "TerminalResize",
         [&terms](const httplib::Request& req, httplib::Response& res) {
             auto id = mirage::json::json_get_string(req.body, "id");
             auto rows = mirage::json::json_get_uint(req.body, "rows", 24);
@@ -1103,7 +1106,7 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
 
     // ── Terminal: Close ────────────────────────────────────────────────
     srv.Post(
-        "/api/terminal/close",
+        prefix + "CloseTerminal",
         [&terms](const httplib::Request& req, httplib::Response& res) {
             auto id = mirage::json::json_get_string(req.body, "id");
             bool ok = terms.close_terminal(id);
@@ -1114,7 +1117,7 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
 
     // ── Terminal: List ─────────────────────────────────────────────────
     srv.Post(
-        "/api/terminal/list",
+        prefix + "ListTerminals",
         [&terms](const httplib::Request&, httplib::Response& res) {
             auto all = terms.list();
             std::ostringstream o;
@@ -1132,7 +1135,7 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
 
     // ── Session log: stream docker pull/run output ───────────────────
     srv.Post(
-        "/api/session/log",
+        prefix + "GetSessionLog",
         [&session_logs](const httplib::Request& req,
                         httplib::Response& res) {
             auto name = mirage::json::json_get_string(req.body, "name");
