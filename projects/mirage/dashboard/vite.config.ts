@@ -14,6 +14,10 @@ export default defineConfig({
         target: 'http://localhost:50051',
         changeOrigin: true,
       },
+      '/api/session': {
+        target: 'http://localhost:50051',
+        changeOrigin: true,
+      },
     },
   },
 })

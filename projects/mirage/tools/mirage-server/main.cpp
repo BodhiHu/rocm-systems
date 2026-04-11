@@ -372,6 +372,65 @@ private:
         terminals_;
 };
 
+// ── Session log store (captures docker pull / run output) ──────────────────
+
+struct SessionLog {
+    std::mutex mu;
+    std::string log;                          // accumulated output
+    std::string status;                       // "pulling", "starting", "ready", "error"
+};
+
+class SessionLogStore {
+public:
+    void create(const std::string& name) {
+        std::lock_guard lock(mu_);
+        auto& entry = logs_[name];
+        entry = std::make_shared<SessionLog>();
+        entry->status = "pulling";
+    }
+
+    void append(const std::string& name, const std::string& text) {
+        auto e = find(name);
+        if (!e) return;
+        std::lock_guard lock(e->mu);
+        e->log += text;
+    }
+
+    void set_status(const std::string& name, const std::string& status) {
+        auto e = find(name);
+        if (!e) return;
+        std::lock_guard lock(e->mu);
+        e->status = status;
+    }
+
+    struct Snapshot {
+        std::string log;
+        std::string status;
+    };
+
+    Snapshot get(const std::string& name) {
+        auto e = find(name);
+        if (!e) return {"", ""};
+        std::lock_guard lock(e->mu);
+        return {e->log, e->status};
+    }
+
+    void remove(const std::string& name) {
+        std::lock_guard lock(mu_);
+        logs_.erase(name);
+    }
+
+private:
+    std::shared_ptr<SessionLog> find(const std::string& name) {
+        std::lock_guard lock(mu_);
+        auto it = logs_.find(name);
+        return (it != logs_.end()) ? it->second : nullptr;
+    }
+
+    std::mutex mu_;
+    std::unordered_map<std::string, std::shared_ptr<SessionLog>> logs_;
+};
+
 // ── Docker-backed dummy simulator ──────────────────────────────────────────
 
 static const std::string LABEL_PREFIX = "mirage.";
@@ -635,7 +694,8 @@ std::string docker_session_to_summary_json(const DockerSession& s) {
 }
 
 void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
-                  RunTracker& runs, TerminalManager& terms) {
+                  RunTracker& runs, TerminalManager& terms,
+                  SessionLogStore& session_logs) {
     using namespace mirage;
 
     const std::string prefix = "/mirage.simulator.Dashboard/";
@@ -738,22 +798,104 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
             res.set_content(o.str(), "application/json");
         });
 
-    // ── CreateSession ──────────────────────────────────────────────────
+    // ── CreateSession (async with docker pull progress) ───────────────
     srv.Post(
         prefix + "CreateSession",
-        [&svc](const httplib::Request& req, httplib::Response& res) {
+        [&svc, &session_logs](const httplib::Request& req,
+                               httplib::Response& res) {
             auto session = json::parse_session(req.body);
-            auto result = svc.create_session(session);
-            res.set_content(json::to_json(result), "application/json");
+
+            // Quick validation: check if a container already exists
+            std::string container_name = "mirage-" + session.name;
+            std::string check_out;
+            int check_rc = exec_cmd(
+                "docker inspect " + shell_escape(container_name) +
+                    " >/dev/null 2>&1",
+                check_out);
+            if (check_rc == 0) {
+                res.set_content(
+                    "{\"ok\":false,\"error\":\"session already exists\"}",
+                    "application/json");
+                return;
+            }
+
+            // Start the log for this session
+            session_logs.create(session.name);
+
+            // Return immediately — background thread does pull + run
+            res.set_content("{\"ok\":true,\"error\":\"\"}",
+                            "application/json");
+
+            // Capture values for thread
+            std::string sess_name = session.name;
+            std::string sess_profile = session.profile;
+            std::string sess_image =
+                session.image.empty() ? "ubuntu:22.04" : session.image;
+
+            std::thread([&svc, &session_logs, session, sess_name,
+                         sess_profile, sess_image]() {
+                std::string cname = "mirage-" + sess_name;
+
+                // Step 1: docker pull (capture streaming output)
+                session_logs.append(sess_name,
+                                    "$ docker pull " + sess_image + "\n");
+                {
+                    std::string pull_cmd =
+                        "docker pull " + shell_escape(sess_image) + " 2>&1";
+                    std::array<char, 4096> buf;
+                    FILE* pipe = popen(pull_cmd.c_str(), "r");
+                    if (pipe) {
+                        while (fgets(buf.data(),
+                                     static_cast<int>(buf.size()), pipe)) {
+                            session_logs.append(sess_name, buf.data());
+                        }
+                        int rc = pclose(pipe);
+                        if (WEXITSTATUS(rc) != 0) {
+                            session_logs.append(
+                                sess_name,
+                                "\n✗ Pull failed (exit " +
+                                    std::to_string(WEXITSTATUS(rc)) + ")\n");
+                            session_logs.set_status(sess_name, "error");
+                            return;
+                        }
+                    } else {
+                        session_logs.append(sess_name,
+                                            "\n✗ Failed to run docker pull\n");
+                        session_logs.set_status(sess_name, "error");
+                        return;
+                    }
+                }
+
+                // Step 2: docker run
+                session_logs.set_status(sess_name, "starting");
+                session_logs.append(sess_name,
+                                    "\n$ docker run -d " + sess_image + "\n");
+
+                // Actually create via the service (which does docker run)
+                auto result = svc.create_session(session);
+                if (result.ok) {
+                    session_logs.append(sess_name,
+                                        "✓ Container started\n");
+                    session_logs.set_status(sess_name, "ready");
+                } else {
+                    session_logs.append(
+                        sess_name,
+                        "✗ Failed: " + result.error + "\n");
+                    session_logs.set_status(sess_name, "error");
+                }
+            }).detach();
         });
 
     // ── DeleteSession (Docker-backed) ────────────────────────────────
     srv.Post(
         prefix + "DeleteSession",
-        [&svc](const httplib::Request& req, httplib::Response& res) {
+        [&svc, &session_logs](const httplib::Request& req,
+                               httplib::Response& res) {
             auto name = json::json_get_string(req.body, "name");
             // Try in-memory delete first (cleans up daemon state)
             svc.delete_session(name);
+            // Clean up session log
+            session_logs.remove(name);
             // Always also force-remove the Docker container
             std::string rm_out;
             std::string container_name = "mirage-" + name;
@@ -772,7 +914,8 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
 
     // ── GetSessionDetail (Docker-backed) ───────────────────────────────
     srv.Post(prefix + "GetSessionDetail",
-             [&svc](const httplib::Request& req, httplib::Response& res) {
+             [&svc, &session_logs](const httplib::Request& req,
+                                    httplib::Response& res) {
                  auto name = json::json_get_string(req.body, "name");
                  // Try Docker first for session existence
                  bool found_in_docker = false;
@@ -785,6 +928,27 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
                      }
                  }
                  if (!found_in_docker) {
+                     // Check if session is being created (pull in progress)
+                     auto snap = session_logs.get(name);
+                     if (!snap.status.empty() &&
+                         snap.status != "ready" && snap.status != "error") {
+                         // Return a placeholder detail for the pulling session
+                         std::ostringstream o;
+                         o << "{\"name\":" << json::str(name)
+                           << ",\"profile\":{\"name\":\"\",\"simulator\":"
+                              "\"rocjitsu\",\"mode\":\"Functional\","
+                              "\"gpu\":\"\",\"num_gpus\":1,\"num_nodes\":1}"
+                           << ",\"simulator\":\"rocjitsu\""
+                           << ",\"image\":\"\""
+                           << ",\"health\":\"Unknown\""
+                           << ",\"uptime\":{\"seconds\":0,\"picoseconds\":0}"
+                           << ",\"error_message\":\"Pulling image...\""
+                           << ",\"ticks\":0,\"ipc\":0.0"
+                           << ",\"simulation_speed\":0.0"
+                           << ",\"active_contexts\":0}";
+                         res.set_content(o.str(), "application/json");
+                         return;
+                     }
                      // Fall back to in-memory
                      auto detail = svc.get_session_detail(name);
                      if (detail) {
@@ -966,6 +1130,19 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
             res.set_content(o.str(), "application/json");
         });
 
+    // ── Session log: stream docker pull/run output ───────────────────
+    srv.Post(
+        "/api/session/log",
+        [&session_logs](const httplib::Request& req,
+                        httplib::Response& res) {
+            auto name = mirage::json::json_get_string(req.body, "name");
+            auto snap = session_logs.get(name);
+            std::ostringstream o;
+            o << "{\"log\":" << mirage::json::str(snap.log)
+              << ",\"status\":" << mirage::json::str(snap.status) << "}";
+            res.set_content(o.str(), "application/json");
+        });
+
     // ── CORS preflight ─────────────────────────────────────────────────
     srv.Options("/(.*)", [](const httplib::Request&, httplib::Response& res) {
         res.status = 204;
@@ -1003,6 +1180,7 @@ int main(int argc, char* argv[]) {
 
     RunTracker runs;
     TerminalManager terms;
+    SessionLogStore session_logs;
 
     httplib::Server srv;
 
@@ -1013,7 +1191,7 @@ int main(int argc, char* argv[]) {
         {"Access-Control-Allow-Headers", "Content-Type"},
     });
 
-    setup_routes(srv, svc, runs, terms);
+    setup_routes(srv, svc, runs, terms, session_logs);
 
     // Serve the dashboard SPA static files.
     if (!static_dir.empty()) {

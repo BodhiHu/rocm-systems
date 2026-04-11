@@ -128,6 +128,20 @@ export async function createRun(
   });
 }
 
+// ── Session log ────────────────────────────────────────────────────────────
+
+export async function getSessionLog(
+  name: string
+): Promise<{ log: string; status: string }> {
+  const res = await fetch("/api/session/log", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) return { log: "", status: "" };
+  return res.json() as Promise<{ log: string; status: string }>;
+}
+
 // ── Terminals ──────────────────────────────────────────────────────────────
 
 async function terminalRpc<T>(

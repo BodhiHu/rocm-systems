@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   listSessions,
   listProfiles,
@@ -14,6 +14,7 @@ export function SessionListPage() {
   const [profiles, setProfiles] = useState<ProfileDef[]>([]);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const navigate = useNavigate();
 
   const refresh = useCallback(() => {
     listSessions().then(setSessions).catch((e) => setError(String(e)));
@@ -37,8 +38,8 @@ export function SessionListPage() {
     if (!res.ok) {
       setError(res.error);
     } else {
-      setShowForm(false);
-      refresh();
+      // Navigate to session detail to see docker pull/run progress
+      navigate(`/sessions/${encodeURIComponent(session.name)}`);
     }
   };
 

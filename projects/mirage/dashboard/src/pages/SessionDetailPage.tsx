@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
-import { getSessionDetail } from "../api/client";
+import { getSessionDetail, getSessionLog } from "../api/client";
 import type { SessionDetail } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 
@@ -12,23 +12,67 @@ function formatUptime(seconds: number): string {
   return `${h}h ${m}m`;
 }
 
+function LogStatusBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    pulling: { label: "Pulling Image", cls: "badge-pulling" },
+    starting: { label: "Starting", cls: "badge-starting" },
+    ready: { label: "Ready", cls: "badge-ready" },
+    error: { label: "Error", cls: "badge-error" },
+  };
+  const info = map[status] ?? { label: status || "–", cls: "" };
+  return <span className={`session-log-badge ${info.cls}`}>{info.label}</span>;
+}
+
 export function SessionDetailPage() {
   const { name } = useParams<{ name: string }>();
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [error, setError] = useState("");
+  const [sessionLog, setSessionLog] = useState("");
+  const [logStatus, setLogStatus] = useState("");
+  const logRef = useRef<HTMLPreElement>(null);
 
+  // Poll session detail
   useEffect(() => {
     if (!name) return;
     getSessionDetail(name)
       .then(setDetail)
       .catch((e) => setError(String(e)));
 
-    // Poll every 5 seconds
     const id = setInterval(() => {
       getSessionDetail(name).then(setDetail).catch(() => {});
     }, 5000);
     return () => clearInterval(id);
   }, [name]);
+
+  // Poll session log (fast while pulling, slow once ready)
+  useEffect(() => {
+    if (!name) return;
+    let active = true;
+    const poll = () => {
+      if (!active) return;
+      getSessionLog(name).then((snap) => {
+        if (!active) return;
+        if (snap.log) setSessionLog(snap.log);
+        if (snap.status) setLogStatus(snap.status);
+        // Poll faster while pulling/starting; stop polling once ready/error
+        const done = snap.status === "ready" || snap.status === "error";
+        if (!done) {
+          setTimeout(poll, snap.status === "pulling" ? 500 : 1000);
+        }
+      });
+    };
+    poll();
+    return () => {
+      active = false;
+    };
+  }, [name]);
+
+  // Auto-scroll log to bottom
+  useEffect(() => {
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [sessionLog]);
 
   if (error) return <div className="error">{error}</div>;
   if (!detail) return <div className="loading">Loading...</div>;
@@ -108,6 +152,18 @@ export function SessionDetailPage() {
           <span className="stat-label">Active Contexts</span>
         </div>
       </div>
+
+      {sessionLog && (
+        <>
+          <div className="session-log-header">
+            <h3>Docker Output</h3>
+            <LogStatusBadge status={logStatus} />
+          </div>
+          <pre className="session-log" ref={logRef}>
+            {sessionLog}
+          </pre>
+        </>
+      )}
     </div>
   );
 }
