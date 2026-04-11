@@ -1,16 +1,22 @@
 import { useEffect, useState, useCallback } from "react";
-import { listRuns, createRun, listSessions } from "../api/client";
-import type { RunRecord, SessionSummary } from "../api/types";
+import {
+  listTerminals,
+  createTerminal,
+  closeTerminal,
+  listSessions,
+} from "../api/client";
+import type { TerminalInfo, SessionSummary } from "../api/types";
+import { TerminalView } from "../components/TerminalView";
 
 export function RunListPage() {
-  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [error, setError] = useState("");
+  const [activeTerminal, setActiveTerminal] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
 
   const refresh = useCallback(() => {
-    listRuns().then(setRuns).catch((e) => setError(String(e)));
+    listTerminals().then(setTerminals).catch((e) => setError(String(e)));
   }, []);
 
   useEffect(refresh, [refresh]);
@@ -21,37 +27,70 @@ export function RunListPage() {
 
   const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setSubmitting(true);
     setError("");
     const fd = new FormData(e.currentTarget);
     const session = fd.get("session") as string;
-    const command = fd.get("command") as string;
 
     try {
-      const res = await createRun(session, command);
+      const res = await createTerminal(session);
       if (!res.ok) {
-        setError(res.error ?? "Run failed");
+        setError(res.error ?? "Failed to create terminal");
       } else {
         setShowForm(false);
+        setActiveTerminal(res.id);
         refresh();
       }
     } catch (err) {
       setError(String(err));
-    } finally {
-      setSubmitting(false);
     }
+  };
+
+  const handleClose = async (id: string) => {
+    await closeTerminal(id);
+    if (activeTerminal === id) setActiveTerminal(null);
+    refresh();
   };
 
   const runningSessions = sessions.filter(
     (s) => s.health_status === "Healthy"
   );
 
+  // If a terminal is active, show it full-screen
+  if (activeTerminal) {
+    return (
+      <div className="page terminal-page">
+        <div className="page-header">
+          <h2>Terminal</h2>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button
+              className="btn-secondary"
+              onClick={() => setActiveTerminal(null)}
+            >
+              ← Back
+            </button>
+            <button
+              className="btn-danger-sm"
+              onClick={() => handleClose(activeTerminal)}
+            >
+              Kill Terminal
+            </button>
+          </div>
+        </div>
+        <TerminalView
+          terminalId={activeTerminal}
+          onClose={() => handleClose(activeTerminal)}
+          onDead={() => refresh()}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="page">
       <div className="page-header">
         <h2>Runs</h2>
         <button className="btn-primary" onClick={() => setShowForm(!showForm)}>
-          {showForm ? "Cancel" : "+ New Run"}
+          {showForm ? "Cancel" : "+ New Terminal"}
         </button>
       </div>
 
@@ -60,8 +99,8 @@ export function RunListPage() {
       {showForm && (
         <form className="create-form labeled-form" onSubmit={handleCreate}>
           <div className="form-field">
-            <label htmlFor="rf-session">Session</label>
-            <select id="rf-session" name="session" required>
+            <label htmlFor="tf-session">Session</label>
+            <select id="tf-session" name="session" required>
               <option value="" disabled selected>
                 Select running session
               </option>
@@ -72,63 +111,65 @@ export function RunListPage() {
               ))}
             </select>
           </div>
-          <div className="form-field">
-            <label htmlFor="rf-command">Command</label>
-            <input
-              id="rf-command"
-              name="command"
-              required
-              placeholder="e.g. ls -la /workspace"
-            />
-          </div>
           <div className="form-field form-actions">
-            <button
-              type="submit"
-              className="btn-primary"
-              disabled={submitting}
-            >
-              {submitting ? "Running…" : "Run"}
+            <button type="submit" className="btn-primary">
+              Open Terminal
             </button>
           </div>
         </form>
       )}
 
-      {runs.length === 0 ? (
-        <p className="empty">No runs yet.</p>
+      {terminals.length === 0 ? (
+        <p className="empty">
+          No terminals. Create one to get an interactive shell inside a session
+          container.
+        </p>
       ) : (
         <table className="data-table">
           <thead>
             <tr>
               <th>ID</th>
               <th>Session</th>
-              <th>Command</th>
               <th>Status</th>
-              <th>Exit Code</th>
-              <th>Output</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            {[...runs].reverse().map((r) => (
-              <tr key={r.id}>
+            {terminals.map((t) => (
+              <tr key={t.id}>
                 <td>
-                  <strong>{r.id}</strong>
+                  <button
+                    className="link-button"
+                    onClick={() => setActiveTerminal(t.id)}
+                  >
+                    <strong>{t.id}</strong>
+                  </button>
                 </td>
-                <td>{r.session}</td>
-                <td>
-                  <code>{r.command}</code>
-                </td>
+                <td>{t.session}</td>
                 <td>
                   <span
                     className={`badge ${
-                      r.exit_code === 0 ? "badge-healthy" : "badge-unhealthy"
+                      t.alive ? "badge-healthy" : "badge-unhealthy"
                     }`}
                   >
-                    {r.status}
+                    {t.alive ? "running" : "exited"}
                   </span>
                 </td>
-                <td>{r.exit_code}</td>
                 <td>
-                  <pre className="run-output">{r.output || "—"}</pre>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <button
+                      className="btn-primary-sm"
+                      onClick={() => setActiveTerminal(t.id)}
+                    >
+                      Attach
+                    </button>
+                    <button
+                      className="btn-danger-sm"
+                      onClick={() => handleClose(t.id)}
+                    >
+                      Close
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

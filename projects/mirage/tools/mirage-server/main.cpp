@@ -17,15 +17,24 @@
 #include <httplib.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <poll.h>
+#include <pty.h>
+#include <signal.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <sys/ioctl.h>
+#include <sys/wait.h>
+#include <thread>
+#include <unistd.h>
 #include <unordered_map>
 #include <vector>
 
@@ -72,7 +81,53 @@ std::string shell_escape(const std::string& s) {
     return out;
 }
 
-// ── Run tracker ────────────────────────────────────────────────────────────
+// ── Base64 encoding/decoding ───────────────────────────────────────────────
+
+static const char b64_table[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string base64_encode(const std::string& in) {
+    std::string out;
+    int val = 0, valb = -6;
+    for (unsigned char c : in) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            out.push_back(b64_table[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6)
+        out.push_back(b64_table[((val << 8) >> (valb + 8)) & 0x3F]);
+    while (out.size() % 4) out.push_back('=');
+    return out;
+}
+
+std::string base64_decode(const std::string& in) {
+    auto val_of = [](unsigned char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1;
+    };
+    std::string out;
+    int val = 0, valb = -8;
+    for (unsigned char c : in) {
+        int d = val_of(c);
+        if (d == -1) break;
+        val = (val << 6) + d;
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(static_cast<char>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
+
+// ── Run tracker (kept for old-style one-shot runs) ─────────────────────────
 
 struct RunRecord {
     std::string id;
@@ -125,6 +180,196 @@ private:
     std::mutex mu_;
     int next_id_ = 1;
     std::vector<RunRecord> runs_;
+};
+
+// ── Interactive PTY terminal sessions ──────────────────────────────────────
+
+// Forward declaration — defined later alongside other Docker helpers.
+bool docker_container_running(const std::string& session_name);
+
+struct TerminalSession {
+    std::string id;
+    std::string session;  // Docker session name
+    int master_fd = -1;
+    pid_t pid = -1;
+    std::mutex buf_mu;
+    std::string output_buf;
+    std::atomic<bool> alive{true};
+};
+
+class TerminalManager {
+public:
+    ~TerminalManager() {
+        std::lock_guard lock(mu_);
+        for (auto& [_, t] : terminals_) {
+            t->alive.store(false);
+            if (t->master_fd >= 0) ::close(t->master_fd);
+            if (t->pid > 0) {
+                kill(t->pid, SIGKILL);
+                waitpid(t->pid, nullptr, WNOHANG);
+            }
+        }
+    }
+
+    struct CreateResult {
+        bool ok = false;
+        std::string error;
+        std::string id;
+    };
+
+    CreateResult create(const std::string& session_name) {
+        if (!docker_container_running(session_name)) {
+            return {false, "session container not running", ""};
+        }
+
+        auto term = std::make_shared<TerminalSession>();
+        {
+            std::lock_guard lock(mu_);
+            term->id = "term-" + std::to_string(next_id_++);
+        }
+        term->session = session_name;
+
+        struct winsize ws{};
+        ws.ws_row = 24;
+        ws.ws_col = 80;
+
+        term->pid = forkpty(&term->master_fd, nullptr, nullptr, &ws);
+        if (term->pid < 0) {
+            return {false, "forkpty() failed", ""};
+        }
+
+        if (term->pid == 0) {
+            // Child process — exec into the Docker container
+            std::string container = "mirage-" + session_name;
+            execlp("docker", "docker", "exec", "-it",
+                   container.c_str(), "/bin/bash", nullptr);
+            _exit(127);
+        }
+
+        // Parent — start a reader thread to drain PTY output
+        auto t = term;
+        std::thread reader([t]() {
+            char buf[4096];
+            while (t->alive.load()) {
+                struct pollfd pfd{};
+                pfd.fd = t->master_fd;
+                pfd.events = POLLIN;
+                int ret = poll(&pfd, 1, 200);
+                if (ret > 0 && (pfd.revents & POLLIN)) {
+                    ssize_t n = ::read(t->master_fd, buf, sizeof(buf));
+                    if (n > 0) {
+                        std::lock_guard lock(t->buf_mu);
+                        t->output_buf.append(buf, static_cast<size_t>(n));
+                        // Cap buffer at 256 KB to prevent unbounded growth
+                        if (t->output_buf.size() > 256 * 1024) {
+                            t->output_buf.erase(
+                                0, t->output_buf.size() - 128 * 1024);
+                        }
+                    } else if (n < 0 &&
+                               (errno == EAGAIN || errno == EIO)) {
+                        // EIO is normal during PTY startup; EAGAIN for
+                        // non-blocking.  Just retry.
+                        continue;
+                    } else {
+                        // n == 0  → slave closed; other errors → done
+                        t->alive.store(false);
+                        break;
+                    }
+                } else if (ret > 0 &&
+                           (pfd.revents & (POLLHUP | POLLERR)) &&
+                           !(pfd.revents & POLLIN)) {
+                    // Only treat HUP/ERR as terminal if no data pending
+                    t->alive.store(false);
+                    break;
+                }
+            }
+            // Reap child
+            if (t->pid > 0) {
+                waitpid(t->pid, nullptr, WNOHANG);
+            }
+        });
+        reader.detach();
+
+        std::lock_guard lock(mu_);
+        terminals_[term->id] = term;
+        return {true, "", term->id};
+    }
+
+    bool write_input(const std::string& id, const std::string& data) {
+        auto t = find(id);
+        if (!t || !t->alive.load()) return false;
+        ssize_t n = ::write(t->master_fd, data.data(), data.size());
+        return n > 0;
+    }
+
+    /// Drain all buffered output and return it (may be empty).
+    std::string read_output(const std::string& id) {
+        auto t = find(id);
+        if (!t) return "";
+        std::lock_guard lock(t->buf_mu);
+        std::string out;
+        std::swap(out, t->output_buf);
+        return out;
+    }
+
+    bool is_alive(const std::string& id) {
+        auto t = find(id);
+        return t && t->alive.load();
+    }
+
+    bool resize(const std::string& id, uint16_t rows, uint16_t cols) {
+        auto t = find(id);
+        if (!t || !t->alive.load()) return false;
+        struct winsize ws{};
+        ws.ws_row = rows;
+        ws.ws_col = cols;
+        return ioctl(t->master_fd, TIOCSWINSZ, &ws) == 0;
+    }
+
+    bool close_terminal(const std::string& id) {
+        std::lock_guard lock(mu_);
+        auto it = terminals_.find(id);
+        if (it == terminals_.end()) return false;
+        auto t = it->second;
+        t->alive.store(false);
+        if (t->master_fd >= 0) {
+            ::close(t->master_fd);
+            t->master_fd = -1;
+        }
+        if (t->pid > 0) {
+            kill(t->pid, SIGKILL);
+            waitpid(t->pid, nullptr, WNOHANG);
+        }
+        terminals_.erase(it);
+        return true;
+    }
+
+    struct TerminalInfo {
+        std::string id;
+        std::string session;
+        bool alive;
+    };
+
+    std::vector<TerminalInfo> list() {
+        std::lock_guard lock(mu_);
+        std::vector<TerminalInfo> result;
+        for (auto& [_, t] : terminals_) {
+            result.push_back({t->id, t->session, t->alive.load()});
+        }
+        return result;
+    }
+
+private:
+    std::shared_ptr<TerminalSession> find(const std::string& id) {
+        std::lock_guard lock(mu_);
+        auto it = terminals_.find(id);
+        return (it != terminals_.end()) ? it->second : nullptr;
+    }
+
+    std::mutex mu_;
+    int next_id_ = 1;
+    std::unordered_map<std::string, std::shared_ptr<TerminalSession>>
+        terminals_;
 };
 
 // ── Docker-backed dummy simulator ──────────────────────────────────────────
@@ -390,7 +635,7 @@ std::string docker_session_to_summary_json(const DockerSession& s) {
 }
 
 void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
-                  RunTracker& runs) {
+                  RunTracker& runs, TerminalManager& terms) {
     using namespace mirage;
 
     const std::string prefix = "/mirage.simulator.Dashboard/";
@@ -631,6 +876,96 @@ void setup_routes(httplib::Server& srv, mirage::DashboardService& svc,
                             "application/json");
         });
 
+    // ── Terminal: Create ─────────────────────────────────────────────
+    srv.Post(
+        "/api/terminal/create",
+        [&terms](const httplib::Request& req, httplib::Response& res) {
+            auto session =
+                mirage::json::json_get_string(req.body, "session");
+            if (session.empty()) {
+                res.set_content(
+                    "{\"ok\":false,\"error\":\"session required\"}",
+                    "application/json");
+                return;
+            }
+            auto result = terms.create(session);
+            std::ostringstream o;
+            o << "{\"ok\":" << (result.ok ? "true" : "false")
+              << ",\"error\":" << mirage::json::str(result.error)
+              << ",\"id\":" << mirage::json::str(result.id) << "}";
+            res.set_content(o.str(), "application/json");
+        });
+
+    // ── Terminal: Input (base64-encoded keystrokes) ────────────────────
+    srv.Post(
+        "/api/terminal/input",
+        [&terms](const httplib::Request& req, httplib::Response& res) {
+            auto id = mirage::json::json_get_string(req.body, "id");
+            auto data_b64 =
+                mirage::json::json_get_string(req.body, "data");
+            auto data = base64_decode(data_b64);
+            bool ok = terms.write_input(id, data);
+            res.set_content(
+                ok ? "{\"ok\":true}" : "{\"ok\":false}",
+                "application/json");
+        });
+
+    // ── Terminal: Output (returns base64-encoded PTY output) ───────────
+    srv.Post(
+        "/api/terminal/output",
+        [&terms](const httplib::Request& req, httplib::Response& res) {
+            auto id = mirage::json::json_get_string(req.body, "id");
+            auto raw = terms.read_output(id);
+            bool alive = terms.is_alive(id);
+            std::ostringstream o;
+            o << "{\"data\":" << mirage::json::str(base64_encode(raw))
+              << ",\"alive\":" << (alive ? "true" : "false") << "}";
+            res.set_content(o.str(), "application/json");
+        });
+
+    // ── Terminal: Resize ───────────────────────────────────────────────
+    srv.Post(
+        "/api/terminal/resize",
+        [&terms](const httplib::Request& req, httplib::Response& res) {
+            auto id = mirage::json::json_get_string(req.body, "id");
+            auto rows = mirage::json::json_get_uint(req.body, "rows", 24);
+            auto cols = mirage::json::json_get_uint(req.body, "cols", 80);
+            bool ok = terms.resize(id, static_cast<uint16_t>(rows),
+                                   static_cast<uint16_t>(cols));
+            res.set_content(
+                ok ? "{\"ok\":true}" : "{\"ok\":false}",
+                "application/json");
+        });
+
+    // ── Terminal: Close ────────────────────────────────────────────────
+    srv.Post(
+        "/api/terminal/close",
+        [&terms](const httplib::Request& req, httplib::Response& res) {
+            auto id = mirage::json::json_get_string(req.body, "id");
+            bool ok = terms.close_terminal(id);
+            res.set_content(
+                ok ? "{\"ok\":true}" : "{\"ok\":false}",
+                "application/json");
+        });
+
+    // ── Terminal: List ─────────────────────────────────────────────────
+    srv.Post(
+        "/api/terminal/list",
+        [&terms](const httplib::Request&, httplib::Response& res) {
+            auto all = terms.list();
+            std::ostringstream o;
+            o << "{\"terminals\":[";
+            for (size_t i = 0; i < all.size(); ++i) {
+                if (i) o << ",";
+                o << "{\"id\":" << mirage::json::str(all[i].id)
+                  << ",\"session\":" << mirage::json::str(all[i].session)
+                  << ",\"alive\":" << (all[i].alive ? "true" : "false")
+                  << "}";
+            }
+            o << "]}";
+            res.set_content(o.str(), "application/json");
+        });
+
     // ── CORS preflight ─────────────────────────────────────────────────
     srv.Options("/(.*)", [](const httplib::Request&, httplib::Response& res) {
         res.status = 204;
@@ -667,6 +1002,7 @@ int main(int argc, char* argv[]) {
     mirage::DashboardService svc(daemon);
 
     RunTracker runs;
+    TerminalManager terms;
 
     httplib::Server srv;
 
@@ -677,7 +1013,7 @@ int main(int argc, char* argv[]) {
         {"Access-Control-Allow-Headers", "Content-Type"},
     });
 
-    setup_routes(srv, svc, runs);
+    setup_routes(srv, svc, runs, terms);
 
     // Serve the dashboard SPA static files.
     if (!static_dir.empty()) {

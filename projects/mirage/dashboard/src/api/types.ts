@@ -93,3 +93,11 @@ export interface RunRecord {
   exit_code: number;
   output: string;
 }
+
+// ── Terminal types ─────────────────────────────────────────────────────────
+
+export interface TerminalInfo {
+  id: string;
+  session: string;
+  alive: boolean;
+}
