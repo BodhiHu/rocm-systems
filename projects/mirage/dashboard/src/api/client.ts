@@ -14,6 +14,7 @@ import type {
   SessionDetail,
   ServiceResult,
   SessionDef,
+  RunRecord,
 } from "./types";
 
 const SERVICE = "/mirage.simulator.Dashboard";
@@ -103,4 +104,25 @@ export async function getSessionDetail(
   } catch {
     return null;
   }
+}
+
+// ── Runs ───────────────────────────────────────────────────────────────────
+
+export async function listRuns(
+  sessionFilter?: string
+): Promise<RunRecord[]> {
+  const res = await rpc<{ runs: RunRecord[] }>("ListRuns", {
+    session_filter: sessionFilter ?? "",
+  });
+  return res.runs ?? [];
+}
+
+export async function createRun(
+  session: string,
+  command: string
+): Promise<{ ok: boolean; error?: string; run?: RunRecord }> {
+  return rpc<{ ok: boolean; error?: string; run?: RunRecord }>("CreateRun", {
+    session,
+    command,
+  });
 }

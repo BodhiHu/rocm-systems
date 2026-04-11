@@ -6,6 +6,7 @@ import { SimulatorDetailPage } from "./pages/SimulatorDetailPage";
 import { ProfileListPage } from "./pages/ProfileListPage";
 import { SessionListPage } from "./pages/SessionListPage";
 import { SessionDetailPage } from "./pages/SessionDetailPage";
+import { RunListPage } from "./pages/RunListPage";
 import "./App.css";
 
 function App() {
@@ -18,6 +19,7 @@ function App() {
         <Route path="profiles" element={<ProfileListPage />} />
         <Route path="sessions" element={<SessionListPage />} />
         <Route path="sessions/:name" element={<SessionDetailPage />} />
+        <Route path="runs" element={<RunListPage />} />
       </Route>
     </Routes>
   );

@@ -18,6 +18,7 @@ export function Layout() {
           <NavLink to="/simulators">Simulators</NavLink>
           <NavLink to="/profiles">Profiles</NavLink>
           <NavLink to="/sessions">Sessions</NavLink>
+          <NavLink to="/runs">Runs</NavLink>
         </nav>
       </aside>
       <main className="content">

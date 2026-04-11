@@ -82,3 +82,14 @@ export interface ServiceResult {
   ok: boolean;
   error: string;
 }
+
+// ── Run types ──────────────────────────────────────────────────────────────
+
+export interface RunRecord {
+  id: string;
+  session: string;
+  command: string;
+  status: string;
+  exit_code: number;
+  output: string;
+}
