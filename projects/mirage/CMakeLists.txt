@@ -25,6 +25,7 @@ set(MIRAGE_SCHEMAS
     ${MIRAGE_SCHEMA_DIR}/config.fbs
     ${MIRAGE_SCHEMA_DIR}/container.fbs
     ${MIRAGE_SCHEMA_DIR}/simulator.fbs
+    ${MIRAGE_SCHEMA_DIR}/simulator_service.fbs
     ${MIRAGE_SCHEMA_DIR}/socket.fbs
 )
 
@@ -37,15 +38,15 @@ foreach(schema ${MIRAGE_SCHEMAS})
 endforeach()
 
 # --------------------------------------------------------------------------
-# gRPC stub generation (simulator.fbs → simulator.grpc.fb.h/.cc)
+# gRPC stub generation (socket.fbs → socket.grpc.fb.h/.cc)
 # --------------------------------------------------------------------------
-set(MIRAGE_GRPC_HEADER ${MIRAGE_GENERATED_DIR}/simulator.grpc.fb.h)
-set(MIRAGE_GRPC_SOURCE ${MIRAGE_GENERATED_DIR}/simulator.grpc.fb.cc)
+set(MIRAGE_GRPC_HEADER ${MIRAGE_GENERATED_DIR}/socket.grpc.fb.h)
+set(MIRAGE_GRPC_SOURCE ${MIRAGE_GENERATED_DIR}/socket.grpc.fb.cc)
 
-# Generate C++ headers for all schemas, then gRPC stubs for simulator.fbs.
-# The --grpc --cpp combo regenerates simulator_generated.h, so we run
-# the plain --cpp first (for non-simulator schemas) then --grpc --cpp
-# for simulator.fbs which produces both the regular header and gRPC stubs.
+# Generate C++ headers for all schemas, then gRPC stubs for socket.fbs.
+# The --grpc --cpp combo regenerates socket_generated.h, so we run
+# the plain --cpp first (for non-socket schemas) then --grpc --cpp
+# for socket.fbs which produces both the regular header and gRPC stubs.
 add_custom_command(
     OUTPUT  ${MIRAGE_GENERATED_HEADERS} ${MIRAGE_GRPC_HEADER} ${MIRAGE_GRPC_SOURCE}
     COMMAND ${FLATC} --cpp -o ${MIRAGE_GENERATED_DIR}
@@ -53,10 +54,11 @@ add_custom_command(
             ${MIRAGE_SCHEMA_DIR}/common.fbs
             ${MIRAGE_SCHEMA_DIR}/config.fbs
             ${MIRAGE_SCHEMA_DIR}/container.fbs
-            ${MIRAGE_SCHEMA_DIR}/socket.fbs
+            ${MIRAGE_SCHEMA_DIR}/simulator.fbs
+            ${MIRAGE_SCHEMA_DIR}/simulator_service.fbs
     COMMAND ${FLATC} --grpc --cpp -o ${MIRAGE_GENERATED_DIR}
             -I ${MIRAGE_SCHEMA_DIR}
-            ${MIRAGE_SCHEMA_DIR}/simulator.fbs
+            ${MIRAGE_SCHEMA_DIR}/socket.fbs
     DEPENDS ${MIRAGE_SCHEMAS}
     COMMENT "Generating FlatBuffer C++ headers and gRPC stubs"
     VERBATIM
@@ -68,13 +70,14 @@ add_custom_command(
 set(MIRAGE_TS_GENERATED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dashboard/src/generated)
 
 add_custom_command(
-    OUTPUT  ${MIRAGE_TS_GENERATED_DIR}/simulator_generated.ts
+    OUTPUT  ${MIRAGE_TS_GENERATED_DIR}/socket_generated.ts
     COMMAND ${CMAKE_COMMAND} -E make_directory ${MIRAGE_TS_GENERATED_DIR}
     COMMAND ${FLATC} --ts -o ${MIRAGE_TS_GENERATED_DIR}
             -I ${MIRAGE_SCHEMA_DIR}
             ${MIRAGE_SCHEMA_DIR}/common.fbs
             ${MIRAGE_SCHEMA_DIR}/container.fbs
             ${MIRAGE_SCHEMA_DIR}/simulator.fbs
+            ${MIRAGE_SCHEMA_DIR}/socket.fbs
     DEPENDS ${MIRAGE_SCHEMAS}
     COMMENT "Generating TypeScript FlatBuffer types for dashboard"
     VERBATIM
@@ -84,7 +87,7 @@ add_custom_target(mirage_schemas DEPENDS
     ${MIRAGE_GENERATED_HEADERS}
     ${MIRAGE_GRPC_HEADER}
     ${MIRAGE_GRPC_SOURCE}
-    ${MIRAGE_TS_GENERATED_DIR}/simulator_generated.ts
+    ${MIRAGE_TS_GENERATED_DIR}/socket_generated.ts
 )
 
 # --------------------------------------------------------------------------

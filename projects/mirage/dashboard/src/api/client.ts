@@ -1,7 +1,7 @@
-/// gRPC-Web binary FlatBuffer client for the mirage Dashboard service.
+/// gRPC-Web binary FlatBuffer client for the mirage Daemon service.
 ///
 /// Calls follow the gRPC-Web path convention:
-///   POST /mirage.simulator.Dashboard/{MethodName}
+///   POST /mirage.socket.Daemon/{MethodName}
 ///   Content-Type: application/x-flatbuffers
 ///   Body: raw FlatBuffer bytes
 ///
@@ -26,38 +26,38 @@ import type {
 } from "./types";
 
 // ── Generated FlatBuffer types ─────────────────────────────────────────────
-import { GetOverviewRequest } from "../generated/mirage/simulator/get-overview-request";
-import { GetOverviewReply } from "../generated/mirage/simulator/get-overview-reply";
-import { ListSimulatorsRequest } from "../generated/mirage/simulator/list-simulators-request";
-import { ListSimulatorsReply } from "../generated/mirage/simulator/list-simulators-reply";
-import { GetSimulatorRequest } from "../generated/mirage/simulator/get-simulator-request";
-import { GetSimulatorReply } from "../generated/mirage/simulator/get-simulator-reply";
-import { ListProfilesRequest } from "../generated/mirage/simulator/list-profiles-request";
-import { ListProfilesReply } from "../generated/mirage/simulator/list-profiles-reply";
-import { CreateProfileRequest } from "../generated/mirage/simulator/create-profile-request";
-import { CreateProfileReply } from "../generated/mirage/simulator/create-profile-reply";
-import { DeleteProfileRequest } from "../generated/mirage/simulator/delete-profile-request";
-import { DeleteProfileReply } from "../generated/mirage/simulator/delete-profile-reply";
-import { ListSessionsRequest } from "../generated/mirage/simulator/list-sessions-request";
-import { ListSessionsReply } from "../generated/mirage/simulator/list-sessions-reply";
-import { DashboardCreateSessionRequest } from "../generated/mirage/simulator/dashboard-create-session-request";
-import { DashboardCreateSessionReply } from "../generated/mirage/simulator/dashboard-create-session-reply";
-import { DashboardDeleteSessionRequest } from "../generated/mirage/simulator/dashboard-delete-session-request";
-import { DashboardDeleteSessionReply } from "../generated/mirage/simulator/dashboard-delete-session-reply";
-import { GetSessionDetailRequest } from "../generated/mirage/simulator/get-session-detail-request";
-import { GetSessionDetailReply } from "../generated/mirage/simulator/get-session-detail-reply";
-import { ListRunsRequest } from "../generated/mirage/simulator/list-runs-request";
-import { ListRunsReply } from "../generated/mirage/simulator/list-runs-reply";
-import { CreateRunRequest } from "../generated/mirage/simulator/create-run-request";
-import { CreateRunReply } from "../generated/mirage/simulator/create-run-reply";
-import { GetSessionLogRequest } from "../generated/mirage/simulator/get-session-log-request";
-import { GetSessionLogReply } from "../generated/mirage/simulator/get-session-log-reply";
-import { ListTerminalsRequest } from "../generated/mirage/simulator/list-terminals-request";
-import { ListTerminalsReply } from "../generated/mirage/simulator/list-terminals-reply";
-import { CreateTerminalRequest } from "../generated/mirage/simulator/create-terminal-request";
-import { CreateTerminalReply } from "../generated/mirage/simulator/create-terminal-reply";
-import { CloseTerminalRequest } from "../generated/mirage/simulator/close-terminal-request";
-import { CloseTerminalReply as _CloseTerminalReply } from "../generated/mirage/simulator/close-terminal-reply";
+import { GetOverviewRequest } from "../generated/mirage/socket/get-overview-request";
+import { GetOverviewReply } from "../generated/mirage/socket/get-overview-reply";
+import { ListSimulatorsRequest } from "../generated/mirage/socket/list-simulators-request";
+import { ListSimulatorsReply } from "../generated/mirage/socket/list-simulators-reply";
+import { GetSimulatorRequest } from "../generated/mirage/socket/get-simulator-request";
+import { GetSimulatorReply } from "../generated/mirage/socket/get-simulator-reply";
+import { ListProfilesRequest } from "../generated/mirage/socket/list-profiles-request";
+import { ListProfilesReply } from "../generated/mirage/socket/list-profiles-reply";
+import { CreateProfileRequest } from "../generated/mirage/socket/create-profile-request";
+import { CreateProfileReply } from "../generated/mirage/socket/create-profile-reply";
+import { DeleteProfileRequest } from "../generated/mirage/socket/delete-profile-request";
+import { DeleteProfileReply } from "../generated/mirage/socket/delete-profile-reply";
+import { ListSessionsRequest } from "../generated/mirage/socket/list-sessions-request";
+import { ListSessionsReply } from "../generated/mirage/socket/list-sessions-reply";
+import { DashboardCreateSessionRequest } from "../generated/mirage/socket/dashboard-create-session-request";
+import { DashboardCreateSessionReply } from "../generated/mirage/socket/dashboard-create-session-reply";
+import { DashboardDeleteSessionRequest } from "../generated/mirage/socket/dashboard-delete-session-request";
+import { DashboardDeleteSessionReply } from "../generated/mirage/socket/dashboard-delete-session-reply";
+import { GetSessionDetailRequest } from "../generated/mirage/socket/get-session-detail-request";
+import { GetSessionDetailReply } from "../generated/mirage/socket/get-session-detail-reply";
+import { ListRunsRequest } from "../generated/mirage/socket/list-runs-request";
+import { ListRunsReply } from "../generated/mirage/socket/list-runs-reply";
+import { CreateRunRequest } from "../generated/mirage/socket/create-run-request";
+import { CreateRunReply } from "../generated/mirage/socket/create-run-reply";
+import { GetSessionLogRequest } from "../generated/mirage/socket/get-session-log-request";
+import { GetSessionLogReply } from "../generated/mirage/socket/get-session-log-reply";
+import { ListTerminalsRequest } from "../generated/mirage/socket/list-terminals-request";
+import { ListTerminalsReply } from "../generated/mirage/socket/list-terminals-reply";
+import { CreateTerminalRequest } from "../generated/mirage/socket/create-terminal-request";
+import { CreateTerminalReply } from "../generated/mirage/socket/create-terminal-reply";
+import { CloseTerminalRequest } from "../generated/mirage/socket/close-terminal-request";
+import { CloseTerminalReply as _CloseTerminalReply } from "../generated/mirage/socket/close-terminal-reply";
 
 import { ProfileDef as FbProfileDef } from "../generated/mirage/fb/profile-def";
 import { SessionDef as FbSessionDef } from "../generated/mirage/fb/session-def";
@@ -94,7 +94,7 @@ const HEALTH_NAMES: Record<number, HealthStatus> = {
 
 // ── Transport ──────────────────────────────────────────────────────────────
 
-const SERVICE = "/mirage.simulator.Dashboard";
+const SERVICE = "/mirage.socket.Daemon";
 
 /** Build a finished FlatBuffer and return the payload bytes. */
 function finish(

@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/mirage.simulator.Dashboard': {
+      '/mirage.socket.Daemon': {
         target: 'http://localhost:50051',
         changeOrigin: true,
       },
