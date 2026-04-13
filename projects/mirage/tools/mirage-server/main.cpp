@@ -1171,14 +1171,19 @@ int main(int argc, char* argv[]) {
     MirageDashboardService grpc_service(svc, runs, terms, session_logs);
 
     // Start native gRPC server in background
-    std::thread grpc_thread([&grpc_service, grpc_port]() {
+    std::unique_ptr<::grpc::Server> grpc_server;
+    std::thread grpc_thread([&grpc_service, &grpc_server, grpc_port]() {
         std::string addr = "0.0.0.0:" + std::to_string(grpc_port);
         ::grpc::ServerBuilder builder;
         builder.AddListeningPort(addr, ::grpc::InsecureServerCredentials());
         builder.RegisterService(&grpc_service);
-        auto server = builder.BuildAndStart();
+        grpc_server = builder.BuildAndStart();
+        if (!grpc_server) {
+            std::cerr << "Failed to start gRPC server on " << addr << std::endl;
+            return;
+        }
         std::cout << "gRPC server listening on " << addr << std::endl;
-        server->Wait();
+        grpc_server->Wait();
     });
     grpc_thread.detach();
 

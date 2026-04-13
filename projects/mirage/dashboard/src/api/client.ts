@@ -117,7 +117,7 @@ async function rpc(method: string, body: Uint8Array): Promise<ArrayBuffer> {
   const res = await fetch(`${SERVICE}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/x-flatbuffers" },
-    body,
+    body: body as unknown as BodyInit,
   });
   if (!res.ok) {
     const text = await res.text();
