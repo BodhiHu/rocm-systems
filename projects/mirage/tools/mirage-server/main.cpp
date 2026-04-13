@@ -1427,6 +1427,12 @@ public:
     bool process_and_close_socket(socket_t sock) override {
         std::string terminal_id;
         if (peek_is_ws_terminal(sock, terminal_id)) {
+            // Clear httplib's SO_RCVTIMEO/SO_SNDTIMEO — WebSocket sessions
+            // are long-lived and must not time out on idle.
+            struct timeval tv = {0, 0};
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
             // WebSocket terminal — consume the peeked HTTP upgrade via
             // ws_handshake, then run the bidi terminal I/O loop.
             auto tid = ws_handshake(sock);
