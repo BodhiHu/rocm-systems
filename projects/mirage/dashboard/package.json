@@ -16,6 +16,12 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.6.1",
+    "rete-area-plugin": "^2.1.5",
+    "rete-auto-arrange-plugin": "^2.0.2",
+    "rete-connection-plugin": "^2.0.5",
+    "rete-connection-reroute-plugin": "^2.0.3",
+    "rete-context-menu-plugin": "^2.0.6",
+    "rete-history-plugin": "^2.1.1",
     "rete-react-plugin": "^2.1.0",
     "rete-render-utils": "^2.0.3",
     "styled-components": "^6.3.12"
