@@ -46,6 +46,8 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
   useEffect(() => {
     if (!containerRef.current) return;
 
+    let cancelled = false;
+
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 14,
@@ -72,11 +74,13 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (cancelled) { ws.close(); return; }
       // Send initial resize
       ws.send(buildResizeFrame(term.rows, term.cols));
     };
 
     ws.onmessage = (ev) => {
+      if (cancelled) return;
       const data = new Uint8Array(ev.data as ArrayBuffer);
       if (data.length === 0) return;
       const type = data[0];
@@ -92,6 +96,7 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
     };
 
     ws.onclose = () => {
+      if (cancelled) return;
       term.write("\r\n\x1b[33m[disconnected]\x1b[0m\r\n");
       onDead?.();
     };
@@ -117,8 +122,9 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
     });
 
     return () => {
+      cancelled = true;
       window.removeEventListener("resize", onResize);
-      ws.close();
+      if (ws.readyState === WebSocket.OPEN) ws.close();
       term.dispose();
     };
   }, [terminalId, onDead]);
