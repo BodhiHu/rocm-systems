@@ -18,8 +18,7 @@ interface Props {
  *    byte[0]=0x01              = terminal exited
  */
 
-const WS_PORT = parseInt(window.location.port || "50051", 10) + 2;
-const WS_BASE = `ws://${window.location.hostname}:${WS_PORT}`;
+const WS_BASE = `ws://${window.location.host}`;
 
 function buildInputFrame(data: string): ArrayBuffer {
   const encoded = new TextEncoder().encode(data);

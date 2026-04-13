@@ -94,7 +94,7 @@ const HEALTH_NAMES: Record<number, HealthStatus> = {
 
 // ── Transport ──────────────────────────────────────────────────────────────
 
-const SERVICE = "/mirage.socket.Daemon";
+const SERVICE = "/api";
 
 /** Build a finished FlatBuffer and return the payload bytes. */
 function finish(

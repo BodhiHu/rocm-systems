@@ -6,9 +6,13 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/mirage.socket.Daemon': {
+      '/api': {
         target: 'http://localhost:50051',
         changeOrigin: true,
+      },
+      '/terminal': {
+        target: 'ws://localhost:50051',
+        ws: true,
       },
     },
   },

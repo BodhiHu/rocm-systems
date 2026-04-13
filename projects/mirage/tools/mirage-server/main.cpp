@@ -1,17 +1,15 @@
-/// mirage-server — gRPC + gRPC-Web server for the mirage dashboard.
+/// mirage-server — gRPC + HTTP server for the mirage dashboard.
 ///
-/// Exposes the Daemon service (socket.fbs) as a real gRPC server
-/// on port 50052 and a gRPC-Web binary endpoint on port 50051 (httplib).
+/// Single TCP port serves:
+///   - Static dashboard files (SPA)
+///   - gRPC-Web binary bridge: POST /api/{Method}
+///   - WebSocket terminal attach: GET /terminal/{id} (upgrade)
 ///
-/// The browser talks binary FlatBuffers via HTTP POST:
-///   POST /mirage.socket.Daemon/{Method}
-///   Content-Type: application/x-flatbuffers
-///   Body: raw FlatBuffer bytes
-///
-/// C++ / Python clients use native gRPC on port 50052.
+/// Native gRPC listens on a Unix domain socket:
+///   $XDG_RUNTIME_DIR/mirage/daemon.sock
 ///
 /// Usage:
-///   mirage-server [--port PORT] [--grpc-port PORT] [--ws-port PORT] [--static DIR]
+///   mirage-server [--port PORT] [--socket PATH] [--static DIR]
 
 #include "mirage/daemon.h"
 #include "mirage/dashboard_service.h"
@@ -46,6 +44,8 @@
 #include <string>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -1365,67 +1365,136 @@ std::string ws_handshake(int fd) {
     return terminal_id;
 }
 
-void run_ws_server(int port, TerminalManager& terms) {
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) {
-        std::cerr << "WebSocket server: socket() failed" << std::endl;
-        return;
-    }
-    int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+// ============================================================================
+//  XDG helpers
+// ============================================================================
 
-    struct sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(static_cast<uint16_t>(port));
-
-    if (bind(server_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        std::cerr << "WebSocket server: bind() failed on port " << port << std::endl;
-        ::close(server_fd);
-        return;
-    }
-    if (listen(server_fd, 16) < 0) {
-        std::cerr << "WebSocket server: listen() failed" << std::endl;
-        ::close(server_fd);
-        return;
-    }
-    std::cout << "WebSocket terminal server on ws://0.0.0.0:" << port << std::endl;
-
-    while (true) {
-        int client_fd = accept(server_fd, nullptr, nullptr);
-        if (client_fd < 0) continue;
-
-        std::thread([client_fd, &terms]() {
-            auto terminal_id = ws_handshake(client_fd);
-            if (terminal_id.empty()) {
-                ::close(client_fd);
-                return;
-            }
-            std::cerr << "[ws] terminal attach: " << terminal_id << std::endl;
-            ws_handle_terminal(client_fd, terminal_id, terms);
-        }).detach();
-    }
+std::string xdg_runtime_dir() {
+    if (auto* v = std::getenv("XDG_RUNTIME_DIR"); v && v[0])
+        return v;
+    return "/run/user/" + std::to_string(getuid());
 }
+
+std::string xdg_config_home() {
+    if (auto* v = std::getenv("XDG_CONFIG_HOME"); v && v[0])
+        return v;
+    if (auto* h = std::getenv("HOME"); h && h[0])
+        return std::string(h) + "/.config";
+    return "/tmp";
+}
+
+/// Recursively create directories (like mkdir -p).
+bool mkdirs(const std::string& path) {
+    size_t pos = 0;
+    while ((pos = path.find('/', pos + 1)) != std::string::npos) {
+        mkdir(path.substr(0, pos).c_str(), 0700);
+    }
+    return mkdir(path.c_str(), 0700) == 0 || errno == EEXIST;
+}
+
+// ============================================================================
+//  httplib subclass: intercept WebSocket upgrades on the same TCP port
+// ============================================================================
+
+// Peek at a freshly accepted connection to decide if it's a WebSocket
+// upgrade to /terminal/. If so, returns true and sets terminal_id.
+bool peek_is_ws_terminal(int fd, std::string& terminal_id) {
+    char buf[2048];
+    ssize_t n = recv(fd, buf, sizeof(buf), MSG_PEEK);
+    if (n <= 0) return false;
+    std::string req(buf, static_cast<size_t>(n));
+    // Must be GET /terminal/ with Upgrade: websocket
+    if (req.substr(0, 4) != "GET ") return false;
+    auto sp = req.find(' ', 4);
+    if (sp == std::string::npos) return false;
+    auto path = req.substr(4, sp - 4);
+    const std::string prefix = "/terminal/";
+    if (path.substr(0, prefix.size()) != prefix) return false;
+    // Check for websocket upgrade (case-insensitive)
+    std::string lower = req;
+    for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower.find("upgrade: websocket") == std::string::npos) return false;
+    terminal_id = path.substr(prefix.size());
+    return true;
+}
+
+/// httplib::Server subclass that intercepts WebSocket upgrade requests
+/// before they reach normal HTTP processing.  Everything else is handled
+/// by the base httplib server (static files, gRPC-Web bridge, etc.).
+class WsAwareServer : public httplib::Server {
+public:
+    explicit WsAwareServer(TerminalManager& terms) : terms_(terms) {}
+
+    bool process_and_close_socket(socket_t sock) override {
+        std::string terminal_id;
+        if (peek_is_ws_terminal(sock, terminal_id)) {
+            // WebSocket terminal — consume the peeked HTTP upgrade via
+            // ws_handshake, then run the bidi terminal I/O loop.
+            auto tid = ws_handshake(sock);
+            if (tid.empty()) {
+                ::close(sock);
+                return false;
+            }
+            std::cerr << "[ws] terminal attach: " << tid << std::endl;
+            ws_handle_terminal(sock, tid, terms_);
+            return true;
+        }
+
+        // Normal HTTP — delegate to base httplib logic.
+        std::string remote_addr;
+        int remote_port = 0;
+        httplib::detail::get_remote_ip_and_port(sock, remote_addr, remote_port);
+
+        std::string local_addr;
+        int local_port = 0;
+        httplib::detail::get_local_ip_and_port(sock, local_addr, local_port);
+
+        auto ret = httplib::detail::process_server_socket(
+            svr_sock_, sock, keep_alive_max_count_, keep_alive_timeout_sec_,
+            read_timeout_sec_, read_timeout_usec_, write_timeout_sec_,
+            write_timeout_usec_,
+            [&](httplib::Stream& strm, bool close_connection,
+                bool& connection_closed) {
+                return process_request(strm, remote_addr, remote_port,
+                                       local_addr, local_port,
+                                       close_connection, connection_closed,
+                                       nullptr);
+            });
+
+        httplib::detail::shutdown_socket(sock);
+        httplib::detail::close_socket(sock);
+        return ret;
+    }
+
+private:
+    TerminalManager& terms_;
+};
 
 } // namespace
 
 int main(int argc, char* argv[]) {
     int http_port = 50051;
-    int grpc_port = 50052;
-    int ws_port_arg = 0;
+    std::string socket_path;
     std::string static_dir;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if ((arg == "--port" || arg == "-p") && i + 1 < argc)
             http_port = std::atoi(argv[++i]);
-        else if (arg == "--grpc-port" && i + 1 < argc)
-            grpc_port = std::atoi(argv[++i]);
-        else if (arg == "--ws-port" && i + 1 < argc)
-            ws_port_arg = std::atoi(argv[++i]);
+        else if (arg == "--socket" && i + 1 < argc)
+            socket_path = argv[++i];
         else if (arg == "--static" && i + 1 < argc)
             static_dir = argv[++i];
     }
+
+    // ── Resolve XDG paths ──────────────────────────────────────────────
+    if (socket_path.empty()) {
+        std::string runtime_dir = xdg_runtime_dir() + "/mirage";
+        mkdirs(runtime_dir);
+        socket_path = runtime_dir + "/daemon.sock";
+    }
+    std::string config_dir = xdg_config_home() + "/mirage";
+    mkdirs(config_dir);
 
     mirage::Daemon daemon;
     daemon.register_simulator(std::make_shared<DummySimulator>());
@@ -1441,13 +1510,15 @@ int main(int argc, char* argv[]) {
     TerminalManager terms;
     SessionLogStore session_logs;
 
-    // ── gRPC service (autogenerated Daemon::Service) ──────────────────
+    // ── gRPC service on Unix domain socket ─────────────────────────────
     MirageDaemonService grpc_service(svc, runs, terms, session_logs);
 
-    // Start native gRPC server in background
+    // Remove stale socket file from a previous run
+    unlink(socket_path.c_str());
+
     std::unique_ptr<::grpc::Server> grpc_server;
-    std::thread grpc_thread([&grpc_service, &grpc_server, grpc_port]() {
-        std::string addr = "0.0.0.0:" + std::to_string(grpc_port);
+    std::thread grpc_thread([&grpc_service, &grpc_server, &socket_path]() {
+        std::string addr = "unix:" + socket_path;
         ::grpc::ServerBuilder builder;
         builder.AddListeningPort(addr, ::grpc::InsecureServerCredentials());
         builder.RegisterService(&grpc_service);
@@ -1461,16 +1532,9 @@ int main(int argc, char* argv[]) {
     });
     grpc_thread.detach();
 
-    // ── WebSocket terminal server ──────────────────────────────────────
-    int ws_port = ws_port_arg > 0 ? ws_port_arg : http_port + 2;
-    std::thread ws_thread([ws_port, &terms]() {
-        run_ws_server(ws_port, terms);
-    });
-    ws_thread.detach();
-
-    // ── gRPC-Web binary bridge (httplib) ───────────────────────────────
+    // ── HTTP server setup ────────────────────────────────────────────
     auto dispatch = build_dispatch(grpc_service);
-    httplib::Server srv;
+    WsAwareServer srv(terms);
 
     srv.set_default_headers({
         {"Access-Control-Allow-Origin", "*"},
@@ -1478,7 +1542,7 @@ int main(int argc, char* argv[]) {
         {"Access-Control-Allow-Headers", "Content-Type, X-Grpc-Web"},
     });
 
-    const std::string prefix = "/mirage.socket.Daemon/";
+    const std::string prefix = "/api/";
 
     srv.Post(prefix + "(.*)",
              [&dispatch, &prefix](const httplib::Request& req,
@@ -1520,7 +1584,10 @@ int main(int argc, char* argv[]) {
         std::cout << "Serving dashboard from " << static_dir << std::endl;
     }
 
-    std::cout << "gRPC-Web bridge listening on http://0.0.0.0:" << http_port << std::endl;
+    std::cout << "Config directory: " << config_dir << std::endl;
+
+    // ── Single TCP port: HTTP + WebSocket terminal ─────────────────────
+    std::cout << "mirage-server listening on http://0.0.0.0:" << http_port << std::endl;
     if (!srv.listen("0.0.0.0", http_port)) {
         std::cerr << "Failed to start HTTP server on port " << http_port << std::endl;
         return 1;
