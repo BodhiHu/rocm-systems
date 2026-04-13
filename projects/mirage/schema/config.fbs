@@ -4,7 +4,7 @@ namespace mirage.config;
 
 
 table DaemonDef {
-    profiles: [ProfileDef] (required);
+    profiles: [mirage.fb.ProfileDef] (required);
 }
 
 file_identifier "MIRC";

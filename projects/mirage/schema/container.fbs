@@ -91,7 +91,7 @@ table ContainerDef {
     ///   LD_PRELOAD        — simulator interposition library
     ///   HSA_OVERRIDE_GFX_VERSION — target GPU version string
     ///   <SIM>_CONFIG      — path to injected config inside container
-    env: [SetEnv];
+    env: [mirage.fb.SetEnv];
 
     /// Host paths to bind-mount into the container.
     ///

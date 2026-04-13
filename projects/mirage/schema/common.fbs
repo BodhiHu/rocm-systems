@@ -1,4 +1,4 @@
-namespace mirage;
+namespace mirage.fb;
 
 
 /// The family or vendor of a GPU implementation.

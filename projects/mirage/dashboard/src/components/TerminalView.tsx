@@ -75,6 +75,7 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
     term.loadAddon(fit);
     term.open(containerRef.current);
     fit.fit();
+    term.focus();
 
     termRef.current = term;
     fitRef.current = fit;
@@ -126,7 +127,11 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
           </button>
         )}
       </div>
-      <div ref={containerRef} className="terminal-xterm" />
+      <div
+        ref={containerRef}
+        className="terminal-xterm"
+        onClick={() => termRef.current?.focus()}
+      />
     </div>
   );
 }

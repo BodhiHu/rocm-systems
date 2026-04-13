@@ -52,13 +52,15 @@ export function SessionDetailPage() {
       if (!active) return;
       getSessionLog(name).then((snap) => {
         if (!active) return;
-        if (snap.log) setSessionLog(snap.log);
-        if (snap.status) setLogStatus(snap.status);
-        // Poll faster while pulling/starting; stop polling once ready/error
-        const done = snap.status === "ready" || snap.status === "error";
-        if (!done) {
-          setTimeout(poll, snap.status === "pulling" ? 500 : 1000);
-        }
+        setSessionLog(snap.log);
+        setLogStatus(snap.status);
+        // Poll fast while pulling/starting, slow once ready/error
+        const interval =
+          snap.status === "pulling" ? 500 :
+          snap.status === "starting" ? 1000 : 5000;
+        setTimeout(poll, interval);
+      }).catch(() => {
+        if (active) setTimeout(poll, 5000);
       });
     };
     poll();
@@ -153,17 +155,13 @@ export function SessionDetailPage() {
         </div>
       </div>
 
-      {sessionLog && (
-        <>
-          <div className="session-log-header">
-            <h3>Docker Output</h3>
-            <LogStatusBadge status={logStatus} />
-          </div>
-          <pre className="session-log" ref={logRef}>
-            {sessionLog}
-          </pre>
-        </>
-      )}
+      <div className="session-log-header">
+        <h3>Docker Output</h3>
+        <LogStatusBadge status={logStatus} />
+      </div>
+      <pre className="session-log" ref={logRef}>
+        {sessionLog || "Waiting for output…"}
+      </pre>
     </div>
   );
 }

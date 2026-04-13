@@ -15,11 +15,11 @@ table HealthRequest {
 
 table HealthReply {
     healthy : bool;
-    status : HealthStatus;
+    status : mirage.fb.HealthStatus;
 }
 
 table TimeReply {
-    time: Time (required);
+    time: mirage.fb.Time (required);
 }
 
 
@@ -28,14 +28,14 @@ table AttachRequest {
     run_id: string;
     
     /// data to send to the run's stdin. The server will read from this stream and write to the run's stdin.
-    stream: StreamData;
+    stream: mirage.fb.StreamData;
 }
 
 
 
 table AttachReply {
-    data: StreamData;
-    exit: RunExit;
+    data: mirage.fb.StreamData;
+    exit: mirage.fb.RunExit;
 }
 
 

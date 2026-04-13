@@ -36,17 +36,56 @@ foreach(schema ${MIRAGE_SCHEMAS})
          ${MIRAGE_GENERATED_DIR}/${stem}_generated.h)
 endforeach()
 
+# --------------------------------------------------------------------------
+# gRPC stub generation (simulator.fbs → simulator.grpc.fb.h/.cc)
+# --------------------------------------------------------------------------
+set(MIRAGE_GRPC_HEADER ${MIRAGE_GENERATED_DIR}/simulator.grpc.fb.h)
+set(MIRAGE_GRPC_SOURCE ${MIRAGE_GENERATED_DIR}/simulator.grpc.fb.cc)
+
+# Generate C++ headers for all schemas, then gRPC stubs for simulator.fbs.
+# The --grpc --cpp combo regenerates simulator_generated.h, so we run
+# the plain --cpp first (for non-simulator schemas) then --grpc --cpp
+# for simulator.fbs which produces both the regular header and gRPC stubs.
 add_custom_command(
-    OUTPUT  ${MIRAGE_GENERATED_HEADERS}
+    OUTPUT  ${MIRAGE_GENERATED_HEADERS} ${MIRAGE_GRPC_HEADER} ${MIRAGE_GRPC_SOURCE}
     COMMAND ${FLATC} --cpp -o ${MIRAGE_GENERATED_DIR}
             -I ${MIRAGE_SCHEMA_DIR}
-            ${MIRAGE_SCHEMAS}
+            ${MIRAGE_SCHEMA_DIR}/common.fbs
+            ${MIRAGE_SCHEMA_DIR}/config.fbs
+            ${MIRAGE_SCHEMA_DIR}/container.fbs
+            ${MIRAGE_SCHEMA_DIR}/socket.fbs
+    COMMAND ${FLATC} --grpc --cpp -o ${MIRAGE_GENERATED_DIR}
+            -I ${MIRAGE_SCHEMA_DIR}
+            ${MIRAGE_SCHEMA_DIR}/simulator.fbs
     DEPENDS ${MIRAGE_SCHEMAS}
-    COMMENT "Generating FlatBuffer C++ headers"
+    COMMENT "Generating FlatBuffer C++ headers and gRPC stubs"
     VERBATIM
 )
 
-add_custom_target(mirage_schemas DEPENDS ${MIRAGE_GENERATED_HEADERS})
+# --------------------------------------------------------------------------
+# TypeScript FlatBuffer generation (for dashboard)
+# --------------------------------------------------------------------------
+set(MIRAGE_TS_GENERATED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dashboard/src/generated)
+
+add_custom_command(
+    OUTPUT  ${MIRAGE_TS_GENERATED_DIR}/simulator_generated.ts
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${MIRAGE_TS_GENERATED_DIR}
+    COMMAND ${FLATC} --ts -o ${MIRAGE_TS_GENERATED_DIR}
+            -I ${MIRAGE_SCHEMA_DIR}
+            ${MIRAGE_SCHEMA_DIR}/common.fbs
+            ${MIRAGE_SCHEMA_DIR}/container.fbs
+            ${MIRAGE_SCHEMA_DIR}/simulator.fbs
+    DEPENDS ${MIRAGE_SCHEMAS}
+    COMMENT "Generating TypeScript FlatBuffer types for dashboard"
+    VERBATIM
+)
+
+add_custom_target(mirage_schemas DEPENDS
+    ${MIRAGE_GENERATED_HEADERS}
+    ${MIRAGE_GRPC_HEADER}
+    ${MIRAGE_GRPC_SOURCE}
+    ${MIRAGE_TS_GENERATED_DIR}/simulator_generated.ts
+)
 
 # --------------------------------------------------------------------------
 # Compiler warnings

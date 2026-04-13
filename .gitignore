@@ -12,4 +12,3 @@
 # Visual Studio Code settings
 .vscode/
 /.rocshmem-worktree
-projects/mirage/simulator.bfbs
