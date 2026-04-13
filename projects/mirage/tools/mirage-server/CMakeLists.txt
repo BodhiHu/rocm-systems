@@ -9,6 +9,7 @@ FetchContent_MakeAvailable(httplib)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GRPC REQUIRED IMPORTED_TARGET grpc++)
+find_package(OpenSSL REQUIRED)
 
 add_executable(mirage-server
     main.cpp
@@ -21,4 +22,5 @@ target_link_libraries(mirage-server PRIVATE
     mirage_warnings
     httplib::httplib
     PkgConfig::GRPC
+    OpenSSL::Crypto
 )

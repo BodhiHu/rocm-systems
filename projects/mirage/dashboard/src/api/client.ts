@@ -56,12 +56,6 @@ import { ListTerminalsRequest } from "../generated/mirage/simulator/list-termina
 import { ListTerminalsReply } from "../generated/mirage/simulator/list-terminals-reply";
 import { CreateTerminalRequest } from "../generated/mirage/simulator/create-terminal-request";
 import { CreateTerminalReply } from "../generated/mirage/simulator/create-terminal-reply";
-import { TerminalInputRequest } from "../generated/mirage/simulator/terminal-input-request";
-import { TerminalInputReply as _TerminalInputReply } from "../generated/mirage/simulator/terminal-input-reply";
-import { TerminalOutputRequest } from "../generated/mirage/simulator/terminal-output-request";
-import { TerminalOutputReply } from "../generated/mirage/simulator/terminal-output-reply";
-import { TerminalResizeRequest } from "../generated/mirage/simulator/terminal-resize-request";
-import { TerminalResizeReply as _TerminalResizeReply } from "../generated/mirage/simulator/terminal-resize-reply";
 import { CloseTerminalRequest } from "../generated/mirage/simulator/close-terminal-request";
 import { CloseTerminalReply as _CloseTerminalReply } from "../generated/mirage/simulator/close-terminal-reply";
 
@@ -452,42 +446,6 @@ export async function createTerminal(
   const ab = await rpc("CreateTerminal", body);
   const r = CreateTerminalReply.getRootAsCreateTerminalReply(buf(ab));
   return { ok: r.ok(), error: r.error() ?? "", id: r.id() ?? "" };
-}
-
-export async function terminalInput(
-  id: string,
-  data: string
-): Promise<void> {
-  const body = finish((b) => {
-    const i = b.createString(id);
-    const d = b.createString(data);
-    return TerminalInputRequest.createTerminalInputRequest(b, i, d);
-  });
-  await rpc("TerminalInput", body);
-}
-
-export async function terminalOutput(
-  id: string
-): Promise<{ data: string; alive: boolean }> {
-  const body = finish((b) => {
-    const i = b.createString(id);
-    return TerminalOutputRequest.createTerminalOutputRequest(b, i);
-  });
-  const ab = await rpc("TerminalOutput", body);
-  const r = TerminalOutputReply.getRootAsTerminalOutputReply(buf(ab));
-  return { data: r.data() ?? "", alive: r.alive() };
-}
-
-export async function terminalResize(
-  id: string,
-  rows: number,
-  cols: number
-): Promise<void> {
-  const body = finish((b) => {
-    const i = b.createString(id);
-    return TerminalResizeRequest.createTerminalResizeRequest(b, i, rows, cols);
-  });
-  await rpc("TerminalResize", body);
 }
 
 export async function closeTerminal(id: string): Promise<void> {

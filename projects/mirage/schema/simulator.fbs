@@ -492,14 +492,8 @@ rpc_service Dashboard {
     /// Create an interactive PTY terminal attached to a session container.
     CreateTerminal(CreateTerminalRequest): CreateTerminalReply;
 
-    /// Send base64-encoded keystrokes to a terminal.
-    TerminalInput(TerminalInputRequest): TerminalInputReply;
-
-    /// Read base64-encoded output from a terminal (drains buffer).
-    TerminalOutput(TerminalOutputRequest): TerminalOutputReply;
-
-    /// Resize a terminal's PTY dimensions.
-    TerminalResize(TerminalResizeRequest): TerminalResizeReply;
+    /// Bidirectional stream for terminal I/O (input, output, resize).
+    TerminalAttach(TerminalAttachRequest) : TerminalAttachReply (streaming: "bidi");
 
     /// Close and kill an interactive terminal session.
     CloseTerminal(CloseTerminalRequest): CloseTerminalReply;
@@ -578,44 +572,26 @@ table CreateTerminalRequest {
 table CreateTerminalReply {
     ok: bool;
     error: string;
-    /// The terminal id to use for subsequent input/output calls.
+    /// The terminal id to use for subsequent TerminalAttach calls.
     id: string;
 }
 
-table TerminalInputRequest {
+table TerminalAttachRequest {
     /// Terminal id returned by CreateTerminal.
     id: string (required);
-    /// Base64-encoded keystrokes / data to write to the PTY.
-    data: string (required);
-}
-
-table TerminalInputReply {
-    ok: bool;
-}
-
-table TerminalOutputRequest {
-    /// Terminal id returned by CreateTerminal.
-    id: string (required);
-}
-
-table TerminalOutputReply {
-    /// Base64-encoded PTY output since the last read.
-    data: string;
-    /// Whether the terminal process is still alive.
-    alive: bool;
-}
-
-table TerminalResizeRequest {
-    /// Terminal id returned by CreateTerminal.
-    id: string (required);
-    /// Number of rows in the terminal.
+    /// Raw bytes to write to the PTY (keystrokes).
+    data: [ubyte];
+    /// PTY resize: number of rows (0 = no resize).
     rows: uint32;
-    /// Number of columns in the terminal.
+    /// PTY resize: number of columns (0 = no resize).
     cols: uint32;
 }
 
-table TerminalResizeReply {
-    ok: bool;
+table TerminalAttachReply {
+    /// Raw bytes from the PTY output.
+    data: [ubyte];
+    /// Whether the terminal process is still alive.
+    alive: bool = true;
 }
 
 table CloseTerminalRequest {

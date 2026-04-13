@@ -1,8 +1,7 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { terminalInput, terminalOutput, terminalResize } from "../api/client";
 
 interface Props {
   terminalId: string;
@@ -10,52 +9,40 @@ interface Props {
   onDead?: () => void;
 }
 
-function toBase64(str: string): string {
-  const bytes = new TextEncoder().encode(str);
-  let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary);
+/** WebSocket terminal protocol (binary frames):
+ *  Client → Server:
+ *    byte[0]=0x00 + data       = PTY input
+ *    byte[0]=0x01 + u16LE rows + u16LE cols  = resize
+ *  Server → Client:
+ *    byte[0]=0x00 + data       = PTY output
+ *    byte[0]=0x01              = terminal exited
+ */
+
+const WS_PORT = parseInt(window.location.port || "50051", 10) + 2;
+const WS_BASE = `ws://${window.location.hostname}:${WS_PORT}`;
+
+function buildInputFrame(data: string): ArrayBuffer {
+  const encoded = new TextEncoder().encode(data);
+  const buf = new Uint8Array(1 + encoded.length);
+  buf[0] = 0x00;
+  buf.set(encoded, 1);
+  return buf.buffer;
 }
 
-function fromBase64(b64: string): string {
-  if (!b64) return "";
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
+function buildResizeFrame(rows: number, cols: number): ArrayBuffer {
+  const buf = new ArrayBuffer(5);
+  const view = new DataView(buf);
+  view.setUint8(0, 0x01);
+  view.setUint16(1, rows, true); // little-endian
+  view.setUint16(3, cols, true);
+  return buf;
 }
 
 export function TerminalView({ terminalId, onClose, onDead }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const pollingRef = useRef<number | null>(null);
-  const aliveRef = useRef(true);
-
-  const startPolling = useCallback(() => {
-    const poll = async () => {
-      if (!aliveRef.current) return;
-      try {
-        const { data, alive } = await terminalOutput(terminalId);
-        if (data) {
-          const decoded = fromBase64(data);
-          if (decoded && termRef.current) {
-            termRef.current.write(decoded);
-          }
-        }
-        if (!alive) {
-          aliveRef.current = false;
-          termRef.current?.write("\r\n\x1b[31m[terminal exited]\x1b[0m\r\n");
-          onDead?.();
-          return;
-        }
-      } catch {
-        // Ignore transient errors
-      }
-      pollingRef.current = window.setTimeout(poll, 50);
-    };
-    poll();
-  }, [terminalId, onDead]);
+  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -80,42 +67,62 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
     termRef.current = term;
     fitRef.current = fit;
 
-    // Send initial resize
-    terminalResize(terminalId, term.rows, term.cols).catch(() => {});
+    // ── WebSocket connection ─────────────────────────────────────────
+    const ws = new WebSocket(`${WS_BASE}/terminal/${terminalId}`);
+    ws.binaryType = "arraybuffer";
+    wsRef.current = ws;
 
-    // Send keystrokes to the backend
+    ws.onopen = () => {
+      // Send initial resize
+      ws.send(buildResizeFrame(term.rows, term.cols));
+    };
+
+    ws.onmessage = (ev) => {
+      const data = new Uint8Array(ev.data as ArrayBuffer);
+      if (data.length === 0) return;
+      const type = data[0];
+      if (type === 0x00 && data.length > 1) {
+        // PTY output
+        const text = new TextDecoder().decode(data.subarray(1));
+        term.write(text);
+      } else if (type === 0x01) {
+        // Terminal exited
+        term.write("\r\n\x1b[31m[terminal exited]\x1b[0m\r\n");
+        onDead?.();
+      }
+    };
+
+    ws.onclose = () => {
+      term.write("\r\n\x1b[33m[disconnected]\x1b[0m\r\n");
+      onDead?.();
+    };
+
+    // Send keystrokes over WebSocket
     term.onData((data) => {
-      if (aliveRef.current) {
-        terminalInput(terminalId, toBase64(data)).catch(() => {});
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(buildInputFrame(data));
       }
     });
 
-    // Handle resize
+    // Handle window resize
     const onResize = () => {
       fit.fit();
-      if (aliveRef.current) {
-        terminalResize(terminalId, term.rows, term.cols).catch(() => {});
-      }
     };
     window.addEventListener("resize", onResize);
 
-    // Also resize when terminal dimensions change
+    // Send resize when terminal dimensions change
     term.onResize(({ cols, rows }) => {
-      if (aliveRef.current) {
-        terminalResize(terminalId, rows, cols).catch(() => {});
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(buildResizeFrame(rows, cols));
       }
     });
 
-    // Start polling for output
-    startPolling();
-
     return () => {
-      aliveRef.current = false;
-      if (pollingRef.current) clearTimeout(pollingRef.current);
       window.removeEventListener("resize", onResize);
+      ws.close();
       term.dispose();
     };
-  }, [terminalId, startPolling]);
+  }, [terminalId, onDead]);
 
   return (
     <div className="terminal-container">

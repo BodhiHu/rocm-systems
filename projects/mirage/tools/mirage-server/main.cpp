@@ -11,7 +11,7 @@
 /// C++ / Python clients use native gRPC on port 50052.
 ///
 /// Usage:
-///   mirage-server [--port PORT] [--grpc-port PORT] [--static DIR]
+///   mirage-server [--port PORT] [--grpc-port PORT] [--ws-port PORT] [--static DIR]
 
 #include "mirage/daemon.h"
 #include "mirage/dashboard_service.h"
@@ -36,6 +36,8 @@
 #include <functional>
 #include <iostream>
 #include <mutex>
+#include <netinet/in.h>
+#include <openssl/sha.h>
 #include <poll.h>
 #include <pty.h>
 #include <signal.h>
@@ -43,6 +45,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -107,30 +110,6 @@ std::string base64_encode(const std::string& in) {
     if (valb > -6)
         out.push_back(b64_table[((val << 8) >> (valb + 8)) & 0x3F]);
     while (out.size() % 4) out.push_back('=');
-    return out;
-}
-
-std::string base64_decode(const std::string& in) {
-    auto val_of = [](unsigned char c) -> int {
-        if (c >= 'A' && c <= 'Z') return c - 'A';
-        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-        if (c >= '0' && c <= '9') return c - '0' + 52;
-        if (c == '+') return 62;
-        if (c == '/') return 63;
-        return -1;
-    };
-    std::string out;
-    int val = 0, valb = -8;
-    for (unsigned char c : in) {
-        int d = val_of(c);
-        if (d == -1) break;
-        val = (val << 6) + d;
-        valb += 6;
-        if (valb >= 0) {
-            out.push_back(static_cast<char>((val >> valb) & 0xFF));
-            valb -= 8;
-        }
-    }
     return out;
 }
 
@@ -211,8 +190,12 @@ public:
     struct CreateResult { bool ok = false; std::string error; std::string id; };
 
     CreateResult create(const std::string& session_name) {
-        if (!docker_container_running(session_name))
+        std::cerr << "[terminal] create request for session: " << session_name << std::endl;
+        if (!docker_container_running(session_name)) {
+            std::cerr << "[terminal] container mirage-" << session_name << " not running" << std::endl;
             return {false, "session container not running", ""};
+        }
+        std::cerr << "[terminal] container running, forking PTY..." << std::endl;
         auto term = std::make_shared<TerminalSession>();
         {
             std::lock_guard lock(mu_);
@@ -223,13 +206,18 @@ public:
         ws.ws_row = 24;
         ws.ws_col = 80;
         term->pid = forkpty(&term->master_fd, nullptr, nullptr, &ws);
-        if (term->pid < 0) return {false, "forkpty() failed", ""};
+        if (term->pid < 0) {
+            std::cerr << "[terminal] forkpty failed: " << strerror(errno) << std::endl;
+            return {false, "forkpty() failed", ""};
+        }
         if (term->pid == 0) {
             std::string container = "mirage-" + session_name;
             execlp("docker", "docker", "exec", "-it",
                    container.c_str(), "/bin/bash", nullptr);
             _exit(127);
         }
+        std::cerr << "[terminal] forked pid=" << term->pid << " master_fd=" << term->master_fd
+                  << " id=" << term->id << std::endl;
         auto t = term;
         std::thread reader([t]() {
             char buf[4096];
@@ -248,17 +236,26 @@ public:
                     } else if (n < 0 && (errno == EAGAIN || errno == EIO)) {
                         continue;
                     } else {
+                        std::cerr << "[terminal] reader: read returned " << n
+                                  << " errno=" << errno << std::endl;
                         t->alive.store(false);
                         break;
                     }
                 } else if (ret > 0 &&
                            (pfd.revents & (POLLHUP | POLLERR)) &&
                            !(pfd.revents & POLLIN)) {
+                    std::cerr << "[terminal] reader: POLLHUP/POLLERR, revents="
+                              << pfd.revents << std::endl;
                     t->alive.store(false);
                     break;
                 }
             }
-            if (t->pid > 0) waitpid(t->pid, nullptr, WNOHANG);
+            int wstatus = 0;
+            if (t->pid > 0) {
+                waitpid(t->pid, &wstatus, WNOHANG);
+                std::cerr << "[terminal] reader: child exited status=" << WEXITSTATUS(wstatus)
+                          << std::endl;
+            }
         });
         reader.detach();
         std::lock_guard lock(mu_);
@@ -957,48 +954,65 @@ public:
         return ::grpc::Status::OK;
     }
 
-    // ── TerminalInput ──────────────────────────────────────────────────
-    ::grpc::Status TerminalInput(
-        ::grpc::ServerContext*,
-        const flatbuffers::grpc::Message<fb::TerminalInputRequest>* request,
-        flatbuffers::grpc::Message<fb::TerminalInputReply>* response) override {
-        auto req = request->GetRoot();
-        auto id = req->id() ? req->id()->str() : "";
-        auto data_b64 = req->data() ? req->data()->str() : "";
-        bool ok = terms_.write_input(id, base64_decode(data_b64));
-        flatbuffers::grpc::MessageBuilder mb;
-        mb.Finish(fb::CreateTerminalInputReply(mb, ok));
-        *response = mb.ReleaseMessage<fb::TerminalInputReply>();
-        return ::grpc::Status::OK;
-    }
+    // ── TerminalAttach (bidi streaming) ───────────────────────────────
+    ::grpc::Status TerminalAttach(
+        ::grpc::ServerContext* /*context*/,
+        ::grpc::ServerReaderWriter<
+            flatbuffers::grpc::Message<fb::TerminalAttachReply>,
+            flatbuffers::grpc::Message<fb::TerminalAttachRequest>>* stream) override {
+        // Read first message to get terminal id
+        flatbuffers::grpc::Message<fb::TerminalAttachRequest> first_msg;
+        if (!stream->Read(&first_msg)) return ::grpc::Status::OK;
+        auto first = first_msg.GetRoot();
+        std::string id = first->id() ? first->id()->str() : "";
+        if (id.empty()) return ::grpc::Status(::grpc::INVALID_ARGUMENT, "terminal id required");
+        if (!terms_.is_alive(id))
+            return ::grpc::Status(::grpc::NOT_FOUND, "terminal not found or dead");
 
-    // ── TerminalOutput ─────────────────────────────────────────────────
-    ::grpc::Status TerminalOutput(
-        ::grpc::ServerContext*,
-        const flatbuffers::grpc::Message<fb::TerminalOutputRequest>* request,
-        flatbuffers::grpc::Message<fb::TerminalOutputReply>* response) override {
-        auto req = request->GetRoot();
-        auto id = req->id() ? req->id()->str() : "";
-        auto raw = terms_.read_output(id);
-        bool alive = terms_.is_alive(id);
-        flatbuffers::grpc::MessageBuilder mb;
-        mb.Finish(fb::CreateTerminalOutputReply(mb, mb.CreateString(base64_encode(raw)), alive));
-        *response = mb.ReleaseMessage<fb::TerminalOutputReply>();
-        return ::grpc::Status::OK;
-    }
+        // Handle first message data/resize
+        if (first->data() && first->data()->size() > 0) {
+            std::string input(reinterpret_cast<const char*>(first->data()->data()),
+                              first->data()->size());
+            terms_.write_input(id, input);
+        }
+        if (first->rows() > 0 && first->cols() > 0)
+            terms_.resize(id, static_cast<uint16_t>(first->rows()),
+                          static_cast<uint16_t>(first->cols()));
 
-    // ── TerminalResize ─────────────────────────────────────────────────
-    ::grpc::Status TerminalResize(
-        ::grpc::ServerContext*,
-        const flatbuffers::grpc::Message<fb::TerminalResizeRequest>* request,
-        flatbuffers::grpc::Message<fb::TerminalResizeReply>* response) override {
-        auto req = request->GetRoot();
-        auto id = req->id() ? req->id()->str() : "";
-        bool ok = terms_.resize(id, static_cast<uint16_t>(req->rows()),
-                                static_cast<uint16_t>(req->cols()));
-        flatbuffers::grpc::MessageBuilder mb;
-        mb.Finish(fb::CreateTerminalResizeReply(mb, ok));
-        *response = mb.ReleaseMessage<fb::TerminalResizeReply>();
+        // Writer thread: push PTY output to stream
+        std::atomic<bool> running{true};
+        std::thread writer([this, &stream, &id, &running]() {
+            while (running.load()) {
+                auto raw = terms_.read_output(id);
+                bool alive = terms_.is_alive(id);
+                if (!raw.empty() || !alive) {
+                    flatbuffers::grpc::MessageBuilder mb;
+                    auto data_off = mb.CreateVector(
+                        reinterpret_cast<const uint8_t*>(raw.data()), raw.size());
+                    mb.Finish(fb::CreateTerminalAttachReply(mb, data_off, alive));
+                    stream->Write(mb.ReleaseMessage<fb::TerminalAttachReply>());
+                }
+                if (!alive) { running.store(false); break; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        });
+
+        // Reader loop: consume client input/resize
+        flatbuffers::grpc::Message<fb::TerminalAttachRequest> msg;
+        while (running.load() && stream->Read(&msg)) {
+            auto req = msg.GetRoot();
+            if (req->data() && req->data()->size() > 0) {
+                std::string input(reinterpret_cast<const char*>(req->data()->data()),
+                                  req->data()->size());
+                terms_.write_input(id, input);
+            }
+            if (req->rows() > 0 && req->cols() > 0)
+                terms_.resize(id, static_cast<uint16_t>(req->rows()),
+                              static_cast<uint16_t>(req->cols()));
+        }
+
+        running.store(false);
+        writer.join();
         return ::grpc::Status::OK;
     }
 
@@ -1126,9 +1140,6 @@ build_dispatch(MirageDashboardService& svc) {
     GRPC_WEB_RPC(CreateRun, CreateRunRequest, CreateRunReply);
     GRPC_WEB_RPC(ListTerminals, ListTerminalsRequest, ListTerminalsReply);
     GRPC_WEB_RPC(CreateTerminal, CreateTerminalRequest, CreateTerminalReply);
-    GRPC_WEB_RPC(TerminalInput, TerminalInputRequest, TerminalInputReply);
-    GRPC_WEB_RPC(TerminalOutput, TerminalOutputRequest, TerminalOutputReply);
-    GRPC_WEB_RPC(TerminalResize, TerminalResizeRequest, TerminalResizeReply);
     GRPC_WEB_RPC(CloseTerminal, CloseTerminalRequest, CloseTerminalReply);
     GRPC_WEB_RPC(GetSessionLog, GetSessionLogRequest, GetSessionLogReply);
 
@@ -1136,11 +1147,272 @@ build_dispatch(MirageDashboardService& svc) {
     return m;
 }
 
+// ============================================================================
+//  Minimal WebSocket server for terminal bidi streaming
+// ============================================================================
+
+std::string sha1_raw(const std::string& input) {
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1(reinterpret_cast<const unsigned char*>(input.data()), input.size(), hash);
+    return std::string(reinterpret_cast<char*>(hash), SHA_DIGEST_LENGTH);
+}
+
+// Read exactly n bytes from fd. Returns false on EOF/error.
+bool ws_read_exact(int fd, void* buf, size_t n) {
+    auto* p = static_cast<uint8_t*>(buf);
+    while (n > 0) {
+        ssize_t r = ::read(fd, p, n);
+        if (r <= 0) return false;
+        p += r;
+        n -= static_cast<size_t>(r);
+    }
+    return true;
+}
+
+// Write all bytes. Returns false on error.
+bool ws_write_all(int fd, const void* buf, size_t n) {
+    auto* p = static_cast<const uint8_t*>(buf);
+    while (n > 0) {
+        ssize_t r = ::write(fd, p, n);
+        if (r <= 0) return false;
+        p += r;
+        n -= static_cast<size_t>(r);
+    }
+    return true;
+}
+
+// Read a WebSocket frame. Returns payload. opcode set. Returns empty + opcode=-1 on error.
+std::string ws_read_frame(int fd, int& opcode) {
+    uint8_t hdr[2];
+    if (!ws_read_exact(fd, hdr, 2)) { opcode = -1; return ""; }
+    opcode = hdr[0] & 0x0F;
+    bool masked = (hdr[1] & 0x80) != 0;
+    uint64_t len = hdr[1] & 0x7F;
+    if (len == 126) {
+        uint8_t ext[2];
+        if (!ws_read_exact(fd, ext, 2)) { opcode = -1; return ""; }
+        len = (static_cast<uint64_t>(ext[0]) << 8) | ext[1];
+    } else if (len == 127) {
+        uint8_t ext[8];
+        if (!ws_read_exact(fd, ext, 8)) { opcode = -1; return ""; }
+        len = 0;
+        for (int i = 0; i < 8; ++i) len = (len << 8) | ext[i];
+    }
+    uint8_t mask_key[4] = {};
+    if (masked && !ws_read_exact(fd, mask_key, 4)) { opcode = -1; return ""; }
+    if (len > 16 * 1024 * 1024) { opcode = -1; return ""; } // sanity
+    std::string payload(static_cast<size_t>(len), '\0');
+    if (len > 0 && !ws_read_exact(fd, payload.data(), payload.size())) { opcode = -1; return ""; }
+    if (masked) {
+        for (size_t i = 0; i < payload.size(); ++i)
+            payload[i] ^= static_cast<char>(mask_key[i % 4]);
+    }
+    return payload;
+}
+
+// Write a WebSocket frame (server→client, never masked).
+bool ws_write_frame(int fd, int opcode, const void* data, size_t len) {
+    uint8_t hdr[10];
+    size_t hdr_len = 2;
+    hdr[0] = static_cast<uint8_t>(0x80 | (opcode & 0x0F)); // FIN + opcode
+    if (len < 126) {
+        hdr[1] = static_cast<uint8_t>(len);
+    } else if (len <= 0xFFFF) {
+        hdr[1] = 126;
+        hdr[2] = static_cast<uint8_t>((len >> 8) & 0xFF);
+        hdr[3] = static_cast<uint8_t>(len & 0xFF);
+        hdr_len = 4;
+    } else {
+        hdr[1] = 127;
+        for (int i = 0; i < 8; ++i)
+            hdr[2 + i] = static_cast<uint8_t>((len >> (56 - 8 * i)) & 0xFF);
+        hdr_len = 10;
+    }
+    if (!ws_write_all(fd, hdr, hdr_len)) return false;
+    if (len > 0 && !ws_write_all(fd, data, len)) return false;
+    return true;
+}
+
+// Send a WebSocket close frame and close the fd.
+void ws_close(int fd) {
+    ws_write_frame(fd, 0x8, nullptr, 0);
+    ::close(fd);
+}
+
+// Terminal WebSocket protocol:
+//   Client → Server:
+//     Binary frame byte[0]=0x00 : remaining bytes are PTY input
+//     Binary frame byte[0]=0x01 : remaining 4 bytes are rows(u16LE) + cols(u16LE)
+//   Server → Client:
+//     Binary frame byte[0]=0x00 : remaining bytes are PTY output
+//     Binary frame byte[0]=0x01 : terminal exited
+
+void ws_handle_terminal(int fd, const std::string& terminal_id, TerminalManager& terms) {
+    if (!terms.is_alive(terminal_id)) {
+        std::cerr << "[ws] terminal " << terminal_id << " not alive, closing" << std::endl;
+        ws_close(fd);
+        return;
+    }
+    std::cerr << "[ws] terminal " << terminal_id << " alive, starting I/O" << std::endl;
+
+    std::atomic<bool> running{true};
+    std::mutex write_mu;
+
+    // Writer thread: PTY output → WebSocket
+    std::thread writer([&]() {
+        while (running.load()) {
+            auto raw = terms.read_output(terminal_id);
+            bool alive = terms.is_alive(terminal_id);
+            if (!raw.empty()) {
+                std::string frame;
+                frame.push_back('\x00'); // type: data
+                frame.append(raw);
+                std::lock_guard lock(write_mu);
+                if (!ws_write_frame(fd, 0x2, frame.data(), frame.size())) {
+                    running.store(false);
+                    break;
+                }
+            }
+            if (!alive) {
+                char exit_msg = 0x01; // type: exit
+                std::lock_guard lock(write_mu);
+                ws_write_frame(fd, 0x2, &exit_msg, 1);
+                running.store(false);
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    });
+
+    // Reader loop: WebSocket → PTY
+    while (running.load()) {
+        int opcode = 0;
+        auto payload = ws_read_frame(fd, opcode);
+        if (opcode == -1 || opcode == 0x8) break; // error or close
+        if (opcode == 0x9) { // ping → pong
+            std::lock_guard lock(write_mu);
+            ws_write_frame(fd, 0xA, payload.data(), payload.size());
+            continue;
+        }
+        if (opcode == 0x2 && !payload.empty()) { // binary
+            uint8_t type = static_cast<uint8_t>(payload[0]);
+            if (type == 0x00 && payload.size() > 1) {
+                // Input data
+                terms.write_input(terminal_id, payload.substr(1));
+            } else if (type == 0x01 && payload.size() >= 5) {
+                // Resize: rows(u16LE) + cols(u16LE)
+                auto* p = reinterpret_cast<const uint8_t*>(payload.data() + 1);
+                uint16_t rows = static_cast<uint16_t>(p[0] | (p[1] << 8));
+                uint16_t cols = static_cast<uint16_t>(p[2] | (p[3] << 8));
+                if (rows > 0 && cols > 0) terms.resize(terminal_id, rows, cols);
+            }
+        }
+    }
+
+    running.store(false);
+    writer.join();
+    ws_close(fd);
+}
+
+// Perform WebSocket handshake. Returns terminal_id on success, empty on failure.
+std::string ws_handshake(int fd) {
+    // Read the HTTP upgrade request (max 4KB)
+    std::string req_buf;
+    req_buf.resize(4096);
+    ssize_t n = ::read(fd, req_buf.data(), req_buf.size());
+    if (n <= 0) return "";
+    req_buf.resize(static_cast<size_t>(n));
+
+    // Extract the path: GET /terminal/{id} HTTP/1.1
+    std::string terminal_id;
+    if (req_buf.substr(0, 4) == "GET ") {
+        auto sp = req_buf.find(' ', 4);
+        if (sp != std::string::npos) {
+            auto path = req_buf.substr(4, sp - 4);
+            const std::string prefix = "/terminal/";
+            if (path.substr(0, prefix.size()) == prefix)
+                terminal_id = path.substr(prefix.size());
+        }
+    }
+    if (terminal_id.empty()) return "";
+
+    // Extract Sec-WebSocket-Key
+    std::string ws_key;
+    auto pos = req_buf.find("Sec-WebSocket-Key:");
+    if (pos == std::string::npos) pos = req_buf.find("sec-websocket-key:");
+    if (pos != std::string::npos) {
+        pos += 18; // skip header name + colon
+        while (pos < req_buf.size() && req_buf[pos] == ' ') ++pos;
+        auto end = req_buf.find("\r\n", pos);
+        if (end != std::string::npos) ws_key = req_buf.substr(pos, end - pos);
+    }
+    if (ws_key.empty()) return "";
+
+    // Compute accept key
+    std::string accept_input = ws_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    auto accept_key = base64_encode(sha1_raw(accept_input));
+
+    // Send upgrade response
+    std::string response =
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: " + accept_key + "\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "\r\n";
+    if (!ws_write_all(fd, response.data(), response.size())) return "";
+
+    return terminal_id;
+}
+
+void run_ws_server(int port, TerminalManager& terms) {
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        std::cerr << "WebSocket server: socket() failed" << std::endl;
+        return;
+    }
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+
+    if (bind(server_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+        std::cerr << "WebSocket server: bind() failed on port " << port << std::endl;
+        ::close(server_fd);
+        return;
+    }
+    if (listen(server_fd, 16) < 0) {
+        std::cerr << "WebSocket server: listen() failed" << std::endl;
+        ::close(server_fd);
+        return;
+    }
+    std::cout << "WebSocket terminal server on ws://0.0.0.0:" << port << std::endl;
+
+    while (true) {
+        int client_fd = accept(server_fd, nullptr, nullptr);
+        if (client_fd < 0) continue;
+
+        std::thread([client_fd, &terms]() {
+            auto terminal_id = ws_handshake(client_fd);
+            if (terminal_id.empty()) {
+                ::close(client_fd);
+                return;
+            }
+            std::cerr << "[ws] terminal attach: " << terminal_id << std::endl;
+            ws_handle_terminal(client_fd, terminal_id, terms);
+        }).detach();
+    }
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
     int http_port = 50051;
     int grpc_port = 50052;
+    int ws_port_arg = 0;
     std::string static_dir;
 
     for (int i = 1; i < argc; ++i) {
@@ -1149,6 +1421,8 @@ int main(int argc, char* argv[]) {
             http_port = std::atoi(argv[++i]);
         else if (arg == "--grpc-port" && i + 1 < argc)
             grpc_port = std::atoi(argv[++i]);
+        else if (arg == "--ws-port" && i + 1 < argc)
+            ws_port_arg = std::atoi(argv[++i]);
         else if (arg == "--static" && i + 1 < argc)
             static_dir = argv[++i];
     }
@@ -1186,6 +1460,13 @@ int main(int argc, char* argv[]) {
         grpc_server->Wait();
     });
     grpc_thread.detach();
+
+    // ── WebSocket terminal server ──────────────────────────────────────
+    int ws_port = ws_port_arg > 0 ? ws_port_arg : http_port + 2;
+    std::thread ws_thread([ws_port, &terms]() {
+        run_ws_server(ws_port, terms);
+    });
+    ws_thread.detach();
 
     // ── gRPC-Web binary bridge (httplib) ───────────────────────────────
     auto dispatch = build_dispatch(grpc_service);
