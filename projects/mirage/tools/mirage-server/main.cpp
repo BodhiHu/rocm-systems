@@ -1358,7 +1358,6 @@ std::string ws_handshake(int fd) {
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Accept: " + accept_key + "\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
         "\r\n";
     if (!ws_write_all(fd, response.data(), response.size())) return "";
 
@@ -1536,12 +1535,6 @@ int main(int argc, char* argv[]) {
     auto dispatch = build_dispatch(grpc_service);
     WsAwareServer srv(terms);
 
-    srv.set_default_headers({
-        {"Access-Control-Allow-Origin", "*"},
-        {"Access-Control-Allow-Methods", "POST, OPTIONS"},
-        {"Access-Control-Allow-Headers", "Content-Type, X-Grpc-Web"},
-    });
-
     const std::string prefix = "/api/";
 
     srv.Post(prefix + "(.*)",
@@ -1562,10 +1555,6 @@ int main(int argc, char* argv[]) {
                  }
                  res.set_content(result, "application/x-flatbuffers");
              });
-
-    srv.Options("/(.*)", [](const httplib::Request&, httplib::Response& res) {
-        res.status = 204;
-    });
 
     if (!static_dir.empty()) {
         srv.set_mount_point("/", static_dir);
