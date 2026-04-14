@@ -24,6 +24,7 @@ import {
   NumberControlComponent,
   SelectControlComponent,
 } from "./control-components";
+import { ColoredNode } from "./custom-node";
 
 // ─── Type plumbing ────────────────────────────────────────────────────────────
 
@@ -124,6 +125,9 @@ export async function createEditor(container: HTMLElement): Promise<TopologyEdit
   render.addPreset(
     Presets.classic.setup({
       customize: {
+        node() {
+          return ColoredNode as any;
+        },
         control(data) {
           if (data.payload instanceof TextControl) return TextControlComponent as any;
           if (data.payload instanceof NumberControl) return NumberControlComponent as any;
