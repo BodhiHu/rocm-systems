@@ -4,5 +4,5 @@ export { COMPONENT_TYPES, HardwareNode } from "./nodes-hardware";
 export { ConnectorNode } from "./nodes-connector";
 export {
   VarNode, NumberNode, MathNode, CompareNode,
-  LogicNode, NotNode, MaskBuiltinNode, RangeNode,
+  LogicNode, NotNode, MaskBuiltinNode,
 } from "./nodes-math";

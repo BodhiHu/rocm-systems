@@ -270,24 +270,39 @@ describe("import → export roundtrip", () => {
     }
   });
 
-  it("preserves for_ranges on links", async () => {
+  it("derives for_ranges from component counts", async () => {
     const editor = new NodeEditor();
     await importConfig(editor, cdna4Config as never);
     const exported = exportConfig(editor as never);
 
     const rootName = cdna4Config.topology.root.name;
-    const inputLinks = normalizeLinks(
-      cdna4Config.topology.links as unknown as Record<string, unknown>[],
-      rootName,
-    );
     const outputLinks = normalizeLinks(
       exported.topology.links as unknown as Record<string, unknown>[],
       rootName,
     );
 
-    for (let i = 0; i < inputLinks.length; i++) {
-      expect(outputLinks[i].for_ranges).toEqual(inputLinks[i].for_ranges);
+    // Ranges are auto-derived from the from/to component hierarchy.
+    // Valid range end values should correspond to component counts in the config.
+    const componentCounts = new Set([8, 4, 2]); // xcd:8, se:4, cu:8, iod:2
+
+    for (const link of outputLinks) {
+      const ranges = (link.for_ranges ?? []) as { var_name: string; start: number; end: number }[];
+      expect(ranges.length).toBeGreaterThan(0);
+      for (const r of ranges) {
+        expect(r.start).toBe(0);
+        expect(componentCounts.has(r.end)).toBe(true);
+      }
     }
+
+    // The cross-product link (iod→iod) should have two ranges with end=2
+    const iodLink = outputLinks.find(
+      (l) => l.from === "iod.peer_req" && l.to === "iod.peer_cpl",
+    );
+    expect(iodLink).toBeDefined();
+    const iodRanges = (iodLink!.for_ranges ?? []) as { end: number }[];
+    expect(iodRanges).toHaveLength(2);
+    expect(iodRanges[0].end).toBe(2);
+    expect(iodRanges[1].end).toBe(2);
   });
 
   it("preserves where_expr on links", async () => {

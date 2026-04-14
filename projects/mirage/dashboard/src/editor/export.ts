@@ -3,7 +3,7 @@ import { HardwareNode, COMPONENT_TYPES } from "./nodes-hardware";
 import { ConnectorNode } from "./nodes-connector";
 import {
   VarNode, NumberNode, MathNode, CompareNode,
-  LogicNode, NotNode, MaskBuiltinNode, RangeNode,
+  LogicNode, NotNode, MaskBuiltinNode,
 } from "./nodes-math";
 import type { TextControl, NumberControl } from "./controls";
 
@@ -53,7 +53,7 @@ interface SimulationConfig {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 type AnyNode = HardwareNode | ConnectorNode | VarNode | NumberNode | MathNode
-  | CompareNode | LogicNode | NotNode | MaskBuiltinNode | RangeNode;
+  | CompareNode | LogicNode | NotNode | MaskBuiltinNode;
 type Conn = ClassicPreset.Connection<AnyNode, AnyNode>;
 type Schemes = GetSchemes<AnyNode, Conn>;
 
@@ -119,9 +119,6 @@ function evalExpr(editor: NodeEditor<Schemes>, nodeId: string): string {
   if (node instanceof NumberNode) {
     return String(getCtrlNumber(node, "value"));
   }
-  if (node instanceof RangeNode) {
-    return getCtrlText(node, "varName") || "i";
-  }
 
   // Binary expressions
   if (node instanceof MathNode) {
@@ -171,45 +168,115 @@ function traceExprInput(
   return evalExpr(editor, conn.source);
 }
 
-/** Collect all RangeNodes reachable from a connector's mask sub-graph. */
-function collectRanges(
+/** Walk the parent chain of a HardwareNode to build an ancestor list (bottom-up). */
+function getAncestorChain(
   editor: NodeEditor<Schemes>,
   nodeId: string,
-  visited: Set<string>,
+): HardwareNode[] {
+  const chain: HardwareNode[] = [];
+  let currentId: string | null = nodeId;
+  while (currentId) {
+    const node = editor.getNode(currentId);
+    if (!(node instanceof HardwareNode)) break;
+    chain.push(node);
+    const parentConn = editor
+      .getConnections()
+      .find((c) => c.source === currentId && c.sourceOutput === "parent");
+    currentId = parentConn ? parentConn.target : null;
+  }
+  return chain;
+}
+
+const VAR_NAMES = "ijklmnop";
+
+/**
+ * Derive for_ranges by walking the from/to hardware socket ancestor chains.
+ * Each component with count > 1 contributes a range variable.
+ * If from and to trace to the same node, two variables are generated (cross-product).
+ */
+function deriveRanges(
+  editor: NodeEditor<Schemes>,
+  connectorId: string,
 ): ForRange[] {
-  if (visited.has(nodeId)) return [];
-  visited.add(nodeId);
+  const fromRef = traceHwSocket(editor, connectorId, "from");
+  const toRef = traceHwSocket(editor, connectorId, "to");
+  if (!fromRef && !toRef) return [];
 
-  const node = editor.getNode(nodeId);
-  if (node instanceof RangeNode) {
-    return [{
-      var_name: getCtrlText(node, "varName") || "i",
-      start: getCtrlNumber(node, "start"),
-      end: getCtrlNumber(node, "end"),
-    }];
-  }
+  // Get ancestor chains (bottom-up), then reverse to top-down
+  const fromChain = fromRef
+    ? getAncestorChain(editor, fromRef.node.id).reverse()
+    : [];
+  const toChain = toRef
+    ? getAncestorChain(editor, toRef.node.id).reverse()
+    : [];
 
-  // Recurse through all incoming expression connections
   const ranges: ForRange[] = [];
-  const incoming = editor
-    .getConnections()
-    .filter((c) => c.target === nodeId);
-  for (const conn of incoming) {
-    ranges.push(...collectRanges(editor, conn.source, visited));
+  let varIdx = 0;
+  const assigned = new Map<string, string>(); // nodeId → var name
+
+  // Walk from-chain, assign variables to components with count > 1
+  for (const node of fromChain) {
+    const count = getCtrlNumber(node, "count");
+    if (count > 1) {
+      const name = VAR_NAMES[varIdx++];
+      assigned.set(node.id, name);
+      ranges.push({ var_name: name, start: 0, end: count });
+    }
   }
+
+  // Walk to-chain
+  for (const node of toChain) {
+    const count = getCtrlNumber(node, "count");
+    if (count <= 1) continue;
+
+    if (assigned.has(node.id)) {
+      // Same node already has a variable from the from-chain.
+      // If it's the endpoint node for BOTH from and to, we need a second
+      // variable for cross-product iteration (e.g. iod[i] -> iod[j]).
+      if (fromRef && toRef && node.id === fromRef.node.id && node.id === toRef.node.id) {
+        const name = VAR_NAMES[varIdx++];
+        ranges.push({ var_name: name, start: 0, end: count });
+      }
+      // Otherwise: shared ancestor, reuse variable — no new range needed.
+    } else {
+      const name = VAR_NAMES[varIdx++];
+      assigned.set(node.id, name);
+      ranges.push({ var_name: name, start: 0, end: count });
+    }
+  }
+
   return ranges;
 }
 
-/** Deduplicate ranges by var_name. */
-function dedupeRanges(ranges: ForRange[]): ForRange[] {
-  const seen = new Map<string, ForRange>();
-  for (const r of ranges) {
-    seen.set(r.var_name, r);
-  }
-  return [...seen.values()];
-}
+// ─── Serialize where_expr from mask sub-graph ─────────────────────────────────
 
-// ─── Build the socket reference string ────────────────────────────────────────
+function serializeWhereExpr(
+  editor: NodeEditor<Schemes>,
+  connectorId: string,
+): string | undefined {
+  const maskConn = editor
+    .getConnections()
+    .find((c) => c.target === connectorId && c.targetInput === "mask");
+  if (!maskConn) return undefined;
+
+  const maskNodeId = maskConn.source;
+  const maskNode = editor.getNode(maskNodeId);
+
+  if (maskNode instanceof MaskBuiltinNode) {
+    if (maskNode.builtin === "cross_no_self") {
+      const varA = traceExprInput(editor, maskNodeId, "varA");
+      const varB = traceExprInput(editor, maskNodeId, "varB");
+      return `${varA} != ${varB}`;
+    }
+    return undefined;
+  }
+
+  if (maskNode instanceof CompareNode || maskNode instanceof LogicNode || maskNode instanceof NotNode) {
+    return evalExpr(editor, maskNodeId);
+  }
+
+  return undefined;
+}
 
 function buildSocketRef(
   editor: NodeEditor<Schemes>,
@@ -225,51 +292,7 @@ function buildSocketRef(
   return `${path}.${sockName}`;
 }
 
-// ─── Serialize mask / where_expr ──────────────────────────────────────────────
-
-function serializeMask(
-  editor: NodeEditor<Schemes>,
-  connectorId: string,
-): { where_expr?: string; for_ranges: ForRange[] } {
-  const maskConn = editor
-    .getConnections()
-    .find((c) => c.target === connectorId && c.targetInput === "mask");
-
-  if (!maskConn) return { for_ranges: [] };
-
-  const maskNodeId = maskConn.source;
-  const maskNode = editor.getNode(maskNodeId);
-
-  // Collect all ranges from the expression sub-graph
-  const ranges = dedupeRanges(collectRanges(editor, maskNodeId, new Set()));
-
-  // If the mask is a MaskBuiltinNode, we handle specially:
-  if (maskNode instanceof MaskBuiltinNode) {
-    if (maskNode.builtin === "cross_no_self") {
-      // Need a where_expr like "i != j"
-      const varA = traceExprInput(editor, maskNodeId, "varA");
-      const varB = traceExprInput(editor, maskNodeId, "varB");
-      return {
-        for_ranges: ranges,
-        where_expr: `${varA} != ${varB}`,
-      };
-    }
-    return { for_ranges: ranges };
-  }
-
-  // If the top-level mask is a comparison, it becomes the where_expr
-  if (maskNode instanceof CompareNode || maskNode instanceof LogicNode || maskNode instanceof NotNode) {
-    const expr = evalExpr(editor, maskNodeId);
-    return {
-      for_ranges: ranges,
-      where_expr: expr,
-    };
-  }
-
-  return { for_ranges: ranges };
-}
-
-// ─── Main export function ─────────────────────────────────────────────────────
+// ─── Build the socket reference string ────────────────────────────────────────
 
 export function exportConfig(editor: NodeEditor<Schemes>): SimulationConfig {
   const pathCache = new Map<string, string>();
@@ -342,7 +365,8 @@ export function exportConfig(editor: NodeEditor<Schemes>): SimulationConfig {
     const latency = getCtrlNumber(conn, "latency");
     const weight = getCtrlNumber(conn, "weight");
 
-    const { for_ranges, where_expr } = serializeMask(editor, conn.id);
+    const for_ranges = deriveRanges(editor, conn.id);
+    const where_expr = serializeWhereExpr(editor, conn.id);
 
     const pattern = `${fromRef} -> ${toRef}`;
     const link: LinkDef = { pattern, latency, weight };

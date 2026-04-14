@@ -17,7 +17,6 @@ import {
   LogicNode,
   NotNode,
   MaskBuiltinNode,
-  RangeNode,
 } from "./nodes-math";
 import { TextControl, NumberControl, SelectControl } from "./controls";
 import {
@@ -37,8 +36,7 @@ type AnyNode =
   | CompareNode
   | LogicNode
   | NotNode
-  | MaskBuiltinNode
-  | RangeNode;
+  | MaskBuiltinNode;
 
 type Conn = ClassicPreset.Connection<AnyNode, AnyNode> & { isLoop?: boolean };
 type Schemes = GetSchemes<AnyNode, Conn>;
@@ -79,7 +77,6 @@ export async function createEditor(container: HTMLElement): Promise<TopologyEdit
       ["Expression", [
         ["Variable", () => new VarNode()] as [string, () => AnyNode],
         ["Number", () => new NumberNode()] as [string, () => AnyNode],
-        ["Range", () => new RangeNode()] as [string, () => AnyNode],
       ]],
       // Math ops
       ["Math", ([

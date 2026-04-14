@@ -1,7 +1,7 @@
 import { ClassicPreset, type NodeEditor, type GetSchemes } from "rete";
 import { HardwareNode, COMPONENT_TYPES, type ComponentTypeDef } from "./nodes-hardware";
 import { ConnectorNode } from "./nodes-connector";
-import { RangeNode, VarNode, NumberNode, MathNode, CompareNode } from "./nodes-math";
+import { VarNode, CompareNode } from "./nodes-math";
 import type { NumberControl, TextControl } from "./controls";
 
 // ─── JSON config types ────────────────────────────────────────────────────────
@@ -46,10 +46,7 @@ type AnyNode =
   | HardwareNode
   | ConnectorNode
   | VarNode
-  | NumberNode
-  | MathNode
-  | CompareNode
-  | RangeNode;
+  | CompareNode;
 
 type Conn = ClassicPreset.Connection<AnyNode, AnyNode> & { isLoop?: boolean };
 type Schemes = GetSchemes<AnyNode, Conn>;
@@ -188,9 +185,9 @@ export async function importConfig(
       await editor.addConnection(conn as Conn);
     }
 
-    // Build expression sub-graph for for_ranges and where_expr
-    if (link.for_ranges && link.for_ranges.length > 0) {
-      await buildRangeSubgraph(editor, connector, link.for_ranges, link.where_expr);
+    // Build where_expr sub-graph if present
+    if (link.where_expr) {
+      await buildWhereExpr(editor, connector, link.where_expr, link.for_ranges ?? []);
     }
   }
 }
@@ -242,87 +239,50 @@ function resolveSocketRef(
   return null;
 }
 
-// ─── Build expression sub-graph for ranges + where_expr ───────────────────────
+// ─── Build where_expr sub-graph ───────────────────────────────────────────────
 
-async function buildRangeSubgraph(
+/**
+ * Create VarNode + CompareNode for a where_expr (e.g. "i != j").
+ * for_ranges are NOT imported as nodes — they are derived from component counts
+ * during export. Only the where_expr filter needs expression nodes.
+ */
+async function buildWhereExpr(
   editor: NodeEditor<Schemes>,
   connector: ConnectorNode,
+  whereExpr: string,
   ranges: ForRange[],
-  whereExpr?: string,
 ) {
-  // Create RangeNodes for each for_range
-  const rangeNodes: RangeNode[] = [];
-  for (const r of ranges) {
-    const rangeNode = new RangeNode(r.var_name, r.start, r.end);
-    await editor.addNode(rangeNode);
-    rangeNodes.push(rangeNode);
+  const cmpNode = parseWhereExpr(whereExpr);
+  if (!cmpNode) return;
+
+  await editor.addNode(cmpNode);
+
+  // Find variable names referenced in the expression
+  const varNames = ranges.map((r) => r.var_name);
+  const tokens = whereExpr.replace(/[()]/g, " ").split(/\s+/).filter(Boolean);
+  const referencedVars = tokens.filter((t) => varNames.includes(t));
+
+  // Create VarNodes for each referenced variable and connect to compare inputs
+  if (referencedVars.length >= 1) {
+    const varA = new VarNode(referencedVars[0]);
+    await editor.addNode(varA);
+    const connA = new ClassicPreset.Connection(varA, "out", cmpNode, "a");
+    await editor.addConnection(connA as Conn);
+  }
+  if (referencedVars.length >= 2) {
+    const varB = new VarNode(referencedVars[1]);
+    await editor.addNode(varB);
+    const connB = new ClassicPreset.Connection(varB, "out", cmpNode, "b");
+    await editor.addConnection(connB as Conn);
   }
 
-  if (whereExpr) {
-    // Parse simple where_expr like "i != j"
-    const exprNode = parseWhereExpr(whereExpr, rangeNodes);
-    if (exprNode) {
-      await editor.addNode(exprNode);
-
-      // Connect range vars to the compare node inputs
-      const varNames = ranges.map((r) => r.var_name);
-      if (exprNode instanceof CompareNode) {
-        // Find which vars are referenced
-        const tokens = whereExpr.replace(/[()]/g, " ").split(/\s+/).filter(Boolean);
-        const referencedVars = tokens.filter((t) => varNames.includes(t));
-        if (referencedVars.length >= 1) {
-          const rangeA = rangeNodes.find(
-            (rn) => (rn.controls["varName"] as TextControl | undefined)?.value === referencedVars[0],
-          );
-          if (rangeA) {
-            const conn = new ClassicPreset.Connection(rangeA, "var", exprNode, "a");
-            await editor.addConnection(conn as Conn);
-          }
-        }
-        if (referencedVars.length >= 2) {
-          const rangeB = rangeNodes.find(
-            (rn) => (rn.controls["varName"] as TextControl | undefined)?.value === referencedVars[1],
-          );
-          if (rangeB) {
-            const conn = new ClassicPreset.Connection(rangeB, "var", exprNode, "b");
-            await editor.addConnection(conn as Conn);
-          }
-        }
-      }
-
-      // Connect expression output to connector's mask input
-      const maskConn = new ClassicPreset.Connection(exprNode, "out", connector, "mask");
-      await editor.addConnection(maskConn as Conn);
-    }
-  } else if (rangeNodes.length === 1) {
-    // Single range, no where_expr — connect directly to mask
-    const conn = new ClassicPreset.Connection(rangeNodes[0], "var", connector, "mask");
-    await editor.addConnection(conn as Conn);
-  } else if (rangeNodes.length > 1) {
-    // Multiple ranges, no where_expr — chain through MathNode(add) so
-    // collectRanges can discover all ranges by walking upstream from mask.
-    let prev: AnyNode = rangeNodes[0];
-    let prevOutput = "var";
-    for (let idx = 1; idx < rangeNodes.length; idx++) {
-      const agg = new MathNode("add");
-      await editor.addNode(agg);
-      const connA = new ClassicPreset.Connection(prev, prevOutput, agg, "a");
-      await editor.addConnection(connA as Conn);
-      const connB = new ClassicPreset.Connection(rangeNodes[idx], "var", agg, "b");
-      await editor.addConnection(connB as Conn);
-      prev = agg;
-      prevOutput = "out";
-    }
-    const maskConn = new ClassicPreset.Connection(prev, prevOutput, connector, "mask");
-    await editor.addConnection(maskConn as Conn);
-  }
+  // Connect compare output to connector's mask input
+  const maskConn = new ClassicPreset.Connection(cmpNode, "out", connector, "mask");
+  await editor.addConnection(maskConn as Conn);
 }
 
 /** Parse a simple where_expr string into a CompareNode. */
-function parseWhereExpr(
-  expr: string,
-  _rangeNodes: RangeNode[],
-): CompareNode | null {
+function parseWhereExpr(expr: string): CompareNode | null {
   const ops: [string, "eq" | "ne" | "gt" | "lt" | "gte" | "lte"][] = [
     ["!=", "ne"],
     ["==", "eq"],

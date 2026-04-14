@@ -145,18 +145,4 @@ export class MaskBuiltinNode extends ClassicPreset.Node {
 }
 
 // ─── Range Node ───────────────────────────────────────────────────────────────
-// Defines a for_range: { var_name, start, end }
-
-export class RangeNode extends ClassicPreset.Node {
-  width = 180;
-  height = 200;
-
-  constructor(varName = "i", start = 0, end = 8) {
-    super("Range");
-    this.addControl("varName", new TextControl(varName, undefined, "var"));
-    this.addControl("start", new NumberControl(start, undefined, "start"));
-    this.addControl("end", new NumberControl(end, undefined, "end"));
-    this.addOutput("var", new ClassicPreset.Output(exprSocket, "var expr"));
-    this.addOutput("range", new ClassicPreset.Output(exprSocket, "range"));
-  }
-}
+// ─── (RangeNode removed — for_ranges are derived from component counts) ─────
