@@ -19,6 +19,7 @@ export function Layout() {
           <NavLink to="/profiles">Profiles</NavLink>
           <NavLink to="/sessions">Sessions</NavLink>
           <NavLink to="/runs">Runs</NavLink>
+          <NavLink to="/topology">Topology Editor</NavLink>
         </nav>
       </aside>
       <main className="content">
