@@ -6584,6 +6584,7 @@ void VCmpxClassF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (match)
       result |= (1ULL << lane);
   }
+  wf.set_vcc(result);
   wf.set_exec(result);
 }
 
@@ -6618,7 +6619,47 @@ VCmpxClassF64Vop3::VCmpxClassF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxClassF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_class_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    uint32_t mask = src1.read_lane(wf, lane);
+    bool match = false;
+    if ((mask & 0x001) && std::isnan(s0) &&
+        (std::bit_cast<uint64_t>(s0) & 0x0008000000000000ULL) == 0)
+      match = true;
+    if ((mask & 0x002) && std::isnan(s0) &&
+        (std::bit_cast<uint64_t>(s0) & 0x0008000000000000ULL) != 0)
+      match = true;
+    if ((mask & 0x004) && std::isinf(s0) && s0 < 0)
+      match = true;
+    if ((mask & 0x008) && std::isnormal(s0) && s0 < 0)
+      match = true;
+    if ((mask & 0x010) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) && s0 != 0.0 &&
+        std::signbit(s0))
+      match = true;
+    if ((mask & 0x020) && s0 == 0.0 && std::signbit(s0))
+      match = true;
+    if ((mask & 0x040) && s0 == 0.0 && !std::signbit(s0))
+      match = true;
+    if ((mask & 0x080) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) && s0 != 0.0 &&
+        !std::signbit(s0))
+      match = true;
+    if ((mask & 0x100) && std::isnormal(s0) && s0 > 0)
+      match = true;
+    if ((mask & 0x200) && std::isinf(s0) && s0 > 0)
+      match = true;
+    if (match)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpClassF16Vop3::VCmpClassF16Vop3(const MachineInst *inst)
@@ -6732,6 +6773,7 @@ void VCmpxClassF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (match)
       result |= (1ULL << lane);
   }
+  wf.set_vcc(result);
   wf.set_exec(result);
 }
 
@@ -9291,7 +9333,26 @@ VCmpxLtF64Vop3::VCmpxLtF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxLtF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_lt_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (s0 < s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxEqF64Vop3::VCmpxEqF64Vop3(const MachineInst *inst)
@@ -9308,7 +9369,26 @@ VCmpxEqF64Vop3::VCmpxEqF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxEqF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_eq_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (s0 == s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxLeF64Vop3::VCmpxLeF64Vop3(const MachineInst *inst)
@@ -9325,7 +9405,26 @@ VCmpxLeF64Vop3::VCmpxLeF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxLeF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_le_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (s0 <= s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxGtF64Vop3::VCmpxGtF64Vop3(const MachineInst *inst)
@@ -9342,7 +9441,26 @@ VCmpxGtF64Vop3::VCmpxGtF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxGtF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_gt_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (s0 > s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxLgF64Vop3::VCmpxLgF64Vop3(const MachineInst *inst)
@@ -9359,7 +9477,26 @@ VCmpxLgF64Vop3::VCmpxLgF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxLgF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_lg_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (s0 < s1 || s0 > s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxGeF64Vop3::VCmpxGeF64Vop3(const MachineInst *inst)
@@ -9376,7 +9513,26 @@ VCmpxGeF64Vop3::VCmpxGeF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxGeF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_ge_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (s0 >= s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxOF64Vop3::VCmpxOF64Vop3(const MachineInst *inst)
@@ -9393,7 +9549,26 @@ VCmpxOF64Vop3::VCmpxOF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxOF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_o_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (!std::isnan(s0) && !std::isnan(s1))
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxUF64Vop3::VCmpxUF64Vop3(const MachineInst *inst)
@@ -9410,7 +9585,26 @@ VCmpxUF64Vop3::VCmpxUF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxUF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_u_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (std::isnan(s0) || std::isnan(s1))
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxNgeF64Vop3::VCmpxNgeF64Vop3(const MachineInst *inst)
@@ -9427,7 +9621,26 @@ VCmpxNgeF64Vop3::VCmpxNgeF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxNgeF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_nge_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (!(s0 >= s1))
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxNlgF64Vop3::VCmpxNlgF64Vop3(const MachineInst *inst)
@@ -9444,7 +9657,26 @@ VCmpxNlgF64Vop3::VCmpxNlgF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxNlgF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_nlg_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (!(s0 < s1 || s0 > s1))
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxNgtF64Vop3::VCmpxNgtF64Vop3(const MachineInst *inst)
@@ -9461,7 +9693,26 @@ VCmpxNgtF64Vop3::VCmpxNgtF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxNgtF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_ngt_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (!(s0 > s1))
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxNleF64Vop3::VCmpxNleF64Vop3(const MachineInst *inst)
@@ -9478,7 +9729,26 @@ VCmpxNleF64Vop3::VCmpxNleF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxNleF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_nle_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (!(s0 <= s1))
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxNeqF64Vop3::VCmpxNeqF64Vop3(const MachineInst *inst)
@@ -9495,7 +9765,26 @@ VCmpxNeqF64Vop3::VCmpxNeqF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxNeqF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_neq_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (s0 != s1 || std::isnan(s0) || std::isnan(s1))
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxNltF64Vop3::VCmpxNltF64Vop3(const MachineInst *inst)
@@ -9512,7 +9801,26 @@ VCmpxNltF64Vop3::VCmpxNltF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxNltF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_nlt_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    double s0 = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    double s1 = std::bit_cast<double>(src1.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst_.neg & (1u << 0))
+      s0 = -s0;
+    if (inst_.abs & (1u << 1))
+      s1 = std::fabs(s1);
+    if (inst_.neg & (1u << 1))
+      s1 = -s1;
+    if (!(s0 < s1))
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxTruF64Vop3::VCmpxTruF64Vop3(const MachineInst *inst)
@@ -9966,7 +10274,15 @@ VCmpxFI16Vop3::VCmpxFI16Vop3(const MachineInst *inst)
 }
 
 void VCmpxFI16Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_f_i16_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    (void)lane;
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxLtI16Vop3::VCmpxLtI16Vop3(const MachineInst *inst)
@@ -10151,7 +10467,15 @@ VCmpxTI16Vop3::VCmpxTI16Vop3(const MachineInst *inst)
 }
 
 void VCmpxTI16Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_t_i16_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxFU16Vop3::VCmpxFU16Vop3(const MachineInst *inst)
@@ -10168,7 +10492,15 @@ VCmpxFU16Vop3::VCmpxFU16Vop3(const MachineInst *inst)
 }
 
 void VCmpxFU16Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_f_u16_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    (void)lane;
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxLtU16Vop3::VCmpxLtU16Vop3(const MachineInst *inst)
@@ -10353,7 +10685,15 @@ VCmpxTU16Vop3::VCmpxTU16Vop3(const MachineInst *inst)
 }
 
 void VCmpxTU16Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_t_u16_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpFI32Vop3::VCmpFI32Vop3(const MachineInst *inst)
@@ -11567,7 +11907,18 @@ VCmpxLtI64Vop3::VCmpxLtI64Vop3(const MachineInst *inst)
 }
 
 void VCmpxLtI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_lt_i64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    int64_t s0 = static_cast<int64_t>(src0.read_lane64(wf, lane));
+    int64_t s1 = static_cast<int64_t>(src1.read_lane64(wf, lane));
+    if (s0 < s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxEqI64Vop3::VCmpxEqI64Vop3(const MachineInst *inst)
@@ -11584,7 +11935,18 @@ VCmpxEqI64Vop3::VCmpxEqI64Vop3(const MachineInst *inst)
 }
 
 void VCmpxEqI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_eq_i64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    int64_t s0 = static_cast<int64_t>(src0.read_lane64(wf, lane));
+    int64_t s1 = static_cast<int64_t>(src1.read_lane64(wf, lane));
+    if (s0 == s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxLeI64Vop3::VCmpxLeI64Vop3(const MachineInst *inst)
@@ -11601,7 +11963,18 @@ VCmpxLeI64Vop3::VCmpxLeI64Vop3(const MachineInst *inst)
 }
 
 void VCmpxLeI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_le_i64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    int64_t s0 = static_cast<int64_t>(src0.read_lane64(wf, lane));
+    int64_t s1 = static_cast<int64_t>(src1.read_lane64(wf, lane));
+    if (s0 <= s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxGtI64Vop3::VCmpxGtI64Vop3(const MachineInst *inst)
@@ -11618,7 +11991,18 @@ VCmpxGtI64Vop3::VCmpxGtI64Vop3(const MachineInst *inst)
 }
 
 void VCmpxGtI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_gt_i64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    int64_t s0 = static_cast<int64_t>(src0.read_lane64(wf, lane));
+    int64_t s1 = static_cast<int64_t>(src1.read_lane64(wf, lane));
+    if (s0 > s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxNeI64Vop3::VCmpxNeI64Vop3(const MachineInst *inst)
@@ -11635,7 +12019,18 @@ VCmpxNeI64Vop3::VCmpxNeI64Vop3(const MachineInst *inst)
 }
 
 void VCmpxNeI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_ne_i64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    int64_t s0 = static_cast<int64_t>(src0.read_lane64(wf, lane));
+    int64_t s1 = static_cast<int64_t>(src1.read_lane64(wf, lane));
+    if (s0 != s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxGeI64Vop3::VCmpxGeI64Vop3(const MachineInst *inst)
@@ -11652,7 +12047,18 @@ VCmpxGeI64Vop3::VCmpxGeI64Vop3(const MachineInst *inst)
 }
 
 void VCmpxGeI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_ge_i64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    int64_t s0 = static_cast<int64_t>(src0.read_lane64(wf, lane));
+    int64_t s1 = static_cast<int64_t>(src1.read_lane64(wf, lane));
+    if (s0 >= s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxTI64Vop3::VCmpxTI64Vop3(const MachineInst *inst)
@@ -11719,7 +12125,18 @@ VCmpxLtU64Vop3::VCmpxLtU64Vop3(const MachineInst *inst)
 }
 
 void VCmpxLtU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_lt_u64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint64_t s0 = src0.read_lane64(wf, lane);
+    uint64_t s1 = src1.read_lane64(wf, lane);
+    if (s0 < s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxEqU64Vop3::VCmpxEqU64Vop3(const MachineInst *inst)
@@ -11736,7 +12153,18 @@ VCmpxEqU64Vop3::VCmpxEqU64Vop3(const MachineInst *inst)
 }
 
 void VCmpxEqU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_eq_u64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint64_t s0 = src0.read_lane64(wf, lane);
+    uint64_t s1 = src1.read_lane64(wf, lane);
+    if (s0 == s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxLeU64Vop3::VCmpxLeU64Vop3(const MachineInst *inst)
@@ -11753,7 +12181,18 @@ VCmpxLeU64Vop3::VCmpxLeU64Vop3(const MachineInst *inst)
 }
 
 void VCmpxLeU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_le_u64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint64_t s0 = src0.read_lane64(wf, lane);
+    uint64_t s1 = src1.read_lane64(wf, lane);
+    if (s0 <= s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxGtU64Vop3::VCmpxGtU64Vop3(const MachineInst *inst)
@@ -11770,7 +12209,18 @@ VCmpxGtU64Vop3::VCmpxGtU64Vop3(const MachineInst *inst)
 }
 
 void VCmpxGtU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_gt_u64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint64_t s0 = src0.read_lane64(wf, lane);
+    uint64_t s1 = src1.read_lane64(wf, lane);
+    if (s0 > s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxNeU64Vop3::VCmpxNeU64Vop3(const MachineInst *inst)
@@ -11787,7 +12237,18 @@ VCmpxNeU64Vop3::VCmpxNeU64Vop3(const MachineInst *inst)
 }
 
 void VCmpxNeU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_ne_u64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint64_t s0 = src0.read_lane64(wf, lane);
+    uint64_t s1 = src1.read_lane64(wf, lane);
+    if (s0 != s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxGeU64Vop3::VCmpxGeU64Vop3(const MachineInst *inst)
@@ -11804,7 +12265,18 @@ VCmpxGeU64Vop3::VCmpxGeU64Vop3(const MachineInst *inst)
 }
 
 void VCmpxGeU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_ge_u64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint64_t s0 = src0.read_lane64(wf, lane);
+    uint64_t s1 = src1.read_lane64(wf, lane);
+    if (s0 >= s1)
+      result |= (1ULL << lane);
+  }
+  wf.set_vcc(result);
+  wf.set_exec(result);
 }
 
 VCmpxTU64Vop3::VCmpxTU64Vop3(const MachineInst *inst)

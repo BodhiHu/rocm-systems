@@ -1347,6 +1347,8 @@ class CodeGenerator:
             L.append('    else vcc &= ~(1ULL << lane);')
         L.append('  }')
         if is_cmpx:
+            if self.isa_spec.profile.cmpx_writes_vcc:
+                L.append('  wf.set_vcc(result);')
             L.append('  wf.set_exec(result);')
         elif dst:
             L.append(f'  {dst[0]}.write_scalar64(wf, vcc);')
@@ -4512,6 +4514,8 @@ class CodeGenerator:
         'vector_swap',
         # Vector readlane/writelane/readfirstlane access encoding fields:
         'vector_readlane', 'vector_writelane', 'vector_readfirstlane',
+        # V_CMPX writes VCC+EXEC on CDNA but only EXEC on RDNA:
+        'vector_cmpx', 'vector_cmpx_class',
     })
 
     def _can_share_execute(self, mnemonic: str) -> bool:

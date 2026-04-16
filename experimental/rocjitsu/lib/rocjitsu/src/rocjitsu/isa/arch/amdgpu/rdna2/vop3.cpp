@@ -6822,7 +6822,14 @@ VCmpxTruF32Vop3::VCmpxTruF32Vop3(const MachineInst *inst)
 }
 
 void VCmpxTruF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_tru_f32_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    result |= (1ULL << lane);
+  }
+  wf.set_exec(result);
 }
 
 VCmpFF64Vop3::VCmpFF64Vop3(const MachineInst *inst)
@@ -7909,7 +7916,14 @@ VCmpxTruF64Vop3::VCmpxTruF64Vop3(const MachineInst *inst)
 }
 
 void VCmpxTruF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_tru_f64_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    result |= (1ULL << lane);
+  }
+  wf.set_exec(result);
 }
 
 VCmpFI32Vop3::VCmpFI32Vop3(const MachineInst *inst)
@@ -11726,7 +11740,14 @@ VCmpxTruF16Vop3::VCmpxTruF16Vop3(const MachineInst *inst)
 }
 
 void VCmpxTruF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_tru_f16_vop3(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    result |= (1ULL << lane);
+  }
+  wf.set_exec(result);
 }
 
 VAddCoCiU32Vop3SdstEnc::VAddCoCiU32Vop3SdstEnc(const MachineInst *inst)

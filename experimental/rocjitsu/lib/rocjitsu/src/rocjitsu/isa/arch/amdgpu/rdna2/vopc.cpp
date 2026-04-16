@@ -945,7 +945,14 @@ VCmpxTruF32Vopc::VCmpxTruF32Vopc(const MachineInst *inst)
 }
 
 void VCmpxTruF32Vopc::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_tru_f32_vopc(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    result |= (1ULL << lane);
+  }
+  wf.set_exec(result);
 }
 
 VCmpFF64Vopc::VCmpFF64Vopc(const MachineInst *inst)
@@ -1875,7 +1882,14 @@ VCmpxTruF64Vopc::VCmpxTruF64Vopc(const MachineInst *inst)
 }
 
 void VCmpxTruF64Vopc::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_tru_f64_vopc(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    result |= (1ULL << lane);
+  }
+  wf.set_exec(result);
 }
 
 VCmpFI32Vopc::VCmpFI32Vopc(const MachineInst *inst)
@@ -5707,7 +5721,14 @@ VCmpxTruF16Vopc::VCmpxTruF16Vopc(const MachineInst *inst)
 }
 
 void VCmpxTruF16Vopc::execute_impl(amdgpu::Wavefront &wf) {
-  amdgpu::execute_v_cmpx_tru_f16_vopc(*this, wf);
+  uint64_t exec = wf.exec();
+  uint64_t result = 0;
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    result |= (1ULL << lane);
+  }
+  wf.set_exec(result);
 }
 
 } // namespace rdna2
