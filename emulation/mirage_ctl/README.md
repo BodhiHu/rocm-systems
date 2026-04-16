@@ -14,28 +14,37 @@ implementation is being built.
 - `profile`: a named device and cluster topology definition.
 - `session`: a booted cluster instance created from a profile and container
 	image.
-- `run`: a workload executed inside an existing session.
+- `workload`: a self-contained execution plan with session configuration, an
+	optional startup program, and an ordered chain of exec steps. By default a
+	workload cleans up its temporary session when it finishes.
+- `exec`: a single program execution inside an existing session.
+- `run`: the act of executing a workload definition to completion.
 - `snapshot`: persisted boot or runtime state used for replay and debugging.
 - `replay`: deterministic restoration of a prior run from traces and snapshots.
 
-The schema crate already models most of these concepts:
+The schema crate already models most of these concepts, even though some type
+names still reflect the earlier command layout:
 
 - `ProfileDef` describes a named simulator, GPU, mode, and cluster shape.
 - `SessionDef` describes a bootable session.
-- `RunDef` and `ExecDef` describe workload execution inside a session.
+- `ExecArgs` describes one concrete process invocation.
+- `ExecDef` describes starting an exec inside an existing session.
+- `RunDef` remains an older alias during the rename away from run-oriented
+	naming.
 - `AttachRequest` and `AttachReply` provide streaming stdout, stderr, stdin, and
-	exit events for attached runs.
+	exit events for attached execs.
 
 ## Conventions
 
-- Commands that execute a workload inside a session use `--` to separate
+- Commands that accept an inline process specification use `--` to separate
 	`mirage-ctl` flags from the program being executed.
 - Commands that support `--json` should emit stable machine-readable output with
 	no extra human text on stdout.
 - Human-readable output should optimize for operator workflows: concise summary
 	by default, more detail only when explicitly requested.
-- Session names, profile names, simulator names, and run IDs should be treated
-	as stable identifiers suitable for logs, scripting, and artifact naming.
+- Session names, profile names, simulator names, workload names, and exec IDs
+	should be treated as stable identifiers suitable for logs, scripting, and
+	artifact naming.
 - Failures should return a non-zero exit code and a single actionable error on
 	stderr.
 
@@ -425,98 +434,257 @@ Example:
 mirage-ctl shutdown --name smoke-a
 ```
 
-### `mirage-ctl run`
+### `mirage-ctl workload create`
 
-Execute a workload inside a booted session, or optionally create a temporary
-session for a one-shot smoke test.
-
-Persistent-session form:
+Create a named self-contained workload definition.
 
 ```text
-mirage-ctl run --name <session-name> -- <program> [args...]
+mirage-ctl workload create --name <workload-name> --file <path>
 ```
 
-One-shot form:
+Required options:
 
-```text
-mirage-ctl run \
-	--profile <profile> \
-	--image <container-image> \
-	-- <program> [args...]
-```
-
-Required options for persistent-session form:
-
-- `--name`: existing ready session.
-
-Required options for one-shot form:
-
-- `--profile`: profile used to create the temporary session.
-- `--image`: container image for that temporary session.
-
-Required trailing command:
-
-- `<program> [args...]`: workload to execute inside the simulated environment.
+- `--name`: unique workload name.
+- `--file`: path to a workload configuration file.
 
 Expected behavior:
 
-- Fail fast if no command is provided after `--`.
-- Attach the run to the target session and return the workload exit status.
-- Capture stdout, stderr, timing, and run metadata.
-- In one-shot mode, boot a temporary session, execute the workload, and shut it
-	down automatically unless a future keep-alive flag is added.
+- Persist a workload definition that includes everything needed to execute the
+	workload without additional session setup flags.
+- Validate the referenced profile and image before saving the definition when
+	possible.
+- Reject invalid workload graphs or empty exec chains.
+
+A workload configuration must define at least:
+
+- `profile`: the profile used to boot the temporary session.
+- `image`: the container image used for that session.
+- `execs`: an ordered list of one or more exec steps.
+
+A workload configuration may also define:
+
+- `startup`: an optional program to run before the ordered exec chain begins.
+- per-exec environment overrides or simulator-specific settings.
+- cleanup policy, which defaults to automatic shutdown and resource cleanup on
+	completion or failure.
+
+Example:
+
+```text
+mirage-ctl workload create --name torch-smoke --file workloads/torch-smoke.yaml
+```
+
+### `mirage-ctl workload list`
+
+List saved workload definitions.
+
+```text
+mirage-ctl workload list [--json]
+```
+
+Expected behavior:
+
+- Show all workload definitions known to the CLI or daemon.
+- Surface enough information to distinguish one workload from another without
+	opening each config.
+
+Output should include at least:
+
+- workload name
+- profile
+- image
+- whether a startup program is configured
+- number of exec steps
+- cleanup policy
 
 Examples:
 
 ```text
-mirage-ctl run --name smoke-a -- rocminfo
-mirage-ctl run --name smoke-a -- python -c "import torch; print(torch.cuda.is_available())"
+mirage-ctl workload list
+mirage-ctl workload list --json
+```
 
-mirage-ctl run \
-	--profile mi300x-func-2x8 \
-	--image ghcr.io/therock/mirage-runtime:rocm6.4 \
-	-- rocminfo
+### `mirage-ctl workload show`
+
+Show one workload definition in detail.
+
+```text
+mirage-ctl workload show <workload> [--json]
+```
+
+Arguments:
+
+- `<workload>`: previously created workload name.
+
+Expected behavior:
+
+- Fail if the workload does not exist.
+- Render the workload config exactly enough for an operator to understand the
+	temporary session inputs, startup program, ordered exec chain, and cleanup
+	policy.
+
+Output should include at least:
+
+- workload name
+- profile
+- image
+- startup program, if configured
+- ordered exec list
+- cleanup policy
+- creation metadata if tracked
+
+Example:
+
+```text
+mirage-ctl workload show torch-smoke
+```
+
+### `mirage-ctl workload delete`
+
+Delete a saved workload definition.
+
+```text
+mirage-ctl workload delete <workload>
+```
+
+Arguments:
+
+- `<workload>`: workload name to remove.
+
+Expected behavior:
+
+- Remove the persisted definition and confirm the deletion.
+- Refuse deletion if the workload is currently active, unless a future force
+	mode is explicitly introduced.
+
+Example:
+
+```text
+mirage-ctl workload delete torch-smoke
+```
+
+### `mirage-ctl run`
+
+Run a workload definition to completion.
+
+Named-workload form:
+
+```text
+mirage-ctl run --workload <workload-name>
+```
+
+Inline-config form:
+
+```text
+mirage-ctl run --file <path>
+```
+
+Required options:
+
+- `--workload`: execute a previously saved workload definition.
+- `--file`: execute a workload definition directly from a config file.
+
+Exactly one of `--workload` or `--file` must be provided.
+
+Expected behavior:
+
+- Resolve the workload's profile and image.
+- Create the temporary session required by the workload.
+- Run the optional startup program before the main exec chain begins.
+- Run the ordered exec chain defined by the workload.
+- Stream progress and active exec output while the workload is attached.
+- Automatically shut down the temporary session and clean up its resources when
+	the workload finishes or fails.
+
+`mirage-ctl run` is workload-oriented. It should not be used for ad hoc program
+execution inside an existing session. Use `mirage-ctl exec` for that case.
+
+Failure behavior:
+
+- If startup fails, the workload should transition directly to failed and clean
+	up the temporary session.
+- If any exec step fails, remaining steps should not start unless an explicit
+	future continue-on-error mode is added.
+- Cleanup should still run after failure unless the user explicitly opts into a
+	future preserve-failed-session mode.
+
+Examples:
+
+```text
+mirage-ctl run --workload torch-smoke
+mirage-ctl run --file workloads/torch-smoke.yaml
+```
+
+### `mirage-ctl exec`
+
+Run a single program inside an existing session.
+
+```text
+mirage-ctl exec \
+	--name <session-name> \
+	[--detach] \
+	-- <program> [args...]
+```
+
+Required options:
+
+- `--name`: existing ready session.
+
+Optional flags:
+
+- `--detach`: start the exec and return immediately with its exec ID.
+
+Required trailing command:
+
+- `<program> [args...]`: program to execute inside the existing session.
+
+Expected behavior:
+
+- Fail fast if no command is provided after `--`.
+- Resolve the session and launch exactly one concrete exec.
+- Attach to that exec by default and return the remote program exit code.
+- When `--detach` is used, return the exec ID without streaming output.
+- Capture stdout, stderr, timing, and exec metadata.
+
+This command is the ad hoc single-process entry point for an existing session.
+It does not create a temporary session and it does not model multi-step
+	workload cleanup.
+
+Examples:
+
+```text
+mirage-ctl exec --name smoke-a -- rocminfo
+mirage-ctl exec --name smoke-a -- python -c "import torch; print(torch.cuda.is_available())"
+mirage-ctl exec --name smoke-a --detach -- rocminfo
 ```
 
 ### `mirage-ctl attach`
 
-Attach to a running workload stream or open an interactive shell within a
-session.
-
-Attach to a specific run:
+Attach to a running exec and stream its stdout, stderr, and exit events.
 
 ```text
-mirage-ctl attach --run <run-id>
+mirage-ctl attach --exec <exec-id>
 ```
 
-Open a shell in a session:
+Arguments:
 
-```text
-mirage-ctl attach --name <session-name> --shell
-```
-
-Supported modes:
-
-- `--run <run-id>`: stream stdout and stderr for a known running workload and
-	optionally forward stdin.
-- `--name <session-name> --shell`: create or attach to an interactive shell in
-	the target session.
+- `--exec <exec-id>`: identifier returned by `mirage-ctl exec --detach` or by a
+	daemon-managed workload step.
 
 Expected behavior:
 
 - Reuse the `AttachRequest` and `AttachReply` streaming model already present in
 	the schema.
 - Preserve stream identity for stdout, stderr, stdin, and exit events.
-- Exit with the remote process exit code when attached to a single run.
+- Exit with the remote process exit code when attached to a single exec.
 
-This command is the live-streaming path. Historical, non-interactive output
-remains the responsibility of `logs`.
+This command is the live-streaming path for execs. Historical, non-interactive
+output remains the responsibility of `logs`.
 
 Examples:
 
 ```text
-mirage-ctl attach --run <run-id>
-mirage-ctl attach --name smoke-a --shell
+mirage-ctl attach --exec <exec-id>
 ```
 
 ### `mirage-ctl snapshot`
@@ -630,25 +798,28 @@ mirage-ctl logs --name smoke-a --node node0 --follow
 mirage-ctl shutdown --name smoke-a
 ```
 
-### Run a workload
+### Manage and run workloads
 
 ```text
-mirage-ctl run --name smoke-a -- rocminfo
-mirage-ctl run --name smoke-a -- python -c "import torch; print(torch.cuda.is_available())"
+mirage-ctl workload create --name torch-smoke --file workloads/torch-smoke.yaml
+mirage-ctl workload list
+mirage-ctl workload show torch-smoke
+mirage-ctl run --workload torch-smoke
+mirage-ctl workload delete torch-smoke
 ```
 
-```bash
-mirage-ctl run \
-	--profile mi300x-func-2x8 \
-	--image ghcr.io/therock/mirage-runtime:rocm6.4 \
-	-- rocminfo
+### Run a program in an existing session
+
+```text
+mirage-ctl exec --name smoke-a -- rocminfo
+mirage-ctl exec --name smoke-a -- python -c "import torch; print(torch.cuda.is_available())"
+mirage-ctl exec --name smoke-a --detach -- rocminfo
 ```
 
 ### Attach, snapshot, and replay
 
 ```text
-mirage-ctl attach --run <run-id>
-mirage-ctl attach --name smoke-a --shell
+mirage-ctl attach --exec <exec-id>
 mirage-ctl snapshot --name smoke-a --output artifacts/smoke-a.boot.mirsnap
 mirage-ctl replay --snapshot artifacts/smoke-a.boot.mirsnap
 mirage-ctl replay --snapshot artifacts/hip-smoke.mirsnap --until checkpoint-17
