@@ -273,8 +273,8 @@ pub struct SessionDef {
 
     /// The container image to use for this session.
     /// Should be fully qualified, e.g. `"ghcr.io/username/image:tag"`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
+    #[serde(default)]
+    pub image: String,
 }
 
 // ---------------------------------------------------------------------------

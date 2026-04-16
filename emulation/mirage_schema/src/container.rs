@@ -155,9 +155,8 @@ pub struct ContainerDef {
     /// Fully-qualified container image reference,
     /// e.g. `"ghcr.io/rocm/pytorch:latest"`.
     ///
-    /// If empty, the daemon falls back to [`SessionDef::image`](crate::common::SessionDef::image).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
+    /// Mandatory: this must be provided by the simulator.
+    pub image: String,
 
     /// Environment variables to set inside the container.
     ///
