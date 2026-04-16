@@ -18,7 +18,6 @@ implementation is being built.
 	optional startup program, and an ordered chain of exec steps. By default a
 	workload cleans up its temporary session when it finishes.
 - `exec`: a single program execution inside an existing session.
-- `run`: the act of executing a workload definition to completion.
 - `snapshot`: persisted boot or runtime state used for replay and debugging.
 - `replay`: deterministic restoration of a prior run from traces and snapshots.
 
@@ -563,7 +562,7 @@ Example:
 mirage-ctl workload delete torch-smoke
 ```
 
-### `mirage-ctl run`
+### `mirage-ctl workload run`
 
 Run a workload definition to completion.
 
