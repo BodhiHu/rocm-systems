@@ -44,3 +44,7 @@ pub mod simulator;
 pub mod simulator_service;
 pub mod socket;
 
+mod ioctl_macro;
+
+pub mod amdgpu;
+pub mod amdgpu_error;
