@@ -6,8 +6,8 @@
 
 /// @file Shared address calculation for MUBUF and MTBUF (buffer) instructions.
 ///
-/// These are vector memory operations that access global memory through a
-/// buffer resource descriptor (SRD). Templated on the machine instruction
+/// @details These are vector memory operations that access global memory through
+/// a buffer resource descriptor (SRD). Templated on the machine instruction
 /// type so they work with any ISA family whose encoding struct exposes the
 /// required field names.
 
@@ -60,21 +60,46 @@ void mubuf_calculate_addresses(const MubufInst &inst, amdgpu::Wavefront &wf, Vec
                         inst.srsrc * 4, inst.srsrc * 4 + 3, srd0, srd1, srd2, srd3, base_addr,
                         soffset_val, inst.offset, inst.offen, inst.idxen, inst.vaddr, num_records);
   });
-  // GFX9 OOB modes (srd[3] bit 31):
-  //   0 = structured: OOB check uses voffset + inst_offset only (no soffset).
-  //   1 = raw: OOB check uses voffset + soffset + inst_offset.
+  // GFX9 MUBUF address calculation per ISA Table 42 / Section 9.1.5.2:
+  //
+  // VGPR assignment (idxen × offen):
+  //   0,0 → no VGPRs          0,1 → vaddr = offset
+  //   1,0 → vaddr = index     1,1 → vaddr = index, vaddr+1 = offset
+  //
+  // Address = base + soffset + (index * stride) + voffset + inst_offset
+  //
+  // OOB modes (srd[3] bit 31):
+  //   1 = raw:        OOB if (voffset + inst_offset) >= num_records
+  //   0 = structured: OOB if stride > 0 ? (index >= num_records)
+  //                              else    (voffset + inst_offset) >= num_records
+  uint32_t stride = (srd1 >> 16) & 0x3FFF;
   bool oob_raw = (srd3 >> 31) & 1;
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
+    uint32_t vgpr_base = wf.vgpr_alloc().base + inst.vaddr;
+    uint32_t index = 0;
     uint32_t voffset = 0;
-    if (inst.offen)
-      voffset = cu.read_vgpr(wf.vgpr_alloc().base + inst.vaddr, lane);
-    if (inst.idxen)
-      voffset = cu.read_vgpr(wf.vgpr_alloc().base + inst.vaddr, lane);
-    uint64_t total_offset = static_cast<uint64_t>(voffset) + inst.offset + soffset_val;
-    uint64_t oob_offset = oob_raw ? total_offset : static_cast<uint64_t>(voffset) + inst.offset;
-    if (num_records == 0 || oob_offset >= num_records) {
+    if (inst.idxen && inst.offen) {
+      index = cu.read_vgpr(vgpr_base, lane);
+      voffset = cu.read_vgpr(vgpr_base + 1, lane);
+    } else if (inst.idxen) {
+      index = cu.read_vgpr(vgpr_base, lane);
+    } else if (inst.offen) {
+      voffset = cu.read_vgpr(vgpr_base, lane);
+    }
+    uint64_t offset_part = static_cast<uint64_t>(voffset) + inst.offset;
+    uint64_t total_offset = static_cast<uint64_t>(index) * stride + offset_part + soffset_val;
+    // OOB check.
+    bool oob;
+    if (oob_raw) {
+      oob = (offset_part + soffset_val) >= num_records;
+    } else if (stride > 0) {
+      oob = index >= num_records;
+    } else {
+      oob = offset_part >= num_records;
+    }
+    if (num_records == 0 || oob) {
       d.lane_mask &= ~(1ULL << lane);
       d.per_lane_addr[lane] = 0;
     } else {
@@ -87,16 +112,13 @@ void mubuf_calculate_addresses(const MubufInst &inst, amdgpu::Wavefront &wf, Vec
     static uint64_t lane_trace_count = 0;
     if (++lane_trace_count > 80)
       return;
-    os << "MUBUF per-lane:";
+    os << std::format("MUBUF per-lane: stride={} oob_raw={}", stride, oob_raw);
     uint64_t rm = d.lane_mask;
     int cnt = 0;
     while (rm && cnt < 4) {
       uint32_t ln = std::countr_zero(rm);
       rm &= rm - 1;
-      uint32_t voff = 0;
-      if (inst.offen)
-        voff = cu.read_vgpr(wf.vgpr_alloc().base + inst.vaddr, ln);
-      os << std::format(" L{}:voff={:#x},addr={:#x}", ln, voff, d.per_lane_addr[ln]);
+      os << std::format(" L{}:addr={:#x}", ln, d.per_lane_addr[ln]);
       ++cnt;
     }
     os << std::format(" exec={:#x} lane_mask={:#x}", exec, d.lane_mask);
