@@ -1,0 +1,3 @@
+# mirage schema
+
+- defines ioctls.

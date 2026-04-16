@@ -8,6 +8,7 @@ serde_json = { version = "1" }
 async-trait = { version = "0.1.89" }
 paste = { version = "1" }
 libc = { version = "0.2" }
+clap = { version = "4.0", features = ["derive"] }
 
 amdgpu_protocol = { path = "amdgpu_protocol" }
 mirage_schema = { path = "mirage_schema" }
