@@ -1,0 +1,697 @@
+// =============================================================================
+// kfd.fbs — KFD (Kernel Fusion Driver) ioctl request/response definitions
+// =============================================================================
+//
+// This schema models the KFD ioctls exposed through /dev/kfd for HSA
+// (Heterogeneous System Architecture) compute operations. KFD provides
+// the compute-focused interface used by ROCm, HIP, and OpenCL runtimes.
+//
+// KFD handles:
+//   - Compute queue creation/management (AQL, SDMA)
+//   - GPU memory allocation and cross-device mapping
+//   - Event creation and signaling
+//   - System management (SMI), debugging, profiling
+//   - Shared Virtual Memory (SVM)
+//   - Checkpoint/Restore (CRIU)
+//
+// Reference: include/uapi/linux/kfd_ioctl.h
+//            KFD_IOCTL_MAJOR_VERSION = 1, KFD_IOCTL_MINOR_VERSION = 18
+// =============================================================================
+
+include "proxy_common.fbs";
+
+namespace AmdgpuProxy;
+
+// =============================================================================
+// AMDKFD_IOC_GET_VERSION (0x01)
+// =============================================================================
+// Returns the KFD interface version. Used by userspace to check compatibility.
+// =============================================================================
+
+table KfdGetVersionArgs {}
+
+struct KfdGetVersionRets {
+    /// KFD major version (currently 1).
+    major_version : uint32;
+    /// KFD minor version (currently 18).
+    minor_version : uint32;
+}
+
+// =============================================================================
+// AMDKFD_IOC_CREATE_QUEUE (0x02)
+// =============================================================================
+// Creates a compute, SDMA, or AQL queue on a specific GPU.
+// The queue is backed by a ring buffer in GPU-accessible memory.
+// =============================================================================
+
+struct KfdCreateQueueArgs {
+    /// GPU virtual address of the ring buffer.
+    ring_base_address       : uint64;
+    /// GPU VA of the write pointer (doorbell target).
+    write_pointer_address   : uint64;
+    /// GPU VA of the read pointer.
+    read_pointer_address    : uint64;
+    /// Ring buffer size in bytes (minimum 1024, power of 2).
+    ring_size               : uint32;
+    /// Target GPU device ID.
+    gpu_id                  : uint32;
+    /// Queue type: COMPUTE, SDMA, COMPUTE_AQL, SDMA_XGMI, SDMA_BY_ENG_ID.
+    queue_type              : KfdQueueType;
+    /// Queue scheduling percentage (0-100).
+    queue_percentage        : uint32;
+    /// Queue priority (0-15, higher = more priority).
+    queue_priority          : uint32;
+    /// GPU VA of the End-of-Pipe buffer for completion tracking.
+    eop_buffer_address      : uint64;
+    /// Size of the EoP buffer.
+    eop_buffer_size         : uint64;
+    /// GPU VA of the context save/restore area (for preemption).
+    ctx_save_restore_address : uint64;
+    /// Size of the context save/restore area.
+    ctx_save_restore_size   : uint32;
+    /// Size of the control stack.
+    ctl_stack_size          : uint32;
+    /// Specific SDMA engine ID (for SDMA_BY_ENG_ID type).
+    sdma_engine_id          : uint32;
+}
+
+struct KfdCreateQueueRets {
+    /// Kernel-assigned doorbell offset for this queue.
+    doorbell_offset : uint64;
+    /// Unique queue ID assigned by the kernel.
+    queue_id        : uint32;
+}
+
+// =============================================================================
+// AMDKFD_IOC_DESTROY_QUEUE (0x03)
+// =============================================================================
+struct KfdDestroyQueueArgs {
+    /// Queue ID to destroy.
+    queue_id : uint32;
+}
+
+table KfdDestroyQueueRets {
+}
+
+// =============================================================================
+// AMDKFD_IOC_UPDATE_QUEUE (0x07)
+// =============================================================================
+// Modifies parameters of an existing queue.
+// =============================================================================
+
+struct KfdUpdateQueueArgs {
+    /// GPU VA of the (possibly new) ring base address.
+    ring_base_address : uint64;
+    /// Queue ID to update.
+    queue_id          : uint32;
+    /// New ring size.
+    ring_size         : uint32;
+    /// New scheduling percentage.
+    queue_percentage  : uint32;
+    /// New priority.
+    queue_priority    : uint32;
+}
+
+table KfdUpdateQueueRets {
+}
+
+// =============================================================================
+// AMDKFD_IOC_SET_MEMORY_POLICY (0x04)
+// =============================================================================
+// Sets the cache coherency policy for a GPU's memory apertures.
+// =============================================================================
+
+struct KfdSetMemoryPolicyArgs {
+    /// Base address of the alternate aperture.
+    alternate_aperture_base : uint64;
+    /// Size of the alternate aperture.
+    alternate_aperture_size : uint64;
+    /// Target GPU ID.
+    gpu_id                  : uint32;
+    /// Default cache policy (COHERENT or NONCOHERENT).
+    default_policy          : KfdCachePolicy;
+    /// Alternate aperture cache policy.
+    alternate_policy        : KfdCachePolicy;
+    /// Per-process flags (e.g., MFMA_HIGH_PRECISION).
+    misc_process_flag       : uint32;
+}
+
+table KfdSetMemoryPolicyRets {
+}
+
+// =============================================================================
+// AMDKFD_IOC_GET_CLOCK_COUNTERS (0x05)
+// =============================================================================
+// Returns GPU and CPU clock counter values for profiling.
+// =============================================================================
+
+struct KfdGetClockCountersArgs {
+    /// Target GPU ID.
+    gpu_id : uint32;
+}
+
+struct KfdGetClockCountersRets {
+    /// Current GPU clock counter value.
+    gpu_clock_counter    : uint64;
+    /// Current CPU clock counter value.
+    cpu_clock_counter    : uint64;
+    /// System clock counter (CLOCK_MONOTONIC).
+    system_clock_counter : uint64;
+    /// System clock frequency in Hz.
+    system_clock_freq    : uint64;
+}
+
+// =============================================================================
+// AMDKFD_IOC_SET_SCRATCH_BACKING_VA (0x11)
+// =============================================================================
+// Sets the scratch backing virtual address for a GPU.
+// =============================================================================
+
+struct KfdSetScratchBackingVaArgs {
+    /// Scratch backing virtual address.
+    va_addr : uint64;
+    /// Target GPU ID.
+    gpu_id  : uint32;
+    _pad    : uint32;
+}
+
+table KfdSetScratchBackingVaRets {}
+
+// =============================================================================
+// AMDKFD_IOC_SET_TRAP_HANDLER (0x13)
+// =============================================================================
+// Sets the trap handler and trap metadata addresses for a GPU.
+// =============================================================================
+
+struct KfdSetTrapHandlerArgs {
+    /// Trap Base Address — GPU VA of the trap handler code.
+    tba_addr : uint64;
+    /// Trap Metadata Address — GPU VA of the trap handler data.
+    tma_addr : uint64;
+    /// Target GPU ID.
+    gpu_id   : uint32;
+    _pad     : uint32;
+}
+
+table KfdSetTrapHandlerRets {}
+
+// =============================================================================
+// AMDKFD_IOC_GET_PROCESS_APERTURES_NEW (0x14)
+// =============================================================================
+// Returns GPU VM aperture information for all GPUs accessible by the process.
+// Each aperture defines LDS, scratch, and GPUVM address ranges.
+// =============================================================================
+
+struct KfdProcessDeviceAperture {
+    /// LDS (Local Data Share) base address.
+    lds_base     : uint64;
+    /// LDS limit address.
+    lds_limit    : uint64;
+    /// Scratch memory base address.
+    scratch_base : uint64;
+    /// Scratch memory limit address.
+    scratch_limit : uint64;
+    /// GPUVM base address.
+    gpuvm_base   : uint64;
+    /// GPUVM limit address.
+    gpuvm_limit  : uint64;
+    /// GPU device ID.
+    gpu_id       : uint32;
+}
+
+struct KfdGetProcessAperturesArgs {
+    /// Maximum number of nodes to return.
+    max_nodes : uint32;
+}
+
+table KfdGetProcessAperturesRets {
+    /// Array of per-device aperture information.
+    apertures : [KfdProcessDeviceAperture];
+}
+
+// =============================================================================
+// AMDKFD_IOC_CREATE_EVENT (0x08)
+// =============================================================================
+// Creates a GPU event for inter-wave/inter-process signaling.
+// =============================================================================
+
+struct KfdCreateEventArgs {
+    /// Event type (SIGNAL, NODECHANGE, HW_EXCEPTION, etc.).
+    event_type         : KfdEventType;
+    /// Whether the event auto-resets after being consumed.
+    auto_reset         : uint32;
+    /// Node ID (for node-specific events).
+    node_id            : uint32;
+}
+
+struct KfdCreateEventRets {
+    /// Offset for mmapping the event page.
+    event_page_offset  : uint64;
+    /// Trigger data (for signal events — the value to write).
+    event_trigger_data : uint32;
+    /// Assigned event ID.
+    event_id           : uint32;
+    /// Slot index in the event page.
+    event_slot_index   : uint32;
+}
+
+// =============================================================================
+// AMDKFD_IOC_DESTROY_EVENT (0x09)
+// =============================================================================
+struct KfdDestroyEventArgs {
+    /// Event ID to destroy.
+    event_id : uint32;
+}
+
+table KfdDestroyEventRets {
+}
+
+// =============================================================================
+// AMDKFD_IOC_SET_EVENT (0x0A) — Signal an event
+// =============================================================================
+struct KfdSetEventArgs {
+    /// Event ID to signal.
+    event_id : uint32;
+}
+
+table KfdSetEventRets {
+}
+
+// =============================================================================
+// AMDKFD_IOC_RESET_EVENT (0x0B)
+// =============================================================================
+struct KfdResetEventArgs {
+    /// Event ID to reset.
+    event_id : uint32;
+}
+
+table KfdResetEventRets {
+}
+
+// =============================================================================
+// AMDKFD_IOC_WAIT_EVENTS (0x0C)
+// =============================================================================
+// Waits for one or more events to be signaled.
+// =============================================================================
+
+struct KfdEventData {
+    /// Event ID to wait on.
+    event_id : uint32;
+    /// Signal event age tracking.
+    last_event_age : uint64;
+}
+
+table KfdWaitEventsArgs {
+    /// Array of events to wait for.
+    events       : [KfdEventData];
+    /// If true, wait for all events; else wait for any.
+    wait_for_all : bool;
+    /// Timeout in milliseconds.
+    timeout      : uint32;
+}
+
+table KfdWaitEventsRets {
+    /// Wait result: COMPLETE=0, TIMEOUT=1, FAIL=2.
+    wait_result : uint32;
+    /// Updated event data (with memory exception info, etc.).
+    events      : [ubyte];
+}
+
+// =============================================================================
+// AMDKFD_IOC_ACQUIRE_VM (0x15)
+// =============================================================================
+// Acquires a GPU's VM for the process, linking a KFD device to a DRM fd.
+// =============================================================================
+
+struct KfdAcquireVmArgs {
+    /// DRM file descriptor for the GPU.
+    drm_fd : uint32;
+    /// Target GPU ID.
+    gpu_id : uint32;
+}
+
+table KfdAcquireVmRets {
+}
+
+// =============================================================================
+// AMDKFD_IOC_ALLOC_MEMORY_OF_GPU (0x16)
+// =============================================================================
+// Allocates memory on/for a specific GPU. The memory can be VRAM, GTT,
+// userptr, doorbell, or MMIO-remap type.
+// =============================================================================
+
+struct KfdAllocMemoryArgs {
+    /// Requested GPU virtual address (input for placement hint).
+    va_addr     : uint64;
+    /// Size in bytes.
+    size        : uint64;
+    /// Target GPU ID.
+    gpu_id      : uint32;
+    /// Allocation flags (bitmask of KFD_IOC_ALLOC_MEM_FLAGS_*).
+    /// Bits [0:4] = memory type (VRAM, GTT, USERPTR, DOORBELL, MMIO_REMAP).
+    /// Bits [23:31] = attributes (WRITABLE, EXECUTABLE, PUBLIC, COHERENT, etc.).
+    flags       : uint32;
+    /// For USERPTR: the CPU address; otherwise ignored.
+    mmap_offset : uint64;
+}
+
+struct KfdAllocMemoryRets {
+    /// Memory handle for subsequent map/unmap/free operations.
+    handle      : uint64;
+    /// mmap offset for CPU-mapping this allocation (render node mmap).
+    mmap_offset : uint64;
+    /// Assigned GPU virtual address.
+    va_addr     : uint64;
+}
+
+// =============================================================================
+// AMDKFD_IOC_FREE_MEMORY_OF_GPU (0x17)
+// =============================================================================
+
+struct KfdFreeMemoryArgs {
+    /// Memory handle from KfdAllocMemoryResponse.
+    handle : uint64;
+}
+
+table KfdFreeMemoryRets {
+}
+
+// =============================================================================
+// AMDKFD_IOC_MAP_MEMORY_TO_GPU (0x18)
+// =============================================================================
+// Maps previously allocated memory to one or more GPUs, making it
+// accessible from those devices.
+// =============================================================================
+
+table KfdMapMemoryToGpuArgs {
+    /// Memory handle from allocation.
+    handle          : uint64;
+    /// Array of GPU IDs (uint32) to map the memory to.
+    device_ids      : [uint32];
+}
+
+struct KfdMapMemoryToGpuRets {
+    /// Number of devices successfully mapped.
+    n_success : uint32;
+}
+
+// =============================================================================
+// AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU (0x19)
+// =============================================================================
+
+table KfdUnmapMemoryFromGpuArgs {
+    /// Memory handle.
+    handle     : uint64;
+    /// Array of GPU IDs to unmap from.
+    device_ids : [uint32];
+}
+
+struct KfdUnmapMemoryFromGpuRets {
+    /// Number of devices successfully unmapped.
+    n_success : uint32;
+}
+
+// =============================================================================
+// AMDKFD_IOC_SET_CU_MASK (0x1A)
+// =============================================================================
+// Sets a compute unit affinity mask for a queue.
+// =============================================================================
+
+table KfdSetCuMaskArgs {
+    /// Queue ID to set the CU mask for.
+    queue_id   : uint32;
+    /// Number of CU mask bits.
+    num_cu_mask : uint32;
+    /// CU mask data (bitmask).
+    cu_mask    : [ubyte];
+}
+
+table KfdSetCuMaskRets {
+}
+
+// =============================================================================
+// AMDKFD_IOC_GET_QUEUE_WAVE_STATE (0x1B)
+// =============================================================================
+struct KfdGetQueueWaveStateArgs {
+    /// GPU VA of the control stack.
+    ctl_stack_address : uint64;
+    /// Queue ID to query.
+    queue_id          : uint32;
+}
+
+struct KfdGetQueueWaveStateRets {
+    /// Bytes used in the control stack.
+    ctl_stack_used_size  : uint32;
+    /// Bytes used in the save area.
+    save_area_used_size  : uint32;
+}
+
+// =============================================================================
+// AMDKFD_IOC_GET_DMABUF_INFO (0x1C)
+// =============================================================================
+
+struct KfdGetDmabufInfoArgs {
+    /// DMA-BUF file descriptor.
+    dmabuf_fd     : uint32;
+    /// Max metadata size to return.
+    metadata_size : uint32;
+}
+
+table KfdGetDmabufInfoRets {
+    /// Size of the DMA-BUF.
+    size          : uint64;
+    /// Metadata blob.
+    metadata      : [ubyte];
+    /// GPU ID that owns the buffer.
+    gpu_id        : uint32;
+    /// Allocation flags.
+    flags         : uint32;
+}
+
+// =============================================================================
+// AMDKFD_IOC_IMPORT_DMABUF (0x1D)
+// =============================================================================
+
+struct KfdImportDmabufArgs {
+    /// Desired GPU virtual address.
+    va_addr   : uint64;
+    /// GPU ID to import into.
+    gpu_id    : uint32;
+    /// DMA-BUF file descriptor.
+    dmabuf_fd : uint32;
+}
+
+struct KfdImportDmabufRets {
+    /// KFD memory handle.
+    handle : uint64;
+}
+
+// =============================================================================
+// AMDKFD_IOC_EXPORT_DMABUF (0x24)
+// =============================================================================
+
+struct KfdExportDmabufArgs {
+    /// KFD memory handle to export.
+    handle : uint64;
+    /// Export flags.
+    flags  : uint32;
+}
+
+struct KfdExportDmabufRets {
+    /// DMA-BUF file descriptor.
+    dmabuf_fd : uint32;
+}
+
+// =============================================================================
+// AMDKFD_IOC_ALLOC_QUEUE_GWS (0x1E)
+// =============================================================================
+
+struct KfdAllocQueueGwsArgs {
+    /// Queue ID to allocate GWS for.
+    queue_id : uint32;
+    /// Number of GWS resources requested.
+    num_gws  : uint32;
+}
+
+struct KfdAllocQueueGwsRets {
+    /// Index of the first allocated GWS resource.
+    first_gws : uint32;
+}
+
+// =============================================================================
+// AMDKFD_IOC_SMI_EVENTS (0x1F)
+// =============================================================================
+
+struct KfdSmiEventsArgs {
+    /// GPU ID to monitor for SMI events.
+    gpu_id : uint32;
+}
+
+struct KfdSmiEventsRets {
+    /// Anonymous file descriptor for reading SMI events.
+    anon_fd : uint32;
+}
+
+// =============================================================================
+// AMDKFD_IOC_SVM (0x20) — Shared Virtual Memory
+// =============================================================================
+
+struct KfdSvmAttribute {
+    /// Attribute type (see kfd_ioctl_svm_attr_type).
+    attr_type : uint32;
+    /// Attribute value.
+    value     : uint32;
+}
+
+table KfdSvmArgs {
+    /// Start address of the SVM range.
+    start_addr : uint64;
+    /// Size of the range.
+    size       : uint64;
+    /// Operation (SET_ATTR or GET_ATTR).
+    op         : KfdSvmOp;
+    /// Array of attribute type/value pairs.
+    attrs      : [KfdSvmAttribute];
+}
+
+table KfdSvmRets {
+    /// Returned attributes (for GET_ATTR).
+    attrs : [KfdSvmAttribute];
+}
+
+// =============================================================================
+// AMDKFD_IOC_SET_XNACK_MODE (0x21)
+// =============================================================================
+
+struct KfdSetXnackModeArgs {
+    /// Desired XNACK mode: 0=disable, positive=enable, negative=query only.
+    xnack_enabled : int32;
+}
+
+struct KfdSetXnackModeRets {
+    /// Current XNACK mode after the operation.
+    xnack_enabled : int32;
+}
+
+// =============================================================================
+// AMDKFD_IOC_CRIU_OP (0x22) — Checkpoint/Restore
+// =============================================================================
+
+table KfdCriuArgs {
+    /// CRIU operation type.
+    op             : KfdCriuOp;
+    /// PID of the process being checkpointed/restored.
+    pid            : uint32;
+    /// Number of GPU devices.
+    num_devices    : uint32;
+    /// Number of buffer objects.
+    num_bos        : uint32;
+    /// Number of opaque objects.
+    num_objects    : uint32;
+    /// Device information blob.
+    devices        : [ubyte];
+    /// Buffer object information blob.
+    bos            : [ubyte];
+    /// Private data blob.
+    priv_data      : [ubyte];
+}
+
+table KfdCriuRets {
+    /// Number of GPU devices in the checkpoint.
+    num_devices    : uint32;
+    /// Number of buffer objects.
+    num_bos        : uint32;
+    /// Number of opaque objects.
+    num_objects    : uint32;
+    /// Size of private data in bytes.
+    priv_data_size : uint64;
+    /// Process ID.
+    pid            : uint32;
+    /// Device information blob.
+    devices        : [ubyte];
+    /// Buffer object information blob.
+    bos            : [ubyte];
+    /// Private data blob.
+    priv_data      : [ubyte];
+}
+
+// =============================================================================
+// AMDKFD_IOC_AVAILABLE_MEMORY (0x23)
+// =============================================================================
+
+struct KfdAvailableMemoryArgs {
+    /// GPU ID to query available memory for.
+    gpu_id : uint32;
+}
+
+struct KfdAvailableMemoryRets {
+    /// Available memory in bytes.
+    available : uint64;
+}
+
+// =============================================================================
+// AMDKFD_IOC_RUNTIME_ENABLE (0x25)
+// =============================================================================
+
+struct KfdRuntimeEnableArgs {
+    /// Runtime enable flags.
+    flags : uint64;
+}
+
+table KfdRuntimeEnableRets {
+}
+
+// =============================================================================
+// AMDKFD_IOC_DBG_TRAP (0x26) — Debugger Interface
+// =============================================================================
+// Generic debugger trap interface. Carries opaque data interpreted
+// by the debug subsystem.
+// =============================================================================
+
+table KfdDbgTrapArgs {
+    /// Raw ioctl arguments as opaque bytes.
+    raw_args : [ubyte];
+}
+
+table KfdDbgTrapRets {
+    /// Raw ioctl output as opaque bytes.
+    raw_args : [ubyte];
+}
+
+// =============================================================================
+// Hybrid-specific KFD ioctls (0x80+)
+// =============================================================================
+
+// AMDKFD_IOC_IPC_EXPORT_HANDLE (0x81)
+struct KfdIpcExportHandleArgs {
+    /// KFD memory handle to export.
+    handle : uint64;
+    /// GPU ID that owns the memory.
+    gpu_id : uint32;
+    /// Export flags.
+    flags  : uint32;
+}
+
+table KfdIpcExportHandleRets {
+    /// 16-byte share handle.
+    share_handle : [ubyte];
+}
+
+// AMDKFD_IOC_IPC_IMPORT_HANDLE (0x80)
+table KfdIpcImportHandleArgs {
+    /// Desired GPU virtual address for the import.
+    va_addr      : uint64;
+    /// IPC share handle from the exporter (16 bytes).
+    share_handle : [ubyte];
+    /// Target GPU ID.
+    gpu_id       : uint32;
+}
+
+struct KfdIpcImportHandleRets {
+    /// Imported KFD memory handle.
+    handle      : uint64;
+    /// mmap offset for CPU mapping.
+    mmap_offset : uint64;
+    /// Memory allocation flags.
+    flags       : uint32;
+}

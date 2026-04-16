@@ -1,0 +1,201 @@
+// =============================================================================
+// file_ops.fbs — File operation request/response definitions
+// =============================================================================
+//
+// Models the POSIX file operations that the LD_PRELOAD shim intercepts
+// when userspace opens GPU device files (/dev/dri/renderD*, /dev/kfd).
+//
+// These are the "outer" operations wrapping the ioctl-level protocol:
+//   open()   → establishes a virtual connection to the proxy server
+//   close()  → tears down the connection
+//   mmap()   → maps GPU memory into the client process (via shared memory)
+//   munmap() → unmaps a previous mapping
+//   read()   → reads DRM events (e.g., vblank, page flip completion)
+//   poll()   → polls for available DRM events
+// =============================================================================
+
+include "proxy_common.fbs";
+
+namespace AmdgpuProxy;
+
+// =============================================================================
+// Open — Virtual device file open
+// =============================================================================
+// When the shim intercepts open("/dev/dri/renderD128", ...) it sends
+// this request to the proxy server, which creates a virtual GPU context.
+// =============================================================================
+
+/// Request to open a virtual GPU device.
+struct OpenArgs {
+    /// Device path being opened (e.g., "/dev/dri/renderD128", "/dev/kfd").
+    path  : Str255;
+    /// Open flags (O_RDWR, O_CLOEXEC, etc.).
+    flags : int32;
+    /// File mode (usually 0).
+    mode  : uint32;
+}
+
+/// Response from virtual device open.
+struct OpenRets {
+    /// Virtual file descriptor assigned by the proxy server.
+    /// The shim maps this to a real FD in its FD table.
+    virtual_fd : int32;
+}
+
+// =============================================================================
+// Close — Virtual device file close
+// =============================================================================
+
+/// Request to close a virtual device.
+struct CloseArgs {
+    /// Virtual FD from OpenResponse.
+    virtual_fd : int32;
+}
+
+/// Response from close (success indicated by absence of error).
+table CloseRets {
+}
+
+// =============================================================================
+// Mmap — Map GPU memory into client process
+// =============================================================================
+// The proxy handles mmap by creating POSIX shared memory segments.
+// The server maps the actual GPU memory (or simulator buffer) into
+// shared memory, and returns the shm identifier so the client can
+// map the same region.
+//
+// For real hardware backend:
+//   Server does: mmap(gpu_fd, offset) → memcpy to shm (or direct shm aliasing)
+// For simulator backend:
+//   Server allocates shm and fills with synthetic data.
+// =============================================================================
+
+/// Request to map GPU memory.
+struct MmapArgs {
+    /// Virtual FD of the device.
+    virtual_fd : int32;
+    /// Offset (from GEM_MMAP or KFD alloc's mmap_offset).
+    offset     : uint64;
+    /// Requested mapping length in bytes.
+    length     : uint64;
+    /// Protection flags (PROT_READ, PROT_WRITE, etc.).
+    prot       : int32;
+    /// Mapping flags (MAP_SHARED, etc.).
+    flags      : int32;
+}
+
+/// Response with shared memory information for the client to map.
+struct MmapRets {
+    /// POSIX shared memory name (e.g., "/amdgpu-proxy-shm-42").
+    /// Client calls shm_open() with this name, then mmap().
+    shm_name       : Str63;
+    /// Offset within the shared memory segment.
+    offset_in_shm  : uint64;
+    /// Actual mapping length.
+    length         : uint64;
+}
+
+// =============================================================================
+// Munmap — Unmap a previous GPU memory mapping
+// =============================================================================
+
+/// Request to unmap memory.
+struct MunmapArgs {
+    /// Virtual FD.
+    virtual_fd : int32;
+    /// Address of the mapping (client-side).
+    address    : uint64;
+    /// Length of the mapping.
+    length     : uint64;
+}
+
+/// Response from munmap.
+table MunmapRets {
+}
+
+// =============================================================================
+// Read — Read DRM events from the device
+// =============================================================================
+// DRM devices can produce events (vblank, page flip, etc.) that
+// userspace reads via read(). The proxy forwards these.
+// =============================================================================
+
+/// Request to read events.
+struct ReadArgs {
+    /// Virtual FD.
+    virtual_fd : int32;
+    /// Maximum bytes to read.
+    max_size   : uint32;
+}
+
+/// Response with event data.
+table ReadRets {
+    /// Raw event data bytes.
+    data : [ubyte];
+}
+
+// =============================================================================
+// Poll — Poll device for events
+// =============================================================================
+
+/// Request to poll for events.
+struct PollArgs {
+    /// Virtual FD.
+    virtual_fd : int32;
+    /// Requested events bitmask (POLLIN, POLLOUT, etc.).
+    events     : int16;
+    /// Timeout in milliseconds (-1 = infinite, 0 = immediate).
+    timeout_ms : int32;
+}
+
+/// Response from poll.
+struct PollRets {
+    /// Returned events bitmask.
+    revents : int16;
+}
+
+// =============================================================================
+// DRM Version query — for DRM_IOCTL_VERSION
+// =============================================================================
+// Base DRM ioctl handled locally by the shim or forwarded.
+// =============================================================================
+
+/// DRM version info (returned for DRM_IOCTL_VERSION).
+struct DrmVersionArgs {
+    /// Virtual FD of the device to query.
+    virtual_fd : int32;
+}
+
+struct DrmVersionRets {
+    /// Driver major version number.
+    version_major    : int32;
+    /// Driver minor version number.
+    version_minor    : int32;
+    /// Driver patch level.
+    version_patchlevel : int32;
+    /// Driver name (e.g., "amdgpu").
+    name             : Str31;
+    /// Driver date string.
+    date             : Str31;
+    /// Driver description string.
+    desc             : Str63;
+}
+
+// =============================================================================
+// Sysfs Read — Read simulated sysfs topology files
+// =============================================================================
+// rocminfo and HIP read GPU topology from /sys/class/kfd/kfd/topology/nodes/*/
+// The proxy intercepts these reads and returns simulated topology data.
+// =============================================================================
+
+struct SysfsReadArgs {
+    /// Sysfs path (e.g., "/sys/class/kfd/kfd/topology/nodes/0/properties").
+    path     : Str255;
+    /// Maximum bytes to read.
+    max_size : uint32;
+}
+
+table SysfsReadRets {
+    /// File contents.
+    data : [ubyte];
+}

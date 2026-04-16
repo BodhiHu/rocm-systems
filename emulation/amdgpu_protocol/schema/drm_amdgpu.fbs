@@ -1,0 +1,761 @@
+// =============================================================================
+// drm_amdgpu.fbs — DRM AMDGPU ioctl request/response definitions
+// =============================================================================
+//
+// This schema models all 23+ DRM ioctls exposed by the amdgpu kernel driver
+// through /dev/dri/renderD* and /dev/dri/card* device nodes.
+//
+// Each ioctl is represented as a Request table (input parameters) and a
+// Response table (output parameters). The proxy serializes ioctl arguments
+// into the Request, sends it over the RPC transport, and deserializes the
+// Response back into the ioctl output structure.
+//
+// Reference: include/uapi/drm/amdgpu_drm.h
+// =============================================================================
+
+include "proxy_common.fbs";
+
+namespace AmdgpuProxy;
+
+// =============================================================================
+// DRM_AMDGPU_GEM_CREATE (0x00)
+// =============================================================================
+// Allocates a GPU buffer object (BO) in the specified memory domain(s).
+// The returned handle is used for all subsequent operations on this buffer.
+//
+// Typical flow: GEM_CREATE → GEM_MMAP → mmap() → GEM_VA → CS
+// =============================================================================
+
+/// Request to allocate a GPU buffer object.
+struct GemCreateArgs {
+    /// Requested buffer size in bytes. Will be page-aligned by the kernel.
+    bo_size       : uint64;
+    /// Physical address alignment requirement in bytes (0 for default).
+    alignment     : uint64;
+    /// Bitmask of AMDGPU_GEM_DOMAIN_* values specifying preferred placement.
+    /// Multiple domains can be OR'd to express fallback preferences.
+    /// E.g., VRAM|GTT means "prefer VRAM, fall back to GTT".
+    domains       : uint64;
+    /// Bitmask of AMDGPU_GEM_CREATE_* flags controlling allocation behavior.
+    /// Examples: CPU_ACCESS_REQUIRED, VRAM_CLEARED, VM_ALWAYS_VALID,
+    /// ENCRYPTED, COHERENT, UNCACHED, etc.
+    domain_flags  : uint64;
+}
+
+/// Response containing the newly allocated buffer handle.
+struct GemCreateRets {
+    /// GEM object handle for this buffer. Used in all subsequent operations.
+    /// Valid within the DRM file descriptor's context.
+    handle : uint32;
+}
+
+// =============================================================================
+// DRM_AMDGPU_GEM_MMAP (0x01)
+// =============================================================================
+// Obtains an mmap offset for a GEM buffer object. This offset is passed
+// to the mmap() system call to map the buffer into userspace.
+//
+// Two-step mapping: (1) GEM_MMAP → offset, (2) mmap(fd, offset) → pointer
+// =============================================================================
+
+/// Request to get the mmap offset for a buffer object.
+struct GemMmapArgs {
+    /// GEM object handle (from GemCreateResponse or import).
+    handle : uint32;
+}
+
+/// Response with the mmap offset.
+struct GemMmapRets {
+    /// Offset to pass to mmap(). This is an opaque value managed by
+    /// the DRM VMA offset manager, not a physical address.
+    addr_ptr : uint64;
+}
+
+// =============================================================================
+// DRM_AMDGPU_CTX (0x02)
+// =============================================================================
+// Manages GPU execution contexts. A context represents an isolated
+// execution environment with its own state, priority, and fault tracking.
+//
+// Flow: CTX(ALLOC) → use ctx_id in CS submissions → CTX(FREE)
+// =============================================================================
+
+/// Request for context operations (alloc, free, query, pstate).
+struct CtxArgs {
+    /// Operation to perform (see CtxOp enum).
+    op       : CtxOp;
+    /// Flags for the operation.
+    flags    : uint32;
+    /// Context ID (input for FREE/QUERY, output for ALLOC).
+    ctx_id   : uint32;
+    /// Requested priority level. Range: [-2048, 1023].
+    /// NORMAL=0, HIGH=512 (requires CAP_SYS_NICE), VERY_HIGH=1023.
+    priority : int32;
+}
+
+/// Response from context operations.
+struct CtxRets {
+    /// Allocated context ID (for ALLOC operation).
+    ctx_id       : uint32;
+    /// State query flags (for QUERY_STATE2): bitmask of
+    /// RESET, VRAMLOST, GUILTY, RAS_CE, RAS_UE, RESET_IN_PROGRESS.
+    flags        : uint64;
+    /// Number of GPU hangs caused by this context (for QUERY_STATE).
+    hangs        : uint32;
+    /// Reset status since last query (for QUERY_STATE):
+    /// NO_RESET=0, GUILTY_RESET=1, INNOCENT_RESET=2, UNKNOWN_RESET=3.
+    reset_status : uint32;
+}
+
+// =============================================================================
+// DRM_AMDGPU_BO_LIST (0x03)
+// =============================================================================
+// Creates/destroys/updates a buffer object residency list. Residency lists
+// group BOs that must be resident in GPU-accessible memory during command
+// submission, enabling efficient batch validation.
+// =============================================================================
+
+/// A single entry in a BO list, pairing a handle with a priority.
+struct BoListEntry {
+    /// GEM handle of the buffer object.
+    bo_handle   : uint32;
+    /// Migration priority hint for this BO (0 = default).
+    bo_priority : uint32;
+}
+
+/// Request for BO list operations.
+table BoListArgs {
+    /// Operation (CREATE, DESTROY, UPDATE).
+    operation    : BoListOp;
+    /// Handle of existing list (for DESTROY/UPDATE), 0 for CREATE.
+    list_handle  : uint32;
+    /// Array of BO entries (for CREATE/UPDATE).
+    bo_info      : [BoListEntry];
+}
+
+/// Response from BO list operations.
+struct BoListRets {
+    /// Handle of the created/updated residency list.
+    list_handle : uint32;
+}
+
+// =============================================================================
+// DRM_AMDGPU_CS (0x04) — Command Submission
+// =============================================================================
+// Submits GPU workload for execution. This is the primary interface for
+// sending rendering, compute, or video processing commands to the GPU.
+//
+// A submission consists of one or more chunks, each carrying different
+// payload types: indirect buffers (commands), fences, dependencies,
+// sync objects, etc.
+// =============================================================================
+
+/// Indirect Buffer (IB) chunk — contains GPU commands to execute.
+struct CsChunkIb {
+    /// Flags controlling IB behavior (AMDGPU_IB_FLAG_*):
+    /// CE (constant engine), PREAMBLE, PREEMPT, SECURE, etc.
+    flags       : uint32;
+    /// GPU virtual address where the command buffer starts.
+    va_address  : uint64;
+    /// Size of the command buffer in bytes.
+    ib_bytes    : uint32;
+    /// Target hardware IP type (GFX, COMPUTE, DMA, etc.).
+    ip_type     : HwIpType;
+    /// Instance index of the IP (for multi-instance engines).
+    ip_instance : uint32;
+    /// Ring index within the IP instance.
+    ring        : uint32;
+}
+
+/// Fence chunk — specifies where the GPU writes a completion fence.
+struct CsChunkFence {
+    /// GEM handle of the buffer containing the fence.
+    handle : uint32;
+    /// Byte offset within the buffer where the fence value is written.
+    offset : uint32;
+}
+
+/// Dependency chunk — specifies a previous submission to wait for.
+struct CsChunkDep {
+    /// Target hardware IP type.
+    ip_type     : uint32;
+    /// IP instance index.
+    ip_instance : uint32;
+    /// Ring index within the IP.
+    ring        : uint32;
+    /// Rendering context ID of the dependency.
+    ctx_id      : uint32;
+    /// Fence handle of the dependency.
+    handle      : uint64;
+}
+
+/// Sync object chunk — for sync object wait/signal operations.
+struct CsChunkSyncobj {
+    /// Sync object handle.
+    handle : uint32;
+    /// Sync object flags.
+    flags  : uint32;
+    /// Timeline point (0 for binary sync objects).
+    point  : uint64;
+}
+
+/// CP GFX shadow chunk — shadow/CSA state for GFX preemption.
+struct CsChunkCpGfxShadow {
+    /// GPU VA of the GFX shadow state.
+    shadow_va : uint64;
+    /// GPU VA of the Context Save Area.
+    csa_va    : uint64;
+    /// GPU VA of the GDS (Global Data Share) backup.
+    gds_va    : uint64;
+    /// CP GFX shadow flags.
+    flags     : uint64;
+}
+
+/// A generic chunk in a command submission, identified by type.
+table CsChunk {
+    /// Type of this chunk (see ChunkId enum).
+    chunk_id       : ChunkId;
+    /// IB data (when chunk_id == IB).
+    ib             : CsChunkIb;
+    /// Fence data (when chunk_id == FENCE).
+    fence          : CsChunkFence;
+    /// Dependency data (when chunk_id == DEPENDENCIES or SCHEDULED_DEPENDENCIES).
+    dependencies   : [CsChunkDep];
+    /// Sync object handles (when chunk_id == SYNCOBJ_IN/OUT).
+    syncobjs       : [CsChunkSyncobj];
+    /// BO handles (when chunk_id == BO_HANDLES).
+    bo_handles     : [uint32];
+    /// GFX shadow state (when chunk_id == CP_GFX_SHADOW).
+    cp_gfx_shadow  : CsChunkCpGfxShadow;
+    /// Raw chunk data for unrecognized chunk types.
+    raw_data       : [ubyte];
+}
+
+/// Command submission request.
+table CsArgs {
+    /// Rendering context ID (from CtxResponse.ctx_id).
+    ctx_id         : uint32;
+    /// Handle of the residency list (from BoListResponse, or 0).
+    bo_list_handle : uint32;
+    /// Flags for the submission.
+    flags          : uint32;
+    /// Array of chunks comprising this submission.
+    chunks         : [CsChunk];
+}
+
+/// Command submission response.
+struct CsRets {
+    /// Submission handle for waiting (pass to WAIT_CS or FENCE_TO_HANDLE).
+    handle : uint64;
+}
+
+// =============================================================================
+// DRM_AMDGPU_INFO (0x05) — Device Information Query
+// =============================================================================
+// Queries GPU capabilities, memory usage, firmware versions, sensor data,
+// and other device information. This is the most versatile ioctl, with
+// many sub-query types.
+//
+// The response carries raw bytes because the output format varies per query.
+// The proxy client must interpret the bytes based on the query type.
+// =============================================================================
+
+/// Information query request.
+struct InfoArgs {
+    /// Query ID (AMDGPU_INFO_* constant, e.g., 0x02 = HW_IP_INFO).
+    query         : uint32;
+    /// Maximum size of the return value in bytes.
+    return_size   : uint32;
+    /// Sub-query type (meaning depends on query):
+    ///   - For HW_IP_INFO: ip_type (AMDGPU_HW_IP_*)
+    ///   - For FW_VERSION: firmware type (AMDGPU_INFO_FW_*)
+    ///   - For SENSOR: sensor type (AMDGPU_INFO_SENSOR_*)
+    ///   - For VBIOS: vbios sub-query type
+    ///   - For VIDEO_CAPS: decode/encode
+    sub_query     : uint32;
+    /// Secondary parameter (meaning depends on query):
+    ///   - For HW_IP_INFO: ip_instance index
+    ///   - For FW_VERSION: ip_instance
+    ///   - For READ_MMR_REG: dword_offset
+    sub_query2    : uint32;
+    /// Additional parameter:
+    ///   - For FW_VERSION: engine index
+    ///   - For READ_MMR_REG: register count
+    sub_query3    : uint32;
+    /// Flag parameter for certain queries.
+    flags         : uint32;
+}
+
+/// Information query response.
+table InfoRets {
+    /// Raw query result bytes. Interpretation depends on the query type:
+    ///   - ACCEL_WORKING: uint32 (0 or 1)
+    ///   - HW_IP_INFO: struct drm_amdgpu_info_hw_ip
+    ///   - DEV_INFO: struct drm_amdgpu_info_device
+    ///   - MEMORY: struct drm_amdgpu_memory_info
+    ///   - FW_VERSION: struct drm_amdgpu_info_firmware
+    ///   - SENSOR: uint32 sensor value
+    ///   - VRAM_USAGE/GTT_USAGE: uint64
+    ///   - TIMESTAMP: uint64 GPU clock counter
+    raw_data : [ubyte];
+}
+
+// =============================================================================
+// DRM_AMDGPU_GEM_METADATA (0x06)
+// =============================================================================
+// Gets or sets metadata (tiling info, format data) on a GEM buffer object.
+// Metadata is used by display and texture sampling hardware.
+// =============================================================================
+
+/// Request to get/set GEM buffer metadata.
+table GemMetadataArgs {
+    /// GEM object handle.
+    handle         : uint32;
+    /// Operation: SET_METADATA=1, GET_METADATA=2.
+    op             : GemMetadataOp;
+    /// Metadata flags (for future use).
+    flags          : uint64;
+    /// Family-specific tiling information (swizzle mode, DCC settings).
+    tiling_info    : uint64;
+    /// Metadata payload (up to 256 bytes). Opaque to the driver.
+    data           : [ubyte];
+}
+
+/// Response from metadata operations.
+table GemMetadataRets {
+    /// Metadata flags.
+    flags       : uint64;
+    /// Tiling information.
+    tiling_info : uint64;
+    /// Metadata payload (for GET operation).
+    data        : [ubyte];
+}
+
+// =============================================================================
+// DRM_AMDGPU_GEM_WAIT_IDLE (0x07)
+// =============================================================================
+// Waits for a buffer object to become idle (all GPU operations complete).
+// =============================================================================
+
+/// Request to wait for a BO to become idle.
+struct GemWaitIdleArgs {
+    /// GEM object handle.
+    handle  : uint32;
+    /// Flags (reserved for future use).
+    flags   : uint32;
+    /// Absolute timeout in nanoseconds. 0 = poll without waiting.
+    timeout : uint64;
+}
+
+/// Response from wait-idle check.
+struct GemWaitIdleRets {
+    /// 0 = BO is idle, 1 = BO is still busy (timeout expired).
+    status : uint32;
+    /// Current memory domain where the BO resides.
+    domain : uint32;
+}
+
+// =============================================================================
+// DRM_AMDGPU_GEM_VA (0x08)
+// =============================================================================
+// Maps, unmaps, or replaces a buffer object's mapping in the GPU's virtual
+// address space. Required before the GPU can access a BO.
+// =============================================================================
+
+/// Request to modify GPU virtual address mappings.
+table GemVaArgs {
+    /// GEM object handle to map/unmap.
+    handle              : uint32;
+    /// Operation (MAP, UNMAP, CLEAR, REPLACE).
+    operation           : VaOp;
+    /// Mapping flags: READABLE, WRITEABLE, EXECUTABLE, MTYPE_*, PRT, NOALLOC.
+    flags               : uint32;
+    /// Target GPU virtual address (must be page-aligned).
+    va_address          : uint64;
+    /// Offset within the BO to start the mapping.
+    offset_in_bo        : uint64;
+    /// Size of the mapping in bytes (must be page-aligned).
+    map_size            : uint64;
+    /// Timeline point for deferred page table updates.
+    vm_timeline_point   : uint64;
+    /// Sync object handle for timeline-based updates.
+    vm_timeline_syncobj_out : uint32;
+    /// Number of input fence sync object handles.
+    num_syncobj_handles : uint32;
+    /// Array of sync object handles to wait on before the update.
+    input_fence_syncobj_handles : [uint32];
+}
+
+/// Response from VA operations (currently empty; errors via RPC error).
+table GemVaRets {
+}
+
+// =============================================================================
+// DRM_AMDGPU_WAIT_CS (0x09)
+// =============================================================================
+// Waits for a previously submitted command submission to complete.
+// =============================================================================
+
+/// Request to wait for a command submission.
+struct WaitCsArgs {
+    /// Submission handle from CsResponse.handle (0 = no wait, ~0 = latest).
+    handle      : uint64;
+    /// Absolute timeout in nanoseconds.
+    timeout     : uint64;
+    /// Target IP type.
+    ip_type     : uint32;
+    /// IP instance index.
+    ip_instance : uint32;
+    /// Ring index.
+    ring        : uint32;
+    /// Context ID.
+    ctx_id      : uint32;
+}
+
+/// Response from wait-CS.
+struct WaitCsRets {
+    /// 0 = CS completed, 1 = CS still busy (timeout expired).
+    status : uint64;
+}
+
+// =============================================================================
+// DRM_AMDGPU_GEM_OP (0x10)
+// =============================================================================
+// Performs get/set operations on buffer object properties.
+// =============================================================================
+
+/// Request for GEM buffer operations.
+struct GemOpArgs {
+    /// GEM object handle.
+    handle      : uint32;
+    /// Operation type: GET_GEM_CREATE_INFO, SET_PLACEMENT, GET_MAPPING_INFO.
+    op          : GemOpType;
+    /// Input/output value (placement for SET, create-info for GET).
+    value       : uint64;
+    /// Number of mapping entries for GET_MAPPING_INFO.
+    num_entries : uint32;
+}
+
+/// Response from GEM operations.
+table GemOpRets {
+    /// Output value.
+    value       : uint64;
+    /// Mapping entries (for GET_MAPPING_INFO).
+    raw_data    : [ubyte];
+    /// Number of returned mapping entries.
+    num_entries : uint32;
+}
+
+// =============================================================================
+// DRM_AMDGPU_GEM_USERPTR (0x11)
+// =============================================================================
+// Registers a range of userspace memory for GPU access, creating a
+// GEM handle that references the user's existing allocation.
+// =============================================================================
+
+/// Request to register userspace memory for GPU access.
+struct GemUserptrArgs {
+    /// Userspace virtual address of the memory region.
+    addr  : uint64;
+    /// Size of the memory region in bytes.
+    size  : uint64;
+    /// Flags: READONLY, ANONONLY, VALIDATE, REGISTER.
+    flags : uint32;
+}
+
+/// Response from userptr registration.
+struct GemUserptrRets {
+    /// GEM handle for the registered memory.
+    handle : uint32;
+}
+
+// =============================================================================
+// DRM_AMDGPU_WAIT_FENCES (0x12)
+// =============================================================================
+// Waits for one or all of multiple fences to signal.
+// =============================================================================
+
+/// A fence identifier for multi-fence waiting.
+struct Fence {
+    /// Rendering context ID.
+    ctx_id      : uint32;
+    /// Hardware IP type.
+    ip_type     : uint32;
+    /// IP instance index.
+    ip_instance : uint32;
+    /// Ring index.
+    ring        : uint32;
+    /// Fence sequence number.
+    seq_no      : uint64;
+}
+
+/// Request to wait for multiple fences.
+table WaitFencesArgs {
+    /// Array of fences to wait for.
+    fences     : [Fence];
+    /// If true, wait for ALL fences. If false, wait for ANY.
+    wait_all   : bool;
+    /// Timeout in nanoseconds.
+    timeout_ns : uint64;
+}
+
+/// Response from multi-fence wait.
+struct WaitFencesRets {
+    /// 0 = completed, 1 = timeout (some still pending).
+    status         : uint32;
+    /// Index of first signaled fence (when wait_all=false).
+    first_signaled : uint32;
+}
+
+// =============================================================================
+// DRM_AMDGPU_VM (0x13)
+// =============================================================================
+// Reserves or unreserves a VM ID for the process.
+// =============================================================================
+
+/// Request for VM operations.
+struct VmArgs {
+    /// Operation (RESERVE_VMID, UNRESERVE_VMID).
+    op    : VmOp;
+    /// Flags (reserved).
+    flags : uint32;
+}
+
+/// Response from VM operations.
+struct VmRets {
+    /// Flags (reserved for future use).
+    flags : uint64;
+}
+
+// =============================================================================
+// DRM_AMDGPU_FENCE_TO_HANDLE (0x14)
+// =============================================================================
+// Converts a fence to a sync object handle or sync/fence file descriptor.
+// =============================================================================
+
+/// Request to convert a fence.
+struct FenceToHandleArgs {
+    /// Fence to convert.
+    fence : Fence;
+    /// Conversion target (GET_SYNCOBJ, GET_SYNCOBJ_FD, GET_SYNC_FILE_FD).
+    what  : FenceToHandleType;
+}
+
+/// Response with the converted handle.
+struct FenceToHandleRets {
+    /// Resulting handle or file descriptor.
+    handle : uint32;
+}
+
+// =============================================================================
+// DRM_AMDGPU_SCHED (0x15)
+// =============================================================================
+// Sets scheduling priority for a process or context (requires DRM_MASTER).
+// =============================================================================
+
+/// Request to set scheduling priority.
+struct SchedArgs {
+    /// Operation (PROCESS_PRIORITY_OVERRIDE, CONTEXT_PRIORITY_OVERRIDE).
+    op       : SchedOp;
+    /// File descriptor (for process override).
+    fd       : uint32;
+    /// Priority level.
+    priority : int32;
+    /// Context ID (for context override).
+    ctx_id   : uint32;
+}
+
+/// Response (currently empty; success/failure via RPC error).
+table SchedRets {
+}
+
+// =============================================================================
+// DRM_AMDGPU_USERQ (0x16)
+// =============================================================================
+// Creates or frees user-mode queues for direct GPU submission.
+// =============================================================================
+
+/// Request for user queue operations.
+table UserqArgs {
+    /// Operation (USERQ_CREATE, USERQ_FREE).
+    op              : UserqOp;
+    /// Queue ID (for FREE operation).
+    queue_id        : uint32;
+    /// Target IP type (for CREATE).
+    ip_type         : uint32;
+    /// Doorbell GEM handle (for CREATE).
+    doorbell_handle : uint32;
+    /// Doorbell offset in the doorbell BO.
+    doorbell_offset : uint32;
+    /// Queue creation flags.
+    flags           : uint32;
+    /// GPU VA of the queue ring buffer.
+    queue_va        : uint64;
+    /// Queue size in bytes (256-byte aligned).
+    queue_size      : uint64;
+    /// GPU VA of the read pointer.
+    rptr_va         : uint64;
+    /// GPU VA of the write pointer.
+    wptr_va         : uint64;
+    /// MQD (Memory Queue Descriptor) data, IP-specific.
+    mqd             : [ubyte];
+}
+
+/// Response from user queue operations.
+struct UserqRets {
+    /// Allocated queue ID (for CREATE operation).
+    queue_id : uint32;
+}
+
+// =============================================================================
+// DRM_AMDGPU_USERQ_SIGNAL (0x17)
+// =============================================================================
+// Signals sync objects from a user queue.
+// =============================================================================
+
+/// Request to signal from a user queue.
+table UserqSignalArgs {
+    /// Queue ID.
+    queue_id            : uint32;
+    /// Sync object handles to signal.
+    syncobj_handles     : [uint32];
+    /// BO handles used for read.
+    bo_read_handles     : [uint32];
+    /// BO handles used for write.
+    bo_write_handles    : [uint32];
+}
+
+/// Response from userq signal.
+table UserqSignalRets {
+}
+
+// =============================================================================
+// DRM_AMDGPU_USERQ_WAIT (0x18)
+// =============================================================================
+// Waits on sync objects from a user queue.
+// =============================================================================
+
+/// Request to wait in a user queue.
+table UserqWaitArgs {
+    /// Queue ID for the wait queue.
+    waitq_id                     : uint32;
+    /// Sync object handles.
+    syncobj_handles              : [uint32];
+    /// Timeline sync object handles.
+    syncobj_timeline_handles     : [uint32];
+    /// Timeline points for each timeline sync object.
+    syncobj_timeline_points      : [uint64];
+    /// BO handles for read dependency tracking.
+    bo_read_handles              : [uint32];
+    /// BO handles for write dependency tracking.
+    bo_write_handles             : [uint32];
+    /// Maximum number of output fences.
+    max_fences                   : uint16;
+}
+
+/// Output fence pair (GPU VA + value).
+struct UserqFenceInfo {
+    /// GPU virtual address of the fence.
+    gpu_va : uint64;
+    /// Expected fence value.
+    value  : uint64;
+}
+
+/// Response from userq wait.
+table UserqWaitRets {
+    /// Array of fences to wait on (VA/value pairs).
+    fences : [UserqFenceInfo];
+}
+
+// =============================================================================
+// DRM_AMDGPU_GEM_LIST_HANDLES (0x19)
+// =============================================================================
+// Lists all GEM buffer object handles for the current process.
+// =============================================================================
+
+/// A single entry describing a GEM buffer object handle.
+struct GemListHandlesEntry {
+    /// GEM object handle.
+    gem_handle        : uint32;
+    /// Flags (e.g. AMDGPU_GEM_LIST_HANDLES_FLAG_IS_IMPORT).
+    flags             : uint32;
+    /// Size of the buffer object in bytes.
+    size              : uint64;
+    /// Preferred memory domains (AMDGPU_GEM_DOMAIN_*).
+    preferred_domains : uint64;
+    /// Allocation flags used at creation (AMDGPU_GEM_CREATE_*).
+    alloc_flags       : uint64;
+    /// Physical address alignment requirement in bytes.
+    alignment         : uint64;
+}
+
+/// Request to list GEM handles.
+struct GemListHandlesArgs {
+    /// Maximum number of entries (size of the user buffer).
+    max_entries : uint32;
+}
+
+/// Response with handle listing.
+table GemListHandlesRets {
+    /// Array of GEM handle entries.
+    entries     : [GemListHandlesEntry];
+    /// Actual number of handles in the process (may exceed entries length
+    /// if the user buffer was too small, signalling a retry is needed).
+    num_entries : uint32;
+}
+
+// =============================================================================
+// DRM_AMDGPU_SEM (0x5B) — Semaphore Operations (Hybrid-specific)
+// =============================================================================
+// Manages GPU semaphores for cross-engine/cross-process synchronization.
+// =============================================================================
+
+/// Request for semaphore operations.
+struct SemArgs {
+    /// Operation (CREATE, WAIT, SIGNAL, DESTROY, IMPORT, EXPORT).
+    op          : SemOp;
+    /// Semaphore handle.
+    handle      : uint32;
+    /// Context ID.
+    ctx_id      : uint32;
+    /// IP type.
+    ip_type     : uint32;
+    /// IP instance.
+    ip_instance : uint32;
+    /// Ring index.
+    ring        : uint32;
+    /// Sequence number.
+    seq         : uint64;
+}
+
+/// Response from semaphore operations.
+struct SemRets {
+    /// File descriptor (for EXPORT) or handle (for CREATE/IMPORT).
+    handle_or_fd : int32;
+}
+
+// =============================================================================
+// DRM_AMDGPU_GEM_DGMA (0x5C) — Direct GMA (Hybrid-specific)
+// =============================================================================
+// Direct GPU Memory Access operations for hybrid configurations.
+// =============================================================================
+
+/// Request for DGMA operations.
+struct GemDgmaArgs {
+    /// Address.
+    addr   : uint64;
+    /// Size.
+    size   : uint64;
+    /// Operation (IMPORT, QUERY_PHYS_ADDR).
+    op     : DgmaOp;
+    /// GEM handle.
+    handle : uint32;
+}
+
+/// Response from DGMA operations.
+struct GemDgmaRets {
+    /// Resulting address.
+    addr   : uint64;
+    /// GEM handle (for IMPORT).
+    handle : uint32;
+}

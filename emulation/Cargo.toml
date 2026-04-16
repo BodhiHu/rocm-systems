@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = [".", "amdgpu_protocol", "mirage_*", "rocjitsu_sys"]
+
+[workspace.dependencies]
+serde = { version = "1" }
+serde_json = { version = "1" }
+
+amdgpu_protocol = { path = "crates/amdgpu_protocol" }
+mirage_schema = { path = "crates/mirage_schema" }
+mirage_ctl = { path = "crates/mirage_ctl" }
+mirage_daemon = { path = "crates/mirage_daemon" }
+rocjitsu_sys = { path = "crates/rocjitsu_sys" }
