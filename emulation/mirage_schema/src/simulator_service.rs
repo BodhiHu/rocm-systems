@@ -22,7 +22,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::common::{ExecDef, GpuDef, ProfileDef, RunDef, SessionDef};
+use crate::common::{ExecArgs, ExecDef, GpuDef, ProfileDef, SessionDef};
 use crate::container::ContainerDef;
 use crate::simulator::{CustomGpuDef, SessionHealth, SessionPerf};
 
@@ -171,9 +171,9 @@ pub struct GetSessionPerfReply {
 //  GetRunDef
 // ===========================================================================
 
-/// Transform a run request into a simulator-aware [`ExecDef`].
+/// Transform an exec-start request into simulator-aware [`ExecArgs`].
 ///
-/// Called by the daemon before starting every run inside a session.
+/// Called by the daemon before starting every exec inside a session.
 /// The simulator can:
 ///
 /// - Inject or override environment variables (e.g. `ROCJITSU_CONFIG`,
@@ -181,20 +181,20 @@ pub struct GetSessionPerfReply {
 /// - Wrap or rewrite the command (e.g. prefix with a simulator launcher).
 /// - Append extra arguments.
 ///
-/// The returned [`ExecDef`] is what the daemon actually executes inside
+/// The returned [`ExecArgs`] is what the daemon actually executes inside
 /// the container.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetRunDefRequest {
-    /// The original run definition from the client.
-    pub run: RunDef,
+    /// The original exec definition from the client.
+    pub exec: ExecDef,
 }
 
 /// Response to [`GetRunDefRequest`].
 ///
-/// Returns the (possibly modified) [`ExecDef`] with simulator-specific
+/// Returns the (possibly modified) [`ExecArgs`] with simulator-specific
 /// env vars and command transformations applied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetRunDefReply {
     /// The final execution definition the daemon should run.
-    pub exec: ExecDef,
+    pub exec: ExecArgs,
 }

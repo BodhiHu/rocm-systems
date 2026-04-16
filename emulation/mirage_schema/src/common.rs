@@ -5,8 +5,6 @@
 //! enums, identifiers, execution primitives, and time representation —
 //! that every other schema module depends on.
 
-use std::num::NonZeroU32;
-
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -156,7 +154,7 @@ fn one_u32() -> u32 {
 
 /// A key-value pair representing a single environment variable.
 ///
-/// Used in [`ExecDef::env`] and [`ContainerDef::env`](crate::container::ContainerDef::env)
+/// Used in [`ExecArgs::env`] and [`ContainerDef::env`](crate::container::ContainerDef::env)
 /// to pass environment variables to a process or container.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SetEnv {
@@ -170,27 +168,27 @@ pub struct SetEnv {
 //  Execution primitives
 // ---------------------------------------------------------------------------
 
-/// How a run ended.
+/// How an exec ended.
 ///
 /// Sent from the daemon to clients when a previously launched process
 /// terminates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunExit {
-    /// Identifier of the run that exited.
+    /// Identifier of the exec that exited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
+    pub exec_id: Option<String>,
 
     /// Process exit code (`0` = success).
     #[serde(default)]
     pub exit_code: i32,
 }
 
-/// A request to run a command.
+/// Concrete process arguments for one program invocation.
 ///
 /// Describes the program, its arguments, and any extra environment
-/// variables.  Used both directly by clients and inside [`RunDef`].
+/// variables. Used inside [`ExecDef`] and [`ClusterDef`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExecDef {
+pub struct ExecArgs {
     /// The program to run (absolute path or `$PATH`-resolved name).
     pub command: String,
 
@@ -237,26 +235,26 @@ pub struct StreamData {
 }
 
 // ---------------------------------------------------------------------------
-//  Run & session definitions
+//  Exec & session definitions
 // ---------------------------------------------------------------------------
 
-/// A request to execute a command inside an existing session.
+/// A request to start an exec inside an existing session.
 ///
 /// The daemon resolves the session, looks up its simulator, and calls
 /// `get_exec_run_def` to let the simulator inject any extra environment
-/// variables or wrapper commands before the run is actually started.
+/// variables or wrapper commands before the exec is actually started.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunDef {
+pub struct ExecDef {
     /// The session to use for this execution.
     pub session: String,
 
     /// What to run on the head node.
-    pub exec: ExecDef,
+    pub exec: ExecArgs,
 
     /// Optional command to run on worker nodes.  If `None`, workers won't
     /// run any command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worker_exec: Option<ExecDef>,
+    pub worker_exec: Option<ExecArgs>,
 }
 
 /// Defines a simulation session.
@@ -297,7 +295,7 @@ pub struct ClusterDef {
 
     /// Command to execute on the head node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub head_exec: Option<ExecDef>,
+    pub head_exec: Option<ExecArgs>,
 
     /// Network addresses of the worker nodes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -305,7 +303,7 @@ pub struct ClusterDef {
 
     /// Command to execute on each worker node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worker_exec: Option<ExecDef>,
+    pub worker_exec: Option<ExecArgs>,
 }
 
 // ---------------------------------------------------------------------------

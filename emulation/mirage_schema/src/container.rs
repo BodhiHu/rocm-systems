@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::common::SetEnv;
+use crate::common::{ExecArgs, SetEnv};
 
 // ---------------------------------------------------------------------------
 //  Bind mounts
@@ -136,15 +136,13 @@ pub struct PortMapping {
 /// | Field               | Purpose                                        |
 /// |---------------------|------------------------------------------------|
 /// | [`image`]           | Container image reference.                     |
-/// | [`env`]             | Environment variables (merged with user env).  |
 /// | [`mounts`]          | Host bind-mounts.                              |
 /// | [`injected_files`]  | Simulator-generated files injected at runtime. |
-/// | [`entrypoint`]      | Optional CMD override.                         |
+/// | [`entrypoint`]      | What to execute.                               |
 /// | [`ports`]           | Exposed port mappings.                         |
 /// | [`privileged`]      | Whether `--privileged` is required.            |
 ///
 /// [`image`]: ContainerDef::image
-/// [`env`]: ContainerDef::env
 /// [`mounts`]: ContainerDef::mounts
 /// [`injected_files`]: ContainerDef::injected_files
 /// [`entrypoint`]: ContainerDef::entrypoint
@@ -157,19 +155,6 @@ pub struct ContainerDef {
     ///
     /// Mandatory: this must be provided by the simulator.
     pub image: String,
-
-    /// Environment variables to set inside the container.
-    ///
-    /// These are **merged** with any env vars the user provides in
-    /// [`ExecDef`](crate::common::ExecDef); simulator env vars take
-    /// precedence on conflict.
-    ///
-    /// Typical entries:
-    /// - `LD_PRELOAD` — simulator interposition library
-    /// - `HSA_OVERRIDE_GFX_VERSION` — target GPU version string
-    /// - `<SIM>_CONFIG` — path to injected config inside container
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub env: Vec<SetEnv>,
 
     /// Host paths to bind-mount into the container.
     ///
@@ -184,13 +169,8 @@ pub struct ContainerDef {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub injected_files: Vec<InjectedFile>,
 
-    /// Optional entrypoint override.
-    ///
-    /// If set, the container `CMD` is replaced with this command.  Most
-    /// simulators leave this empty and rely on `LD_PRELOAD` interposition
-    /// instead.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entrypoint: Vec<String>,
+    /// what to execute.
+    pub entrypoint: ExecArgs,
 
     /// Optional working directory inside the container.
     #[serde(default, skip_serializing_if = "Option::is_none")]

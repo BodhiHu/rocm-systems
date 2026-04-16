@@ -21,7 +21,7 @@ fn home_dir() -> Option<PathBuf> {
     env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)
-    }
+}
 
 /// Returns the value of an XDG environment variable, but only if it is set to
 /// an absolute path (per the XDG spec — relative paths must be ignored).
@@ -93,7 +93,11 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        env::temp_dir().join(format!("mirage_schema_{label}_{}_{}", std::process::id(), nanos))
+        env::temp_dir().join(format!(
+            "mirage_schema_{label}_{}_{}",
+            std::process::id(),
+            nanos
+        ))
     }
 
     /// Serialise tests that mutate process-wide environment variables.
@@ -107,7 +111,10 @@ mod tests {
         let _g = env_lock();
         // SAFETY: guarded by `env_lock`.
         unsafe { env::set_var("XDG_RUNTIME_DIR", "/run/user/1000") };
-        assert_eq!(socket_path(), PathBuf::from("/run/user/1000/mirage/mirage.sock"));
+        assert_eq!(
+            socket_path(),
+            PathBuf::from("/run/user/1000/mirage/mirage.sock")
+        );
     }
 
     #[test]
@@ -172,7 +179,10 @@ mod tests {
         let _g = env_lock();
         // SAFETY: guarded by `env_lock`.
         unsafe { env::set_var("XDG_CONFIG_HOME", "/custom/config") };
-        assert_eq!(config_path(), PathBuf::from("/custom/config/mirage/config.mcfg"));
+        assert_eq!(
+            config_path(),
+            PathBuf::from("/custom/config/mirage/config.mcfg")
+        );
     }
 
     #[test]

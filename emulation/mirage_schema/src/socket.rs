@@ -77,15 +77,15 @@ pub struct HealthReply {
 /// Attach to a running process and optionally send data to its `stdin`.
 ///
 /// The server will read from [`stream`](Self::stream) and write to the
-/// run's `stdin`.  It responds with a stream of [`AttachReply`] messages
+/// exec's `stdin`. It responds with a stream of [`AttachReply`] messages
 /// carrying `stdout` / `stderr` chunks and eventually a [`RunExit`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttachRequest {
-    /// Identifier of the run to attach to.
+    /// Identifier of the exec to attach to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
+    pub exec_id: Option<String>,
 
-    /// Data to send to the run's `stdin`.
+    /// Data to send to the exec's `stdin`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream: Option<StreamData>,
 }

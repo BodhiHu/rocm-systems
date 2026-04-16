@@ -74,4 +74,3 @@ macro_rules! ioctl_dsl {
         )*
     };
 }
-
