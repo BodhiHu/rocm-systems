@@ -108,13 +108,6 @@ pub struct CustomGpuDef {
     /// For rocjitsu this is the `topology` subtree of a simulation config.
     /// Other simulators define their own topology format.
     pub topology_json: String,
-
-    /// Optional base GPU to derive from.
-    ///
-    /// If set, the simulator should start with this GPU's defaults and
-    /// override only the fields present in [`topology_json`](Self::topology_json).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_gpu: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
