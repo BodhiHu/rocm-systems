@@ -1,14 +1,13 @@
 //! AMD GPU ioctl request/response definitions for `/dev/kfd` and the DRM
 //! render nodes, mirroring `schema/kfd.fbs` and `schema/drm.fbs`.
 //!
-//! Each subsystem (`kfd`, `drm`) becomes a module. For every ioctl inside,
-//! the [`ioctl!`] macro emits:
+//! For every ioctl inside, the [`ioctl_dsl!`] macro emits:
 //!
 //! * `pub const $NAME: u32` — the ioctl number.
 //! * `pub struct $NameRequest` / `$NameResponse` — request / response
 //!   payloads.
-//! * a `Handle{Subsys}Ioctl` trait with one method per ioctl, plus a
-//!   `SingleThreadedIoctlHandler<T>` wrapper.
+//! * a `Handle{Subsys}Ioctl` trait with one method per ioctl.
+//! 
 
 use serde::{Deserialize, Serialize};
 
