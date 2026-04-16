@@ -223,6 +223,49 @@ simple_enum! {
     }
 }
 
+simple_enum! {
+    /// KFD RLC SPM (Streaming Performance Monitor) operations.
+    KfdSpmOp : u32 {
+        Acquire = 0,
+        Release = 1,
+        SetDestBuf = 2
+    }
+}
+
+simple_enum! {
+    /// KFD PC sampling operations.
+    KfdPcSampleOp : u32 {
+        QueryCapabilities = 0,
+        Create = 1,
+        Destroy = 2,
+        Start = 3,
+        Stop = 4
+    }
+}
+
+simple_enum! {
+    /// KFD profiler operations.
+    KfdProfilerOp : u32 {
+        Pmc = 0,
+        PcSample = 1,
+        Version = 2
+    }
+}
+
+simple_enum! {
+    /// KFD AIS (AMD Infinity Storage) operations.
+    KfdAisOp : u32 {
+        Read = 1,
+        Write = 2
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdMemoryRange {
+    pub va_addr: u64,
+    pub size: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoListEntry {
     pub bo_handle: u32,
@@ -390,6 +433,12 @@ ioctl_dsl! {
             system_clock_freq : u64,
         };
 
+        /// `AMDKFD_IOC_GET_PROCESS_APERTURES` — deprecated, limited to 7 GPUs.
+        /// Use [`AMDKFD_IOC_GET_PROCESS_APERTURES_NEW`] instead.
+        AMDKFD_IOC_GET_PROCESS_APERTURES(0x06) {} => {
+            apertures : Vec<KfdProcessDeviceAperture>,
+        };
+
         /// `AMDKFD_IOC_UPDATE_QUEUE` — modify an existing queue.
         AMDKFD_IOC_UPDATE_QUEUE(0x07) {
             ring_base_address : u64,
@@ -436,11 +485,46 @@ ioctl_dsl! {
             events : Vec<u8>,
         };
 
+        /// `AMDKFD_IOC_DBG_REGISTER_DEPRECATED` — deprecated debugger register.
+        AMDKFD_IOC_DBG_REGISTER_DEPRECATED(0x0D) {
+            gpu_id : u32,
+        } => {};
+
+        /// `AMDKFD_IOC_DBG_UNREGISTER_DEPRECATED` — deprecated debugger unregister.
+        AMDKFD_IOC_DBG_UNREGISTER_DEPRECATED(0x0E) {
+            gpu_id : u32,
+        } => {};
+
+        /// `AMDKFD_IOC_DBG_ADDRESS_WATCH_DEPRECATED` — deprecated address watch.
+        AMDKFD_IOC_DBG_ADDRESS_WATCH_DEPRECATED(0x0F) {
+            gpu_id : u32,
+            content : Vec<u8>,
+        } => {};
+
+        /// `AMDKFD_IOC_DBG_WAVE_CONTROL_DEPRECATED` — deprecated wave control.
+        AMDKFD_IOC_DBG_WAVE_CONTROL_DEPRECATED(0x10) {
+            gpu_id : u32,
+            content : Vec<u8>,
+        } => {};
+
         /// `AMDKFD_IOC_SET_SCRATCH_BACKING_VA` — set scratch backing VA.
         AMDKFD_IOC_SET_SCRATCH_BACKING_VA(0x11) {
             va_addr : u64,
             gpu_id : u32,
         } => {};
+
+        /// `AMDKFD_IOC_GET_TILE_CONFIG` — query GPU tile-mode configuration.
+        AMDKFD_IOC_GET_TILE_CONFIG(0x12) {
+            gpu_id : u32,
+            max_tile_configs : u32,
+            max_macro_tile_configs : u32,
+        } => {
+            tile_config : Vec<u32>,
+            macro_tile_config : Vec<u32>,
+            gb_addr_config : u32,
+            num_banks : u32,
+            num_ranks : u32,
+        };
 
         /// `AMDKFD_IOC_SET_TRAP_HANDLER` — set trap handler addresses.
         AMDKFD_IOC_SET_TRAP_HANDLER(0x13) {
@@ -612,6 +696,11 @@ ioctl_dsl! {
             raw_args : Vec<u8>,
         };
 
+        /// `AMDKFD_IOC_CREATE_PROCESS` — create secondary KFD context.
+        AMDKFD_IOC_CREATE_PROCESS(0x27) {
+            flags : u32,
+        } => {};
+
         /// `AMDKFD_IOC_IPC_IMPORT_HANDLE` — import an IPC share handle.
         AMDKFD_IOC_IPC_IMPORT_HANDLE(0x80) {
             va_addr : u64,
@@ -630,6 +719,57 @@ ioctl_dsl! {
             flags : u32,
         } => {
             share_handle : Vec<u8>,
+        };
+
+        /// `AMDKFD_IOC_CROSS_MEMORY_COPY` — copy between VM ranges of two processes.
+        AMDKFD_IOC_CROSS_MEMORY_COPY(0x83) {
+            pid : u32,
+            flags : u32,
+            src_mem_range_array : Vec<KfdMemoryRange>,
+            dst_mem_range_array : Vec<KfdMemoryRange>,
+        } => {
+            bytes_copied : u64,
+        };
+
+        /// `AMDKFD_IOC_RLC_SPM` — RLC Streaming Performance Monitor.
+        AMDKFD_IOC_RLC_SPM(0x84) {
+            op : KfdSpmOp,
+            gpu_id : u32,
+            dest_buf : u64,
+            buf_size : u32,
+            timeout : u32,
+        } => {
+            timeout : u32,
+            bytes_copied : u32,
+            has_data_loss : u32,
+        };
+
+        /// `AMDKFD_IOC_PC_SAMPLE` — program counter sampling interface.
+        AMDKFD_IOC_PC_SAMPLE(0x85) {
+            raw_args : Vec<u8>,
+        } => {
+            raw_args : Vec<u8>,
+        };
+
+        /// `AMDKFD_IOC_PROFILER` — per-device profiler control.
+        AMDKFD_IOC_PROFILER(0x86) {
+            op : KfdProfilerOp,
+            raw_args : Vec<u8>,
+        } => {
+            raw_args : Vec<u8>,
+        };
+
+        /// `AMDKFD_IOC_AIS_OP` — AMD Infinity Storage direct I/O.
+        AMDKFD_IOC_AIS_OP(0x87) {
+            op : KfdAisOp,
+            fd : i32,
+            handle : u64,
+            handle_offset : u64,
+            file_offset : i64,
+            size : u64,
+        } => {
+            size_copied : u64,
+            status : i32,
         };
     }
 
