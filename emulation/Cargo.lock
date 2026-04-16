@@ -3,10 +3,6 @@
 version = 4
 
 [[package]]
-name = "amdgpu_protocol"
-version = "0.0.0"
-
-[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -47,7 +43,6 @@ version = "0.1.0"
 name = "mirage_interceptor"
 version = "0.1.0"
 dependencies = [
- "amdgpu_protocol",
  "mirage_schema",
 ]
 

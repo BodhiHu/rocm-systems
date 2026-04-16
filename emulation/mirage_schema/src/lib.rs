@@ -40,6 +40,7 @@
 pub mod common;
 pub mod config;
 pub mod container;
+pub mod paths;
 pub mod simulator;
 pub mod simulator_service;
 pub mod socket;

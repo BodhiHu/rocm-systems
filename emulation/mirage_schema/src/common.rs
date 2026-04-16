@@ -137,17 +137,17 @@ pub struct ProfileDef {
     pub gpu: String,
 
     /// Number of GPUs per node.
-    #[serde(default = "one_non_zero_u32")]
-    pub num_gpus: NonZeroU32,
+    #[serde(default = "one_u32")]
+    pub num_gpus: u32,
 
     /// Number of nodes in the cluster.
-    #[serde(default = "one_non_zero_u32")]
-    pub num_nodes: NonZeroU32,
+    #[serde(default = "one_u32")]
+    pub num_nodes: u32,
 }
 
 /// Helper for `#[serde(default)]` — returns `1u32`.
-fn one_non_zero_u32() -> NonZeroU32 {
-    NonZeroU32::new(1).unwrap()
+fn one_u32() -> u32 {
+    1
 }
 
 // ---------------------------------------------------------------------------
