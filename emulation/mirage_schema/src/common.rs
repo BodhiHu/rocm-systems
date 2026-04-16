@@ -5,6 +5,8 @@
 //! enums, identifiers, execution primitives, and time representation —
 //! that every other schema module depends on.
 
+use std::num::NonZeroU32;
+
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -135,17 +137,17 @@ pub struct ProfileDef {
     pub gpu: String,
 
     /// Number of GPUs per node.
-    #[serde(default = "one_u32")]
+    #[serde(default = "one_non_zero_u32")]
     pub num_gpus: NonZeroU32,
 
     /// Number of nodes in the cluster.
-    #[serde(default = "one_u32")]
+    #[serde(default = "one_non_zero_u32")]
     pub num_nodes: NonZeroU32,
 }
 
 /// Helper for `#[serde(default)]` — returns `1u32`.
-fn one_u32() -> NonZeroU32 {
-    1
+fn one_non_zero_u32() -> NonZeroU32 {
+    NonZeroU32::new(1).unwrap()
 }
 
 // ---------------------------------------------------------------------------
