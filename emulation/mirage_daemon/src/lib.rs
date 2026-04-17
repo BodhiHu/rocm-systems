@@ -61,7 +61,10 @@ struct State {
 struct SessionRecord {
     session: SessionDef,
     detail: GetSessionDetailReply,
-    container_handle: Option<ContainerHandle>,
+    /// Container handles for all nodes (head node first, then workers).
+    container_handles: Vec<ContainerHandle>,
+    /// Docker network name for multi-node sessions.
+    network_name: Option<String>,
     /// Path to the emulator socket inside the container.
     emulator_socket_container: Option<String>,
     /// Path to the interceptor library inside the container.
@@ -559,6 +562,9 @@ impl MirageDaemonSessions for InMemoryMirageDaemon {
     }
 }
 
+/// Default port used for head-node communication (matches NCCL/torch defaults).
+const MIRAGE_HEAD_PORT: u16 = 29500;
+
 #[async_trait]
 impl MirageDaemonBoot for InMemoryMirageDaemon {
     async fn boot_session(
@@ -571,6 +577,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                 ok: false,
                 error: Some("session name must not be empty".to_string()),
                 container_id: None,
+                container_ids: vec![],
             });
         }
 
@@ -580,6 +587,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                 ok: false,
                 error: Some(format!("session '{}' already exists", session.name)),
                 container_id: None,
+                container_ids: vec![],
             });
         }
 
@@ -588,6 +596,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                 ok: false,
                 error: Some(format!("profile '{}' does not exist", session.profile)),
                 container_id: None,
+                container_ids: vec![],
             });
         };
 
@@ -599,6 +608,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                     profile.simulator
                 )),
                 container_id: None,
+                container_ids: vec![],
             });
         }
 
@@ -607,14 +617,14 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                 ok: false,
                 error: Some("no container runtime configured".to_string()),
                 container_id: None,
+                container_ids: vec![],
             });
         };
 
         // --- Emulator + interceptor setup ---
-        // Locate the interceptor shared library next to the daemon binary.
         let interceptor_so = find_interceptor_so();
-        let mut mounts = Vec::new();
-        let mut extra_env = vec![SetEnv {
+        let mut base_mounts = Vec::new();
+        let mut base_env = vec![SetEnv {
             key: "MIRAGE_SESSION".to_string(),
             value: session.name.clone(),
         }];
@@ -623,7 +633,6 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
         let mut interceptor_container: Option<String> = None;
 
         if let Some(ref so_path) = interceptor_so {
-            // Try to start a real-hardware-backed emulator server.
             if mirage_real::RealEmulator::hardware_available() {
                 if let Ok(Some(real)) = mirage_real::RealEmulator::detect() {
                     // Fetch the topology from the emulator before moving it
@@ -640,10 +649,10 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                                 ok: false,
                                 error: Some(format!("failed to bind emulator socket: {e}")),
                                 container_id: None,
+                                container_ids: vec![],
                             });
                         }
                     };
-                    // Spawn a background thread to serve emulator requests.
                     thread::spawn(move || {
                         let _ = server.serve_on(listener);
                     });
@@ -651,14 +660,12 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                     let container_so = "/opt/mirage/libmirage_interceptor.so".to_string();
                     let container_sock = "/opt/mirage/emulator.sock".to_string();
 
-                    // Bind-mount the interceptor library.
-                    mounts.push(BindMount {
+                    base_mounts.push(BindMount {
                         host_path: so_path.to_string_lossy().to_string(),
                         container_path: container_so.clone(),
                         readonly: true,
                     });
-                    // Bind-mount the emulator socket.
-                    mounts.push(BindMount {
+                    base_mounts.push(BindMount {
                         host_path: socket_path.to_string_lossy().to_string(),
                         container_path: container_sock.clone(),
                         readonly: false,
@@ -669,13 +676,13 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                     // nodes.  Use the Topology fetched from the emulator.
                     if let Some(ref topo) = topology {
                         if let Ok(topo_dir) = create_synthetic_topology(&session.name, topo) {
-                            mounts.push(BindMount {
+                            base_mounts.push(BindMount {
                                 host_path: topo_dir.join("sys/class/kfd").to_string_lossy().to_string(),
                                 container_path: "/sys/class/kfd".to_string(),
                                 readonly: true,
                             });
                             // hsakmt reads topology from /sys/devices/virtual/kfd/kfd/topology
-                            mounts.push(BindMount {
+                            base_mounts.push(BindMount {
                                 host_path: topo_dir
                                     .join("sys/class/kfd/kfd/topology")
                                     .to_string_lossy()
@@ -683,12 +690,12 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                                 container_path: "/sys/devices/virtual/kfd/kfd/topology".to_string(),
                                 readonly: true,
                             });
-                            mounts.push(BindMount {
+                            base_mounts.push(BindMount {
                                 host_path: topo_dir.join("dev/dri").to_string_lossy().to_string(),
                                 container_path: "/dev/dri".to_string(),
                                 readonly: true,
                             });
-                            mounts.push(BindMount {
+                            base_mounts.push(BindMount {
                                 host_path: topo_dir.join("dev/kfd").to_string_lossy().to_string(),
                                 container_path: "/dev/kfd".to_string(),
                                 readonly: true,
@@ -696,13 +703,11 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                         }
                     }
 
-                    // Force GPU access through the interceptor — do NOT
-                    // pass real device nodes into the container.
-                    extra_env.push(SetEnv {
+                    base_env.push(SetEnv {
                         key: "LD_PRELOAD".to_string(),
                         value: container_so.clone(),
                     });
-                    extra_env.push(SetEnv {
+                    base_env.push(SetEnv {
                         key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
                         value: container_sock.clone(),
                     });
@@ -713,50 +718,114 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
             }
         }
 
-        // Build a ContainerDef that keeps the container alive for exec calls.
-        let container_def = ContainerDef {
-            image: session.image.clone(),
-            mounts,
-            injected_files: vec![],
-            entrypoint: ExecArgs {
-                command: "sleep".to_string(),
-                args: vec!["infinity".to_string()],
-                env: extra_env,
-            },
-            working_dir: None,
-            ports: vec![],
-            devices,
-            privileged: false,
-            resource_limits_json: None,
-        };
-
-        let container_name = format!("mirage-{}", session.name);
-
-        // Pull the image first (ignore errors for locally available images).
+        // Pull the image (ignore errors for locally available images).
         let _ = runtime.pull_image(&session.image, None).await;
 
-        let started: StartedContainer = match runtime
-            .start_container(
-                StartContainerRequest {
-                    name: container_name,
-                    container: container_def,
-                },
-                None,
-            )
-            .await
-        {
-            Ok(s) => s,
-            Err(err) => {
-                return Ok(BootSessionReply {
-                    ok: false,
-                    error: Some(format!("failed to start container: {err}")),
-                    container_id: None,
-                });
-            }
+        let num_nodes = profile.num_nodes.max(1);
+        let multi_node = num_nodes > 1;
+        let head_container_name = if multi_node {
+            format!("mirage-{}-node0", session.name)
+        } else {
+            format!("mirage-{}", session.name)
         };
 
-        let container_id = started.inspection.handle.id.clone();
-        let handle = started.inspection.handle.clone();
+        // Create a Docker network for multi-node sessions.
+        let network_name = if multi_node {
+            let name = format!("mirage-{}", session.name);
+            if let Err(err) = runtime.create_network(&name, None).await {
+                return Ok(BootSessionReply {
+                    ok: false,
+                    error: Some(format!("failed to create network: {err}")),
+                    container_id: None,
+                    container_ids: vec![],
+                });
+            }
+            Some(name)
+        } else {
+            None
+        };
+
+        let mut container_handles: Vec<ContainerHandle> = Vec::with_capacity(num_nodes as usize);
+        let mut container_ids: Vec<String> = Vec::with_capacity(num_nodes as usize);
+
+        for node_index in 0..num_nodes {
+            let container_name = if multi_node {
+                format!("mirage-{}-node{}", session.name, node_index)
+            } else {
+                format!("mirage-{}", session.name)
+            };
+
+            let mut node_env = base_env.clone();
+            if multi_node {
+                node_env.push(SetEnv {
+                    key: "MIRAGE_NUM_NODES".to_string(),
+                    value: num_nodes.to_string(),
+                });
+                node_env.push(SetEnv {
+                    key: "MIRAGE_NODE_RANK".to_string(),
+                    value: node_index.to_string(),
+                });
+                node_env.push(SetEnv {
+                    key: "MIRAGE_HEAD_ADDR".to_string(),
+                    value: head_container_name.clone(),
+                });
+                node_env.push(SetEnv {
+                    key: "MIRAGE_HEAD_PORT".to_string(),
+                    value: MIRAGE_HEAD_PORT.to_string(),
+                });
+            }
+
+            let container_def = ContainerDef {
+                image: session.image.clone(),
+                mounts: base_mounts.clone(),
+                injected_files: vec![],
+                entrypoint: ExecArgs {
+                    command: "sleep".to_string(),
+                    args: vec!["infinity".to_string()],
+                    env: node_env,
+                },
+                working_dir: None,
+                ports: vec![],
+                devices: devices.clone(),
+                privileged: false,
+                resource_limits_json: None,
+                network: network_name.clone(),
+            };
+
+            let started = match runtime
+                .start_container(
+                    StartContainerRequest {
+                        name: container_name,
+                        container: container_def,
+                    },
+                    None,
+                )
+                .await
+            {
+                Ok(s) => s,
+                Err(err) => {
+                    // Clean up any containers we already started.
+                    for handle in &container_handles {
+                        let _ = runtime.stop_container(handle, 5, None).await;
+                        let _ = runtime.remove_container(handle, true, None).await;
+                    }
+                    if let Some(ref net) = network_name {
+                        let _ = runtime.remove_network(net, None).await;
+                    }
+                    return Ok(BootSessionReply {
+                        ok: false,
+                        error: Some(format!("failed to start container: {err}")),
+                        container_id: None,
+                        container_ids: vec![],
+                    });
+                }
+            };
+
+            container_ids.push(started.inspection.handle.id.clone());
+            container_handles.push(started.inspection.handle);
+        }
+
+        let head_container_id = container_ids.first().cloned();
 
         let detail = GetSessionDetailReply {
             name: Some(session.name.clone()),
@@ -777,7 +846,8 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
             SessionRecord {
                 session,
                 detail,
-                container_handle: Some(handle),
+                container_handles,
+                network_name,
                 emulator_socket_container: emu_socket_container,
                 interceptor_path_container: interceptor_container,
             },
@@ -786,7 +856,8 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
         Ok(BootSessionReply {
             ok: true,
             error: None,
-            container_id: Some(container_id),
+            container_id: head_container_id,
+            container_ids,
         })
     }
 }
@@ -805,7 +876,7 @@ impl MirageDaemonExec for InMemoryMirageDaemon {
             )));
         };
 
-        let Some(handle) = &record.container_handle else {
+        let Some(handle) = record.container_handles.first() else {
             return Err(mirage_schema::daemon::MirageDaemonError::Remote(format!(
                 "session '{}' has no running container (was it booted?)",
                 request.session_name
@@ -867,10 +938,16 @@ impl MirageDaemonShutdown for InMemoryMirageDaemon {
             });
         };
 
-        if let (Some(handle), Some(runtime)) = (record.container_handle, &self.container_runtime) {
-            // Best-effort stop + remove.
-            let _ = runtime.stop_container(&handle, 10, None).await;
-            let _ = runtime.remove_container(&handle, true, None).await;
+        if let Some(runtime) = &self.container_runtime {
+            // Stop and remove all node containers.
+            for handle in &record.container_handles {
+                let _ = runtime.stop_container(handle, 10, None).await;
+                let _ = runtime.remove_container(handle, true, None).await;
+            }
+            // Remove the session network if one was created.
+            if let Some(ref net) = record.network_name {
+                let _ = runtime.remove_network(net, None).await;
+            }
         }
 
         Ok(ShutdownSessionReply {
@@ -1225,6 +1302,147 @@ mod tests {
             .await
             .unwrap();
         assert!(sessions.sessions.is_empty());
+    }
+
+    async fn daemon_with_multinode_profile() -> (
+        InMemoryMirageDaemon,
+        Arc<mirage_container::MockContainerRuntime>,
+    ) {
+        let mock = Arc::new(mirage_container::MockContainerRuntime::default());
+        let daemon = InMemoryMirageDaemon::with_container_runtime(mock.clone());
+
+        daemon
+            .create_profile(CreateProfileRequest {
+                profile: ProfileDef {
+                    name: "mi300x-2node".to_string(),
+                    simulator: "rocjitsu".to_string(),
+                    mode: SimulatorMode::Functional,
+                    gpu: "MI300X".to_string(),
+                    num_gpus: 8,
+                    num_nodes: 2,
+                },
+            })
+            .await
+            .unwrap();
+
+        (daemon, mock)
+    }
+
+    #[tokio::test]
+    async fn boot_multinode_starts_multiple_containers_with_network() {
+        let (daemon, mock) = daemon_with_multinode_profile().await;
+
+        let reply = daemon
+            .boot_session(BootSessionRequest {
+                session: SessionDef {
+                    name: "multi-test".to_string(),
+                    profile: "mi300x-2node".to_string(),
+                    image: "ghcr.io/rocm/vllm:latest".to_string(),
+                },
+            })
+            .await
+            .unwrap();
+
+        assert!(reply.ok, "boot should succeed: {:?}", reply.error);
+        assert_eq!(reply.container_ids.len(), 2, "should have 2 containers");
+        assert_eq!(
+            reply.container_id,
+            Some(reply.container_ids[0].clone()),
+            "container_id should be head node"
+        );
+
+        // Verify two start_container calls were made.
+        let starts = mock.start_requests().await;
+        assert_eq!(starts.len(), 2);
+        assert_eq!(starts[0].name, "mirage-multi-test-node0");
+        assert_eq!(starts[1].name, "mirage-multi-test-node1");
+
+        // Both containers should be on the same network.
+        assert_eq!(
+            starts[0].container.network.as_deref(),
+            Some("mirage-multi-test")
+        );
+        assert_eq!(
+            starts[1].container.network.as_deref(),
+            Some("mirage-multi-test")
+        );
+
+        // A Docker network should have been created.
+        let networks = mock.networks().await;
+        assert_eq!(networks, vec!["mirage-multi-test"]);
+
+        // Verify env vars on head node (node0).
+        let head_env = &starts[0].container.entrypoint.env;
+        let find_env = |envs: &[SetEnv], key: &str| -> Option<String> {
+            envs.iter()
+                .find(|e| e.key == key)
+                .map(|e| e.value.clone())
+        };
+        assert_eq!(find_env(head_env, "MIRAGE_NUM_NODES"), Some("2".to_string()));
+        assert_eq!(find_env(head_env, "MIRAGE_NODE_RANK"), Some("0".to_string()));
+        assert_eq!(
+            find_env(head_env, "MIRAGE_HEAD_ADDR"),
+            Some("mirage-multi-test-node0".to_string())
+        );
+        assert_eq!(
+            find_env(head_env, "MIRAGE_HEAD_PORT"),
+            Some("29500".to_string())
+        );
+
+        // Verify env vars on worker node (node1).
+        let worker_env = &starts[1].container.entrypoint.env;
+        assert_eq!(
+            find_env(worker_env, "MIRAGE_NUM_NODES"),
+            Some("2".to_string())
+        );
+        assert_eq!(
+            find_env(worker_env, "MIRAGE_NODE_RANK"),
+            Some("1".to_string())
+        );
+        assert_eq!(
+            find_env(worker_env, "MIRAGE_HEAD_ADDR"),
+            Some("mirage-multi-test-node0".to_string())
+        );
+        assert_eq!(
+            find_env(worker_env, "MIRAGE_HEAD_PORT"),
+            Some("29500".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_multinode_cleans_up_all_containers_and_network() {
+        let (daemon, mock) = daemon_with_multinode_profile().await;
+
+        let boot = daemon
+            .boot_session(BootSessionRequest {
+                session: SessionDef {
+                    name: "multi-shutdown".to_string(),
+                    profile: "mi300x-2node".to_string(),
+                    image: "img:latest".to_string(),
+                },
+            })
+            .await
+            .unwrap();
+        assert!(boot.ok);
+
+        let shutdown = daemon
+            .shutdown_session(ShutdownSessionRequest {
+                name: "multi-shutdown".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(shutdown.ok);
+
+        // Session should be gone.
+        let sessions = daemon
+            .list_sessions(ListSessionsRequest::default())
+            .await
+            .unwrap();
+        assert!(sessions.sessions.is_empty());
+
+        // Network should have been removed.
+        let networks = mock.networks().await;
+        assert!(networks.is_empty(), "network should be removed on shutdown");
     }
 }
 

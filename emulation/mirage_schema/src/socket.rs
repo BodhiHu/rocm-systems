@@ -406,8 +406,13 @@ pub struct BootSessionReply {
     pub error: Option<String>,
 
     /// Container ID assigned by the runtime (if booted).
+    /// For multi-node sessions this is the head node container.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_id: Option<String>,
+
+    /// All container IDs for multi-node sessions (head first, then workers).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub container_ids: Vec<String>,
 }
 
 /// Execute a command inside a booted session's container.

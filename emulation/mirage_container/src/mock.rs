@@ -64,6 +64,7 @@ struct State {
     pulled_images: Vec<String>,
     start_requests: Vec<StartContainerRequest>,
     exec_requests: Vec<ExecRequest>,
+    networks: Vec<String>,
     containers: BTreeMap<String, MockContainer>,
     next_container_id: u64,
     next_ephemeral_port: u16,
@@ -87,6 +88,7 @@ impl Default for MockContainerRuntime {
                 pulled_images: Vec::new(),
                 start_requests: Vec::new(),
                 exec_requests: Vec::new(),
+                networks: Vec::new(),
                 containers: BTreeMap::new(),
                 next_container_id: 0,
                 next_ephemeral_port: 40_000,
@@ -110,6 +112,10 @@ impl MockContainerRuntime {
 
     pub async fn exec_requests(&self) -> Vec<ExecRequest> {
         self.state.lock().unwrap().exec_requests.clone()
+    }
+
+    pub async fn networks(&self) -> Vec<String> {
+        self.state.lock().unwrap().networks.clone()
     }
 
     pub async fn fail_next_pull(&self, message: impl Into<String>) {
@@ -392,6 +398,35 @@ impl ContainerRuntime for MockContainerRuntime {
             Err(ContainerRuntimeError::NotFound(handle.id.clone()))
         }
     }
+
+    async fn create_network(
+        &self,
+        name: &str,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<()> {
+        emit_status(
+            progress.as_ref(),
+            ContainerRuntimeOperation::CreateNetwork,
+            format!("creating network {name}"),
+        );
+        self.state.lock().unwrap().networks.push(name.to_string());
+        Ok(())
+    }
+
+    async fn remove_network(
+        &self,
+        name: &str,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<()> {
+        emit_status(
+            progress.as_ref(),
+            ContainerRuntimeOperation::RemoveNetwork,
+            format!("removing network {name}"),
+        );
+        let mut state = self.state.lock().unwrap();
+        state.networks.retain(|n| n != name);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -435,6 +470,7 @@ mod tests {
                 privileged: false,
                 devices: vec![],
                 resource_limits_json: None,
+                network: None,
             },
         }
     }

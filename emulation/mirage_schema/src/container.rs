@@ -205,6 +205,14 @@ pub struct ContainerDef {
     /// Example: `{"cpu": "4", "memory": "16Gi"}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_limits_json: Option<String>,
+
+    /// Optional Docker/OCI network to attach this container to.
+    ///
+    /// When set, the container runtime passes `--network <name>` so the
+    /// container joins a pre-created network.  Used for multi-node
+    /// sessions where containers need to reach each other by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +247,8 @@ pub enum ContainerRuntimeOperation {
     Exec,
     StopContainer,
     RemoveContainer,
+    CreateNetwork,
+    RemoveNetwork,
 }
 
 /// Streamable progress event emitted by the container runtime.
@@ -303,6 +313,20 @@ pub trait ContainerRuntime: Send + Sync {
         &self,
         handle: &ContainerHandle,
         force: bool,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<()>;
+
+    /// Create a named network for inter-container communication.
+    async fn create_network(
+        &self,
+        name: &str,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<()>;
+
+    /// Remove a named network.
+    async fn remove_network(
+        &self,
+        name: &str,
         progress: Option<ContainerRuntimeProgressSender>,
     ) -> Result<()>;
 }

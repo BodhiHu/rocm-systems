@@ -553,10 +553,15 @@ fn handle_boot_reply(reply: BootSessionReply, json: bool, name: &str) -> CliResu
         print_json(&serde_json::json!({
             "ok": true,
             "container_id": reply.container_id,
+            "container_ids": reply.container_ids,
         }))?;
     } else {
         println!("session '{}' booted", name);
-        if let Some(id) = reply.container_id {
+        if reply.container_ids.len() > 1 {
+            for (i, id) in reply.container_ids.iter().enumerate() {
+                println!("node{i}: {id}");
+            }
+        } else if let Some(id) = reply.container_id {
             println!("container: {id}");
         }
     }

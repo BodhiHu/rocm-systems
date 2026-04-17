@@ -452,6 +452,11 @@ where
             }
         }
 
+        if let Some(network) = &request.container.network {
+            args.push("--network".to_string());
+            args.push(network.clone());
+        }
+
         args.push("--entrypoint".to_string());
         args.push(request.container.entrypoint.command.clone());
         args.push(request.container.image.clone());
@@ -756,6 +761,52 @@ where
             Err(error) => Err(error),
         }
     }
+
+    async fn create_network(
+        &self,
+        name: &str,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<()> {
+        if name.trim().is_empty() {
+            return Err(ContainerRuntimeError::InvalidRequest(
+                "network name must not be empty".to_string(),
+            ));
+        }
+        self.run_checked(
+            &[
+                "network".to_string(),
+                "create".to_string(),
+                name.to_string(),
+            ],
+            ContainerRuntimeOperation::CreateNetwork,
+            progress.as_ref(),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn remove_network(
+        &self,
+        name: &str,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<()> {
+        if name.trim().is_empty() {
+            return Err(ContainerRuntimeError::InvalidRequest(
+                "network name must not be empty".to_string(),
+            ));
+        }
+        self.run_checked(
+            &[
+                "network".to_string(),
+                "rm".to_string(),
+                name.to_string(),
+            ],
+            ContainerRuntimeOperation::RemoveNetwork,
+            progress.as_ref(),
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 fn validate_host_path(path: &str) -> Result<()> {
@@ -986,6 +1037,7 @@ mod tests {
                 privileged: true,
                 devices: vec![],
                 resource_limits_json: Some("{\"cpu\":\"4\",\"memory\":\"16Gi\"}".to_string()),
+                network: None,
             },
         }
     }

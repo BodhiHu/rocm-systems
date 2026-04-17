@@ -613,6 +613,7 @@ mod tests {
                 ok: true,
                 error: None,
                 container_id: Some("mock-container-id".to_string()),
+                container_ids: vec!["mock-container-id".to_string()],
             })
         }
     }
