@@ -237,7 +237,7 @@ async fn main() -> ExitCode {
         }
     }
 }
-
+include!("health.rs");
 async fn run_command(daemon: &dyn MirageDaemon, command: Command) -> CliResult {
     match command {
         Command::Overview { json } => {

@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["emulation/mirage_*", "emulation/rocjitsu_sys"]
+
+[workspace.dependencies]
+serde = { version = "1" }
+serde_json = { version = "1" }
+serde_bare = { version = "0.5" }
+async-trait = { version = "0.1.89" }
+paste = { version = "1" }
+libc = { version = "0.2" }
+bytes = { version = "1" }
+clap = { version = "4.0", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "io-util", "sync", "fs"] }
+
+amdgpu_protocol = { path = "emulation/amdgpu_protocol" }
+mirage_schema = { path = "emulation/mirage_schema" }
+mirage_ctl = { path = "emulation/mirage_ctl" }
+mirage_daemon = { path = "emulation/mirage_daemon" }
+mirage_real = { path = "emulation/mirage_real" }
+mirage_remote = { path = "emulation/mirage_remote" }
+mirage_rocjitsu = { path = "emulation/mirage_rocjitsu" }
+mirage_uapi = { path = "emulation/mirage_uapi" }
+rocjitsu_sys = { path = "emulation/rocjitsu_sys" }

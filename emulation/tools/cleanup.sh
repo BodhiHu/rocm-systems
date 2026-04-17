@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 EMULATION_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd -- "${EMULATION_ROOT}/.." && pwd)"
 
 log() {
     printf '[cleanup] %s\n' "$*"
@@ -21,6 +22,8 @@ find_mirage_ctl() {
 
     local candidate
     for candidate in \
+        "${REPO_ROOT}/target/debug/mirage_ctl" \
+        "${REPO_ROOT}/target/release/mirage_ctl" \
         "${EMULATION_ROOT}/target/debug/mirage_ctl" \
         "${EMULATION_ROOT}/target/release/mirage_ctl"; do
         if [[ -x "${candidate}" ]]; then

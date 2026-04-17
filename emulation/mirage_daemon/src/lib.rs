@@ -1462,7 +1462,12 @@ fn find_interceptor_so() -> Option<PathBuf> {
         std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.join("libmirage_interceptor.so"))),
-        // Fallback: cargo target/debug.
+        // Fallback: cargo target/debug for the repo-root workspace.
+        Some(PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target/debug/libmirage_interceptor.so"
+        ))),
+        // Compatibility fallback for pre-move builds rooted under emulation/.
         Some(PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../target/debug/libmirage_interceptor.so"
