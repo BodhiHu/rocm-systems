@@ -176,22 +176,18 @@ fn rocminfo_smoke_reaches_real_backed_daemon() {
              The daemon-backed path runs, but the interceptor still lacks \
              enough ioctl/fs marshalling to reproduce baseline output. \
              baseline lines:\n{:#?}\n\nintercepted stderr:\n{}",
-            runs.baseline_norm,
-            runs.intercepted_err
+            runs.baseline_norm, runs.intercepted_err
         );
         return;
     }
 
     assert_eq!(
-        runs.intercepted_norm,
-        runs.baseline_norm,
+        runs.intercepted_norm, runs.baseline_norm,
         "rocminfo output under the interceptor diverged from the real kernel\n\
          baseline stdout:\n{}\n\
          intercepted stdout:\n{}\n\
          intercepted stderr:\n{}",
-        runs.baseline_out,
-        runs.intercepted_out,
-        runs.intercepted_err
+        runs.baseline_out, runs.intercepted_out, runs.intercepted_err
     );
 }
 
@@ -214,14 +210,11 @@ fn rocminfo_matches_when_hardware_present() {
     );
 
     assert_eq!(
-        runs.intercepted_norm,
-        runs.baseline_norm,
+        runs.intercepted_norm, runs.baseline_norm,
         "rocminfo output under the interceptor diverged from the real kernel\n\
          baseline stdout:\n{}\n\
          intercepted stdout:\n{}\n\
          intercepted stderr:\n{}",
-        runs.baseline_out,
-        runs.intercepted_out,
-        runs.intercepted_err
+        runs.baseline_out, runs.intercepted_out, runs.intercepted_err
     );
 }

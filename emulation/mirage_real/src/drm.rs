@@ -3,32 +3,29 @@ use std::slice;
 
 use mirage_schema::amdgpu::{
     BoListEntry, ChunkId, CsChunk, CsChunkCpGfxShadow, CsChunkDep, CsChunkFence, CsChunkIb,
-    CsChunkSyncobj, CtxOp, DrmAmdgpuBoListRequest, DrmAmdgpuBoListResponse,
-    DrmAmdgpuCsRequest, DrmAmdgpuCsResponse, DrmAmdgpuCtxRequest, DrmAmdgpuCtxResponse,
-    DrmAmdgpuFenceToHandleRequest, DrmAmdgpuFenceToHandleResponse,
-    DrmAmdgpuGemCreateRequest, DrmAmdgpuGemCreateResponse,
-    DrmAmdgpuGemDgmaRequest, DrmAmdgpuGemDgmaResponse,
-    DrmAmdgpuGemListHandlesRequest, DrmAmdgpuGemListHandlesResponse,
-    DrmAmdgpuGemMetadataRequest, DrmAmdgpuGemMetadataResponse,
+    CsChunkSyncobj, CtxOp, DrmAmdgpuBoListRequest, DrmAmdgpuBoListResponse, DrmAmdgpuCsRequest,
+    DrmAmdgpuCsResponse, DrmAmdgpuCtxRequest, DrmAmdgpuCtxResponse, DrmAmdgpuFenceToHandleRequest,
+    DrmAmdgpuFenceToHandleResponse, DrmAmdgpuGemCreateRequest, DrmAmdgpuGemCreateResponse,
+    DrmAmdgpuGemDgmaRequest, DrmAmdgpuGemDgmaResponse, DrmAmdgpuGemListHandlesRequest,
+    DrmAmdgpuGemListHandlesResponse, DrmAmdgpuGemMetadataRequest, DrmAmdgpuGemMetadataResponse,
     DrmAmdgpuGemMmapRequest, DrmAmdgpuGemMmapResponse, DrmAmdgpuGemOpRequest,
     DrmAmdgpuGemOpResponse, DrmAmdgpuGemUserptrRequest, DrmAmdgpuGemUserptrResponse,
     DrmAmdgpuGemVaRequest, DrmAmdgpuGemVaResponse, DrmAmdgpuGemWaitIdleRequest,
     DrmAmdgpuGemWaitIdleResponse, DrmAmdgpuInfoRequest, DrmAmdgpuInfoResponse,
-    DrmAmdgpuSchedRequest, DrmAmdgpuSchedResponse, DrmAmdgpuSemRequest,
-    DrmAmdgpuSemResponse, DrmAmdgpuUserqRequest, DrmAmdgpuUserqResponse,
-    DrmAmdgpuUserqSignalRequest, DrmAmdgpuUserqSignalResponse,
-    DrmAmdgpuUserqWaitRequest, DrmAmdgpuUserqWaitResponse, DrmAmdgpuVmRequest,
-    DrmAmdgpuVmResponse, DrmAmdgpuWaitCsRequest, DrmAmdgpuWaitCsResponse,
+    DrmAmdgpuSchedRequest, DrmAmdgpuSchedResponse, DrmAmdgpuSemRequest, DrmAmdgpuSemResponse,
+    DrmAmdgpuUserqRequest, DrmAmdgpuUserqResponse, DrmAmdgpuUserqSignalRequest,
+    DrmAmdgpuUserqSignalResponse, DrmAmdgpuUserqWaitRequest, DrmAmdgpuUserqWaitResponse,
+    DrmAmdgpuVmRequest, DrmAmdgpuVmResponse, DrmAmdgpuWaitCsRequest, DrmAmdgpuWaitCsResponse,
     DrmAmdgpuWaitFencesRequest, DrmAmdgpuWaitFencesResponse, Fence, GemListHandlesEntry,
     HandleAnyDrmIoctl, HandleDrmIoctl, IoctlCtx, SemOp, UserqFenceInfo, UserqMqd,
 };
 use mirage_schema::amdgpu_error::AmdgpuResult;
 use mirage_uapi::drm;
 
-use crate::ioctl::{
-    drm_iow, drm_iowr, maybe_mut_ptr, maybe_ptr, DrmBoListEntry, DrmCsChunk, DrmCsChunkDep,
-};
 use crate::RealEmulator;
+use crate::ioctl::{
+    DrmBoListEntry, DrmCsChunk, DrmCsChunkDep, drm_iow, drm_iowr, maybe_mut_ptr, maybe_ptr,
+};
 
 impl HandleDrmIoctl for RealEmulator {
     fn drm_amdgpu_gem_create(
@@ -44,7 +41,10 @@ impl HandleDrmIoctl for RealEmulator {
                 domains: request.domains,
                 domain_flags: request.domain_flags,
             };
-            self.drm_ioctl(drm_iowr::<drm::drm_amdgpu_gem_create>(drm::DRM_AMDGPU_GEM_CREATE), &mut args)?;
+            self.drm_ioctl(
+                drm_iowr::<drm::drm_amdgpu_gem_create>(drm::DRM_AMDGPU_GEM_CREATE),
+                &mut args,
+            )?;
             Ok(DrmAmdgpuGemCreateResponse {
                 handle: args.out.handle,
             })
@@ -62,7 +62,10 @@ impl HandleDrmIoctl for RealEmulator {
                 handle: request.handle,
                 _pad: 0,
             };
-            self.drm_ioctl(drm_iowr::<drm::drm_amdgpu_gem_mmap>(drm::DRM_AMDGPU_GEM_MMAP), &mut args)?;
+            self.drm_ioctl(
+                drm_iowr::<drm::drm_amdgpu_gem_mmap>(drm::DRM_AMDGPU_GEM_MMAP),
+                &mut args,
+            )?;
             Ok(DrmAmdgpuGemMmapResponse {
                 addr_ptr: args.out.addr_ptr,
             })
@@ -82,7 +85,10 @@ impl HandleDrmIoctl for RealEmulator {
                 ctx_id: request.ctx_id,
                 priority: request.priority,
             };
-            self.drm_ioctl(drm_iowr::<drm::drm_amdgpu_ctx>(drm::DRM_AMDGPU_CTX), &mut args)?;
+            self.drm_ioctl(
+                drm_iowr::<drm::drm_amdgpu_ctx>(drm::DRM_AMDGPU_CTX),
+                &mut args,
+            )?;
             let (ctx_id, flags, hangs, reset_status) = match request.op {
                 CtxOp::AllocCtx => (args.out.alloc.ctx_id, 0, 0, 0),
                 CtxOp::QueryState | CtxOp::QueryState2 => {
@@ -109,7 +115,12 @@ impl HandleDrmIoctl for RealEmulator {
         _ctx: IoctlCtx,
         request: DrmAmdgpuBoListRequest,
     ) -> AmdgpuResult<DrmAmdgpuBoListResponse> {
-        let bo_info: Vec<DrmBoListEntry> = request.bo_info.iter().copied().map(bo_list_entry_to_raw).collect();
+        let bo_info: Vec<DrmBoListEntry> = request
+            .bo_info
+            .iter()
+            .copied()
+            .map(bo_list_entry_to_raw)
+            .collect();
         let mut args = drm::drm_amdgpu_bo_list::default();
         unsafe {
             args.in_ = drm::drm_amdgpu_bo_list_in {
@@ -119,7 +130,10 @@ impl HandleDrmIoctl for RealEmulator {
                 bo_info_size: size_of::<DrmBoListEntry>() as u32,
                 bo_info_ptr: maybe_ptr(&bo_info),
             };
-            self.drm_ioctl(drm_iowr::<drm::drm_amdgpu_bo_list>(drm::DRM_AMDGPU_BO_LIST), &mut args)?;
+            self.drm_ioctl(
+                drm_iowr::<drm::drm_amdgpu_bo_list>(drm::DRM_AMDGPU_BO_LIST),
+                &mut args,
+            )?;
             Ok(DrmAmdgpuBoListResponse {
                 list_handle: args.out.list_handle,
             })
@@ -146,7 +160,10 @@ impl HandleDrmIoctl for RealEmulator {
                 flags: request.flags,
                 chunks: maybe_ptr(&raw_chunks),
             };
-            self.drm_ioctl(drm_iowr::<drm::drm_amdgpu_cs>(drm::DRM_AMDGPU_CS), &mut args)?;
+            self.drm_ioctl(
+                drm_iowr::<drm::drm_amdgpu_cs>(drm::DRM_AMDGPU_CS),
+                &mut args,
+            )?;
             Ok(DrmAmdgpuCsResponse {
                 handle: args.out.handle,
             })
@@ -166,12 +183,16 @@ impl HandleDrmIoctl for RealEmulator {
             __bindgen_anon_1: Default::default(),
         };
         unsafe {
-            let words = (&mut args.__bindgen_anon_1 as *mut drm::drm_amdgpu_info__bindgen_ty_1).cast::<u32>();
+            let words = (&mut args.__bindgen_anon_1 as *mut drm::drm_amdgpu_info__bindgen_ty_1)
+                .cast::<u32>();
             *words.add(0) = request.sub_query;
             *words.add(1) = request.sub_query2;
             *words.add(2) = request.sub_query3;
             *words.add(3) = request.flags;
-            self.drm_ioctl(drm_iow::<drm::drm_amdgpu_info>(drm::DRM_AMDGPU_INFO), &mut args)?;
+            self.drm_ioctl(
+                drm_iow::<drm::drm_amdgpu_info>(drm::DRM_AMDGPU_INFO),
+                &mut args,
+            )?;
         }
         Ok(DrmAmdgpuInfoResponse { raw_data })
     }
@@ -200,7 +221,8 @@ impl HandleDrmIoctl for RealEmulator {
                 &mut args,
             )?;
         }
-        let out_len = ((args.data.data_size_bytes as usize) / size_of::<u32>()).min(args.data.data.len());
+        let out_len =
+            ((args.data.data_size_bytes as usize) / size_of::<u32>()).min(args.data.data.len());
         Ok(DrmAmdgpuGemMetadataResponse {
             flags: args.data.flags,
             tiling_info: args.data.tiling_info,
@@ -252,7 +274,10 @@ impl HandleDrmIoctl for RealEmulator {
             input_fence_syncobj_handles: maybe_ptr(&handles),
         };
         unsafe {
-            self.drm_ioctl(drm_iow::<drm::drm_amdgpu_gem_va>(drm::DRM_AMDGPU_GEM_VA), &mut args)?;
+            self.drm_ioctl(
+                drm_iow::<drm::drm_amdgpu_gem_va>(drm::DRM_AMDGPU_GEM_VA),
+                &mut args,
+            )?;
         }
         Ok(DrmAmdgpuGemVaResponse {})
     }
@@ -272,7 +297,10 @@ impl HandleDrmIoctl for RealEmulator {
                 ring: request.ring,
                 ctx_id: request.ctx_id,
             };
-            self.drm_ioctl(drm_iowr::<drm::drm_amdgpu_wait_cs>(drm::DRM_AMDGPU_WAIT_CS), &mut args)?;
+            self.drm_ioctl(
+                drm_iowr::<drm::drm_amdgpu_wait_cs>(drm::DRM_AMDGPU_WAIT_CS),
+                &mut args,
+            )?;
             Ok(DrmAmdgpuWaitCsResponse {
                 status: args.out.status,
             })
@@ -288,10 +316,17 @@ impl HandleDrmIoctl for RealEmulator {
         let mut args = drm::drm_amdgpu_gem_op {
             handle: request.handle,
             op: request.op as u32,
-            value: if raw_data.is_empty() { request.value } else { maybe_mut_ptr(&mut raw_data) },
+            value: if raw_data.is_empty() {
+                request.value
+            } else {
+                maybe_mut_ptr(&mut raw_data)
+            },
         };
         unsafe {
-            self.drm_ioctl(drm_iowr::<drm::drm_amdgpu_gem_op>(drm::DRM_AMDGPU_GEM_OP), &mut args)?;
+            self.drm_ioctl(
+                drm_iowr::<drm::drm_amdgpu_gem_op>(drm::DRM_AMDGPU_GEM_OP),
+                &mut args,
+            )?;
         }
         Ok(DrmAmdgpuGemOpResponse {
             value: args.value,
@@ -327,7 +362,8 @@ impl HandleDrmIoctl for RealEmulator {
         _ctx: IoctlCtx,
         request: DrmAmdgpuWaitFencesRequest,
     ) -> AmdgpuResult<DrmAmdgpuWaitFencesResponse> {
-        let fences: Vec<drm::drm_amdgpu_fence> = request.fences.iter().copied().map(fence_to_raw).collect();
+        let fences: Vec<drm::drm_amdgpu_fence> =
+            request.fences.iter().copied().map(fence_to_raw).collect();
         let mut args = drm::drm_amdgpu_wait_fences::default();
         unsafe {
             args.in_ = drm::drm_amdgpu_wait_fences_in {
@@ -358,7 +394,10 @@ impl HandleDrmIoctl for RealEmulator {
                 op: request.op as u32,
                 flags: request.flags,
             };
-            self.drm_ioctl(drm_iowr::<drm::drm_amdgpu_vm>(drm::DRM_AMDGPU_VM), &mut args)?;
+            self.drm_ioctl(
+                drm_iowr::<drm::drm_amdgpu_vm>(drm::DRM_AMDGPU_VM),
+                &mut args,
+            )?;
             Ok(DrmAmdgpuVmResponse {
                 flags: args.out.flags,
             })
@@ -400,7 +439,10 @@ impl HandleDrmIoctl for RealEmulator {
                 priority: request.priority,
                 ctx_id: request.ctx_id,
             };
-            self.drm_ioctl(drm_iow::<drm::drm_amdgpu_sched>(drm::DRM_AMDGPU_SCHED), &mut args)?;
+            self.drm_ioctl(
+                drm_iow::<drm::drm_amdgpu_sched>(drm::DRM_AMDGPU_SCHED),
+                &mut args,
+            )?;
         }
         Ok(DrmAmdgpuSchedResponse {})
     }
@@ -427,7 +469,10 @@ impl HandleDrmIoctl for RealEmulator {
                 mqd: maybe_ptr(&mqd),
                 mqd_size: request.mqd_size,
             };
-            self.drm_ioctl(drm_iowr::<drm::drm_amdgpu_userq>(drm::DRM_AMDGPU_USERQ), &mut args)?;
+            self.drm_ioctl(
+                drm_iowr::<drm::drm_amdgpu_userq>(drm::DRM_AMDGPU_USERQ),
+                &mut args,
+            )?;
             Ok(DrmAmdgpuUserqResponse {
                 queue_id: args.out.queue_id,
             })
@@ -471,7 +516,8 @@ impl HandleDrmIoctl for RealEmulator {
         let syncobj_timeline_points = request.syncobj_timeline_points;
         let bo_read_handles = request.bo_read_handles;
         let bo_write_handles = request.bo_write_handles;
-        let mut fences = vec![drm::drm_amdgpu_userq_fence_info::default(); request.max_fences as usize];
+        let mut fences =
+            vec![drm::drm_amdgpu_userq_fence_info::default(); request.max_fences as usize];
         let mut args = drm::drm_amdgpu_userq_wait {
             waitq_id: request.waitq_id,
             pad: 0,
@@ -504,7 +550,8 @@ impl HandleDrmIoctl for RealEmulator {
         _ctx: IoctlCtx,
         request: DrmAmdgpuGemListHandlesRequest,
     ) -> AmdgpuResult<DrmAmdgpuGemListHandlesResponse> {
-        let mut entries = vec![drm::drm_amdgpu_gem_list_handles_entry::default(); request.max_entries as usize];
+        let mut entries =
+            vec![drm::drm_amdgpu_gem_list_handles_entry::default(); request.max_entries as usize];
         let mut args = drm::drm_amdgpu_gem_list_handles {
             entries: maybe_mut_ptr(&mut entries),
             num_entries: entries.len() as u32,
@@ -518,7 +565,10 @@ impl HandleDrmIoctl for RealEmulator {
         }
         entries.truncate(args.num_entries as usize);
         Ok(DrmAmdgpuGemListHandlesResponse {
-            entries: entries.into_iter().map(gem_list_handles_entry_from_raw).collect(),
+            entries: entries
+                .into_iter()
+                .map(gem_list_handles_entry_from_raw)
+                .collect(),
             num_entries: args.num_entries,
         })
     }
@@ -539,7 +589,10 @@ impl HandleDrmIoctl for RealEmulator {
                 ring: request.ring,
                 seq: request.seq,
             };
-            self.drm_ioctl(drm_iowr::<drm::drm_amdgpu_sem>(drm::DRM_AMDGPU_SEM), &mut args)?;
+            self.drm_ioctl(
+                drm_iowr::<drm::drm_amdgpu_sem>(drm::DRM_AMDGPU_SEM),
+                &mut args,
+            )?;
             Ok(DrmAmdgpuSemResponse {
                 handle_or_fd: if matches!(request.op, SemOp::ExportSem) {
                     args.out.fd
@@ -562,7 +615,10 @@ impl HandleDrmIoctl for RealEmulator {
             handle: request.handle,
         };
         unsafe {
-            self.drm_ioctl(drm_iowr::<drm::drm_amdgpu_gem_dgma>(drm::DRM_AMDGPU_GEM_DGMA), &mut args)?;
+            self.drm_ioctl(
+                drm_iowr::<drm::drm_amdgpu_gem_dgma>(drm::DRM_AMDGPU_GEM_DGMA),
+                &mut args,
+            )?;
         }
         Ok(DrmAmdgpuGemDgmaResponse {
             addr: args.addr,
@@ -600,23 +656,38 @@ fn chunk_to_raw(chunk: &CsChunk, payloads: &mut Vec<Vec<u8>>) -> DrmCsChunk {
             ip_instance: 0,
             ring: 0,
         })),
-        ChunkId::Fence => bytes_of_fence(chunk.fence.unwrap_or(CsChunkFence { handle: 0, offset: 0 })),
+        ChunkId::Fence => bytes_of_fence(chunk.fence.unwrap_or(CsChunkFence {
+            handle: 0,
+            offset: 0,
+        })),
         ChunkId::Dependencies | ChunkId::ScheduledDependencies => bytes_of_slice(
-            &chunk.dependencies.iter().copied().map(dep_to_raw).collect::<Vec<_>>(),
+            &chunk
+                .dependencies
+                .iter()
+                .copied()
+                .map(dep_to_raw)
+                .collect::<Vec<_>>(),
         ),
         ChunkId::SyncobjIn
         | ChunkId::SyncobjOut
         | ChunkId::SyncobjTimelineWait
         | ChunkId::SyncobjTimelineSignal => bytes_of_slice(
-            &chunk.syncobjs.iter().copied().map(syncobj_to_raw).collect::<Vec<_>>(),
+            &chunk
+                .syncobjs
+                .iter()
+                .copied()
+                .map(syncobj_to_raw)
+                .collect::<Vec<_>>(),
         ),
         ChunkId::BoHandles => bytes_of_slice(&chunk.bo_handles),
-        ChunkId::CpGfxShadow => bytes_of_cp_gfx_shadow(chunk.cp_gfx_shadow.unwrap_or(CsChunkCpGfxShadow {
-            shadow_va: 0,
-            csa_va: 0,
-            gds_va: 0,
-            flags: 0,
-        })),
+        ChunkId::CpGfxShadow => {
+            bytes_of_cp_gfx_shadow(chunk.cp_gfx_shadow.unwrap_or(CsChunkCpGfxShadow {
+                shadow_va: 0,
+                csa_va: 0,
+                gds_va: 0,
+                flags: 0,
+            }))
+        }
         _ => chunk.raw_data.clone(),
     };
     let length_dw = payload.len().div_ceil(4) as u32;
@@ -673,7 +744,9 @@ fn userq_fence_from_raw(fence: drm::drm_amdgpu_userq_fence_info) -> UserqFenceIn
     }
 }
 
-fn gem_list_handles_entry_from_raw(entry: drm::drm_amdgpu_gem_list_handles_entry) -> GemListHandlesEntry {
+fn gem_list_handles_entry_from_raw(
+    entry: drm::drm_amdgpu_gem_list_handles_entry,
+) -> GemListHandlesEntry {
     GemListHandlesEntry {
         gem_handle: entry.gem_handle,
         flags: entry.flags,
@@ -717,13 +790,8 @@ fn bytes_of_value<T>(value: &T) -> Vec<u8> {
 }
 
 fn bytes_of_slice<T>(values: &[T]) -> Vec<u8> {
-    unsafe {
-        slice::from_raw_parts(
-            values.as_ptr().cast::<u8>(),
-            std::mem::size_of_val(values),
-        )
-    }
-    .to_vec()
+    unsafe { slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values)) }
+        .to_vec()
 }
 
 #[cfg(test)]
@@ -775,7 +843,10 @@ mod tests {
         let raw = chunk_to_raw(&chunk, &mut payloads);
 
         assert_eq!(raw.chunk_id, ChunkId::Ib as u32);
-        assert_eq!(raw.length_dw as usize * 4, size_of::<drm::drm_amdgpu_cs_chunk_ib>());
+        assert_eq!(
+            raw.length_dw as usize * 4,
+            size_of::<drm::drm_amdgpu_cs_chunk_ib>()
+        );
     }
 
     #[test]

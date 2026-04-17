@@ -29,8 +29,8 @@
 use std::ffi::{CStr, CString, c_char, c_int, c_long, c_ulong, c_void};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use libc::{O_CLOEXEC, size_t};
 
@@ -140,7 +140,10 @@ pub fn lookup_fd(fd: c_int) -> Option<DeviceKind> {
 
 /// Public helper: drop a tracked fd.
 pub fn forget_fd(fd: c_int) {
-    registry().lock().unwrap().retain(|entry| entry.cookie_fd != fd);
+    registry()
+        .lock()
+        .unwrap()
+        .retain(|entry| entry.cookie_fd != fd);
 }
 
 fn register_entry(entry: TrackedFd) {
@@ -281,7 +284,10 @@ unsafe fn copy_c_string(dst: *mut c_char, capacity: usize, value: &[u8]) {
     unsafe { *dst.add(text_len) = 0 };
 }
 
-unsafe fn copy_apertures_to_user(ptr: u64, apertures: &[amdgpu::KfdProcessDeviceAperture]) -> Result<(), c_int> {
+unsafe fn copy_apertures_to_user(
+    ptr: u64,
+    apertures: &[amdgpu::KfdProcessDeviceAperture],
+) -> Result<(), c_int> {
     if apertures.is_empty() {
         return Ok(());
     }
@@ -316,9 +322,7 @@ unsafe fn read_u32s_from_user(ptr: u64, count: usize) -> Result<Vec<u32>, c_int>
     if ptr == 0 {
         return Err(errno_to_rc(libc::EFAULT));
     }
-    Ok(unsafe {
-        std::slice::from_raw_parts(ptr as usize as *const u32, count).to_vec()
-    })
+    Ok(unsafe { std::slice::from_raw_parts(ptr as usize as *const u32, count).to_vec() })
 }
 
 fn cache_policy_from_raw(value: u32) -> Option<amdgpu::KfdCachePolicy> {
@@ -488,7 +492,9 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_get_clock_counters_args) };
             match remote.amdkfd_ioc_get_clock_counters(
                 ctx,
-                amdgpu::AmdkfdIocGetClockCountersRequest { gpu_id: args.gpu_id },
+                amdgpu::AmdkfdIocGetClockCountersRequest {
+                    gpu_id: args.gpu_id,
+                },
             ) {
                 Ok(resp) => {
                     args.gpu_clock_counter = resp.gpu_clock_counter;
@@ -533,7 +539,9 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_destroy_event_args) };
             match remote.amdkfd_ioc_destroy_event(
                 ctx,
-                amdgpu::AmdkfdIocDestroyEventRequest { event_id: args.event_id },
+                amdgpu::AmdkfdIocDestroyEventRequest {
+                    event_id: args.event_id,
+                },
             ) {
                 Ok(_) => 0,
                 Err(err) => errno_to_rc(err.errno()),
@@ -546,7 +554,9 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_set_event_args) };
             match remote.amdkfd_ioc_set_event(
                 ctx,
-                amdgpu::AmdkfdIocSetEventRequest { event_id: args.event_id },
+                amdgpu::AmdkfdIocSetEventRequest {
+                    event_id: args.event_id,
+                },
             ) {
                 Ok(_) => 0,
                 Err(err) => errno_to_rc(err.errno()),
@@ -564,8 +574,13 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                 },
             ) {
                 Ok(resp) => {
-                    if unsafe { copy_apertures_to_user(args.kfd_process_device_apertures_ptr, &resp.apertures) }
-                        .is_err()
+                    if unsafe {
+                        copy_apertures_to_user(
+                            args.kfd_process_device_apertures_ptr,
+                            &resp.apertures,
+                        )
+                    }
+                    .is_err()
                     {
                         return errno_to_rc(libc::EFAULT);
                     }
@@ -605,8 +620,10 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                 let handle = SYNTHETIC_HANDLE_COUNTER.fetch_add(1, Ordering::Relaxed);
                 args.handle = handle;
                 if std::env::var("MIRAGE_INTERCEPTOR_DEBUG").is_ok() {
-                    eprintln!("[mirage_interceptor] ALLOC_MEMORY_OF_GPU USERPTR handled locally: va_addr=0x{:x} size={} handle=0x{:x}",
-                        args.va_addr, args.size, handle);
+                    eprintln!(
+                        "[mirage_interceptor] ALLOC_MEMORY_OF_GPU USERPTR handled locally: va_addr=0x{:x} size={} handle=0x{:x}",
+                        args.va_addr, args.size, handle
+                    );
                 }
                 return 0;
             }
@@ -629,8 +646,10 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                 }
                 Err(err) => {
                     if std::env::var("MIRAGE_INTERCEPTOR_DEBUG").is_ok() {
-                        eprintln!("[mirage_interceptor] ALLOC_MEMORY_OF_GPU failed: va_addr=0x{:x} size={} gpu_id={} flags=0x{:x} err={:?}",
-                            args.va_addr, args.size, args.gpu_id, args.flags, err);
+                        eprintln!(
+                            "[mirage_interceptor] ALLOC_MEMORY_OF_GPU failed: va_addr=0x{:x} size={} gpu_id={} flags=0x{:x} err={:?}",
+                            args.va_addr, args.size, args.gpu_id, args.flags, err
+                        );
                     }
                     errno_to_rc(err.errno())
                 }
@@ -647,7 +666,9 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             }
             match remote.amdkfd_ioc_free_memory_of_gpu(
                 ctx,
-                amdgpu::AmdkfdIocFreeMemoryOfGpuRequest { handle: args.handle },
+                amdgpu::AmdkfdIocFreeMemoryOfGpuRequest {
+                    handle: args.handle,
+                },
             ) {
                 Ok(_) => 0,
                 Err(err) => errno_to_rc(err.errno()),
@@ -744,7 +765,11 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                 Err(err) => {
                     debug_log(&format!(
                         "RUNTIME_ENABLE failed: {} (errno={}), r_debug={} mode_mask=0x{:x} caps=0x{:x}",
-                        err.name(), err.errno(), args.r_debug, args.mode_mask, args.capabilities_mask
+                        err.name(),
+                        err.errno(),
+                        args.r_debug,
+                        args.mode_mask,
+                        args.capabilities_mask
                     ));
                     errno_to_rc(err.errno())
                 }
@@ -757,7 +782,9 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_reset_event_args) };
             match remote.amdkfd_ioc_reset_event(
                 ctx,
-                amdgpu::AmdkfdIocResetEventRequest { event_id: args.event_id },
+                amdgpu::AmdkfdIocResetEventRequest {
+                    event_id: args.event_id,
+                },
             ) {
                 Ok(_) => 0,
                 Err(err) => errno_to_rc(err.errno()),
@@ -829,7 +856,9 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             }
         }
         _ => {
-            debug_log(&format!("passthrough kfd ioctl nr=0x{nr:02x} size={size} -> host_fd={host_fd}"));
+            debug_log(&format!(
+                "passthrough kfd ioctl nr=0x{nr:02x} size={size} -> host_fd={host_fd}"
+            ));
             passthrough_ioctl(host_fd, cmd, arg)
         }
     }
@@ -963,7 +992,9 @@ fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             }
         }
         _ => {
-            debug_log(&format!("passthrough drm ioctl nr=0x{nr:02x} size={size} -> host_fd={host_fd}"));
+            debug_log(&format!(
+                "passthrough drm ioctl nr=0x{nr:02x} size={size} -> host_fd={host_fd}"
+            ));
             passthrough_ioctl(host_fd, cmd, arg)
         }
     }
@@ -999,8 +1030,7 @@ fn passthrough_ioctl(host_fd: c_int, cmd: u32, arg: *mut c_void) -> c_int {
     if p == 0 {
         return errno_to_rc(libc::ENOSYS);
     }
-    let real: fn(c_int, libc::c_ulong, *mut c_void) -> c_int =
-        unsafe { std::mem::transmute(p) };
+    let real: fn(c_int, libc::c_ulong, *mut c_void) -> c_int = unsafe { std::mem::transmute(p) };
     real(host_fd, cmd as libc::c_ulong, arg)
 }
 
@@ -1129,8 +1159,15 @@ fn open_host_path_or_memfd(path: *const c_char, flags: c_int, mode: libc::mode_t
     (fd, true)
 }
 
-fn openat_host_path_or_memfd(dirfd: c_int, path: *const c_char, flags: c_int, mode: libc::mode_t) -> (c_int, bool) {
-    if let Some(real) = next_fn!(openat : fn(d: c_int, p: *const c_char, f: c_int, m: libc::mode_t) -> c_int) {
+fn openat_host_path_or_memfd(
+    dirfd: c_int,
+    path: *const c_char,
+    flags: c_int,
+    mode: libc::mode_t,
+) -> (c_int, bool) {
+    if let Some(real) =
+        next_fn!(openat : fn(d: c_int, p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
+    {
         let fd = unsafe { real(dirfd, path, flags, mode) };
         if fd >= 0 {
             return (fd, false);
@@ -1201,61 +1238,62 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
         if let Some(kind) = DeviceKind::classify(&p)
             && let Some(remote) = remote()
         {
-        debug_log(&format!("open path={} kind={kind:?}", p.display()));
-        let (host_fd, synthetic_host) = open_host_path_or_memfd(path, flags, mode);
-        if host_fd < 0 {
-            return host_fd;
-        }
-        let fake_stat = match stat_request(remote, kind, &p) {
-            Ok(stat) => stat,
-            Err(rc) => {
-                if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
-                    unsafe { real_close(host_fd) };
-                }
-                return rc;
+            debug_log(&format!("open path={} kind={kind:?}", p.display()));
+            let (host_fd, synthetic_host) = open_host_path_or_memfd(path, flags, mode);
+            if host_fd < 0 {
+                return host_fd;
             }
-        };
-        let remote_fd = match remote.syscall_open(
-            current_ctx(),
-            syscalls::SyscallOpenRequest {
-                path: tracked_path_request(kind, &p),
-                flags: flags as u32,
-                mode: mode as u32,
-                class: kind.device_class(),
-            },
-        ) {
-            Ok(resp) => resp.virtual_fd,
-            Err(err) => {
-                if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
-                    unsafe { real_close(host_fd) };
+            let fake_stat = match stat_request(remote, kind, &p) {
+                Ok(stat) => stat,
+                Err(rc) => {
+                    if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
+                        unsafe { real_close(host_fd) };
+                    }
+                    return rc;
                 }
-                return errno_to_rc(err.errno());
-            }
-        };
-        let fd = create_cookie_fd();
-        if fd < 0 {
-            let _ = remote.syscall_close(
+            };
+            let remote_fd = match remote.syscall_open(
                 current_ctx(),
-                syscalls::SyscallCloseRequest {
-                    virtual_fd: remote_fd,
+                syscalls::SyscallOpenRequest {
+                    path: tracked_path_request(kind, &p),
+                    flags: flags as u32,
+                    mode: mode as u32,
+                    class: kind.device_class(),
                 },
-            );
-            if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
-                unsafe { real_close(host_fd) };
+            ) {
+                Ok(resp) => resp.virtual_fd,
+                Err(err) => {
+                    if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
+                        unsafe { real_close(host_fd) };
+                    }
+                    return errno_to_rc(err.errno());
+                }
+            };
+            let fd = create_cookie_fd();
+            if fd < 0 {
+                let _ = remote.syscall_close(
+                    current_ctx(),
+                    syscalls::SyscallCloseRequest {
+                        virtual_fd: remote_fd,
+                    },
+                );
+                if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
+                    unsafe { real_close(host_fd) };
+                }
+                return fd;
             }
+            register_entry(TrackedFd {
+                cookie_fd: fd,
+                remote_fd,
+                host_fd,
+                synthetic_host,
+                kind,
+                path: p,
+                fake_stat,
+            });
             return fd;
         }
-        register_entry(TrackedFd {
-            cookie_fd: fd,
-            remote_fd,
-            host_fd,
-            synthetic_host,
-            kind,
-            path: p,
-            fake_stat,
-        });
-        return fd;
-    }}
+    }
     let Some(real) = next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
     else {
         return errno_to_rc(libc::ENOSYS);
@@ -1388,7 +1426,10 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
             "close cookie_fd={} remote_fd={} host_fd={} kind={:?}",
             entry.cookie_fd, entry.remote_fd, entry.host_fd, entry.kind
         ));
-        if entry.remote_fd >= 0 && !has_other_aliases(entry.remote_fd, fd) && let Some(remote) = remote() {
+        if entry.remote_fd >= 0
+            && !has_other_aliases(entry.remote_fd, fd)
+            && let Some(remote) = remote()
+        {
             let _ = remote.syscall_close(
                 current_ctx(),
                 syscalls::SyscallCloseRequest {
@@ -1396,7 +1437,8 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
                 },
             );
         }
-        if entry.host_fd >= 0 && !has_other_host_aliases(entry.host_fd, fd)
+        if entry.host_fd >= 0
+            && !has_other_host_aliases(entry.host_fd, fd)
             && let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int)
         {
             unsafe { real_close(entry.host_fd) };
@@ -1438,8 +1480,7 @@ pub unsafe extern "C" fn drmIoctl(fd: c_int, request: c_ulong, arg: *mut c_void)
     if let Some(kind) = lookup_fd(fd) {
         return dispatch_tracked_ioctl(kind, fd, request as u32, arg);
     }
-    let Some(real) = next_fn!(drmIoctl : fn(f: c_int, r: c_ulong, a: *mut c_void) -> c_int)
-    else {
+    let Some(real) = next_fn!(drmIoctl : fn(f: c_int, r: c_ulong, a: *mut c_void) -> c_int) else {
         return errno_to_rc(libc::ENOSYS);
     };
     unsafe { real(fd, request, arg) }
@@ -1489,7 +1530,8 @@ pub unsafe extern "C" fn drmCommandWrite(
         );
         return dispatch_tracked_ioctl(DeviceKind::DrmRender, fd, cmd, data);
     }
-    let Some(real) = next_fn!(drmCommandWrite : fn(f: c_int, i: c_ulong, d: *mut c_void, s: c_ulong) -> c_int)
+    let Some(real) =
+        next_fn!(drmCommandWrite : fn(f: c_int, i: c_ulong, d: *mut c_void, s: c_ulong) -> c_int)
     else {
         return errno_to_rc(libc::ENOSYS);
     };
@@ -1507,7 +1549,9 @@ fn register_alias(new_fd: c_int, source_fd: c_int) {
         "alias source_fd={} -> new_fd={} remote_fd={} kind={:?}",
         source_fd, new_fd, entry.remote_fd, entry.kind
     ));
-    if entry.remote_fd >= 0 && let Some(remote) = remote() {
+    if entry.remote_fd >= 0
+        && let Some(remote) = remote()
+    {
         let _ = remote.syscall_dup(
             current_ctx(),
             syscalls::SyscallDupRequest {
@@ -1610,12 +1654,16 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: size_t) -> lib
             fd, entry.remote_fd, entry.host_fd, count
         ));
         if entry.host_fd >= 0 {
-            let Some(real) = next_fn!(read : fn(f: c_int, b: *mut c_void, c: size_t) -> libc::ssize_t) else {
+            let Some(real) =
+                next_fn!(read : fn(f: c_int, b: *mut c_void, c: size_t) -> libc::ssize_t)
+            else {
                 return errno_to_rc(libc::ENOSYS) as libc::ssize_t;
             };
             return unsafe { real(entry.host_fd, buf, count) };
         }
-        if entry.remote_fd >= 0 && let Some(remote) = remote() {
+        if entry.remote_fd >= 0
+            && let Some(remote) = remote()
+        {
             match remote.syscall_read_device(
                 current_ctx(),
                 syscalls::SyscallReadDeviceRequest {
@@ -1640,7 +1688,8 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: size_t) -> lib
             }
         }
     }
-    let Some(real) = next_fn!(read : fn(f: c_int, b: *mut c_void, c: size_t) -> libc::ssize_t) else {
+    let Some(real) = next_fn!(read : fn(f: c_int, b: *mut c_void, c: size_t) -> libc::ssize_t)
+    else {
         return errno_to_rc(libc::ENOSYS) as libc::ssize_t;
     };
     unsafe { real(fd, buf, count) }
@@ -1668,16 +1717,7 @@ pub unsafe extern "C" fn mmap(
         if entry.synthetic_host {
             // No real GPU — allocate anonymous memory so the application
             // gets a valid mapping even without hardware.
-            return unsafe {
-                real(
-                    addr,
-                    length,
-                    prot,
-                    flags | libc::MAP_ANONYMOUS,
-                    -1,
-                    0,
-                )
-            };
+            return unsafe { real(addr, length, prot, flags | libc::MAP_ANONYMOUS, -1, 0) };
         }
         if entry.host_fd >= 0 {
             return unsafe { real(addr, length, prot, flags, entry.host_fd, offset) };
@@ -1773,7 +1813,10 @@ pub unsafe extern "C" fn newfstatat(
     flags: c_int,
 ) -> c_int {
     let is_empty_path = !path.is_null() && unsafe { *path } == 0;
-    if (flags & libc::AT_EMPTY_PATH) != 0 && is_empty_path && let Some(entry) = lookup_entry(dirfd) {
+    if (flags & libc::AT_EMPTY_PATH) != 0
+        && is_empty_path
+        && let Some(entry) = lookup_entry(dirfd)
+    {
         unsafe { fill_fake_stat(statbuf, entry.fake_stat) };
         return 0;
     }

@@ -5,8 +5,8 @@ use mirage_schema::amdgpu::IoctlCtx;
 use mirage_schema::amdgpu_error::{AmdgpuError, AmdgpuResult};
 use mirage_schema::syscalls::{FakeStat, HandleAnyFsSyscalls, HandleFsSyscalls};
 
-use crate::ioctl::from_io_error;
 use crate::RealEmulator;
+use crate::ioctl::from_io_error;
 
 // Filesystem-syscall surface: the real host kernel already provides
 // these. We simply proxy the request back to libc (for `stat`-family
@@ -45,8 +45,11 @@ impl HandleFsSyscalls for RealEmulator {
         _ctx: IoctlCtx,
         request: mirage_schema::syscalls::SyscallReadlinkFdRequest,
     ) -> AmdgpuResult<mirage_schema::syscalls::SyscallReadlinkFdResponse> {
-        let target = std::fs::read_link(PathBuf::from(format!("/proc/self/fd/{}", request.virtual_fd)))
-            .map_err(from_io_error)?;
+        let target = std::fs::read_link(PathBuf::from(format!(
+            "/proc/self/fd/{}",
+            request.virtual_fd
+        )))
+        .map_err(from_io_error)?;
         Ok(mirage_schema::syscalls::SyscallReadlinkFdResponse {
             target: target.to_string_lossy().into_owned(),
         })
@@ -83,7 +86,12 @@ impl HandleFsSyscalls for RealEmulator {
         request: mirage_schema::syscalls::SyscallMunmapRequest,
     ) -> AmdgpuResult<mirage_schema::syscalls::SyscallMunmapResponse> {
         // SAFETY: kernel validates the pointer/length pair.
-        let rc = unsafe { libc::munmap(request.addr as usize as *mut libc::c_void, request.length as usize) };
+        let rc = unsafe {
+            libc::munmap(
+                request.addr as usize as *mut libc::c_void,
+                request.length as usize,
+            )
+        };
         if rc != 0 {
             return Err(from_io_error(std::io::Error::last_os_error()));
         }
@@ -153,7 +161,10 @@ impl HandleFsSyscalls for RealEmulator {
         request: mirage_schema::syscalls::SyscallSysfsReadRequest,
     ) -> AmdgpuResult<mirage_schema::syscalls::SyscallSysfsReadResponse> {
         let mut data = std::fs::read(&request.path).map_err(|error| {
-            error.raw_os_error().map(AmdgpuError::from_errno).unwrap_or(AmdgpuError::NoEntry)
+            error
+                .raw_os_error()
+                .map(AmdgpuError::from_errno)
+                .unwrap_or(AmdgpuError::NoEntry)
         })?;
         data.truncate(request.max_size as usize);
         Ok(mirage_schema::syscalls::SyscallSysfsReadResponse { data })

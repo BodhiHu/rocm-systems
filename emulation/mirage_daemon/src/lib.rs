@@ -70,35 +70,33 @@ struct SessionRecord {
 
 /// Returns the set of simulators that are always available in the daemon.
 fn builtin_simulators() -> BTreeMap<String, SimulatorInfo> {
-    let sims = vec![
-        SimulatorInfo {
-            name: "rocjitsu".to_string(),
-            version: "0.5.0".to_string(),
-            description: Some("AMD CDNA functional simulator".to_string()),
-            supported_gpus: vec![
-                GpuDef {
-                    name: "MI300X".to_string(),
-                    arch: "gfx942".to_string(),
-                    family: GpuFamily::AmdCdna,
-                    description: Some("AMD Instinct MI300X".to_string()),
-                },
-                GpuDef {
-                    name: "MI325X".to_string(),
-                    arch: "gfx942".to_string(),
-                    family: GpuFamily::AmdCdna,
-                    description: Some("AMD Instinct MI325X".to_string()),
-                },
-                GpuDef {
-                    name: "MI350X".to_string(),
-                    arch: "gfx950".to_string(),
-                    family: GpuFamily::AmdCdna,
-                    description: Some("AMD Instinct MI350X".to_string()),
-                },
-            ],
-            supports_custom_gpus: false,
-            supported_modes: vec![SimulatorMode::Functional],
-        },
-    ];
+    let sims = vec![SimulatorInfo {
+        name: "rocjitsu".to_string(),
+        version: "0.5.0".to_string(),
+        description: Some("AMD CDNA functional simulator".to_string()),
+        supported_gpus: vec![
+            GpuDef {
+                name: "MI300X".to_string(),
+                arch: "gfx942".to_string(),
+                family: GpuFamily::AmdCdna,
+                description: Some("AMD Instinct MI300X".to_string()),
+            },
+            GpuDef {
+                name: "MI325X".to_string(),
+                arch: "gfx942".to_string(),
+                family: GpuFamily::AmdCdna,
+                description: Some("AMD Instinct MI325X".to_string()),
+            },
+            GpuDef {
+                name: "MI350X".to_string(),
+                arch: "gfx950".to_string(),
+                family: GpuFamily::AmdCdna,
+                description: Some("AMD Instinct MI350X".to_string()),
+            },
+        ],
+        supports_custom_gpus: false,
+        supported_modes: vec![SimulatorMode::Functional],
+    }];
     sims.into_iter().map(|s| (s.name.clone(), s)).collect()
 }
 
@@ -507,9 +505,16 @@ impl MirageDaemonSessions for InMemoryMirageDaemon {
             active_contexts: 0,
         };
 
-        state
-            .sessions
-            .insert(session.name.clone(), SessionRecord { session, detail, container_handle: None, emulator_socket_container: None, interceptor_path_container: None });
+        state.sessions.insert(
+            session.name.clone(),
+            SessionRecord {
+                session,
+                detail,
+                container_handle: None,
+                emulator_socket_container: None,
+                interceptor_path_container: None,
+            },
+        );
 
         Ok(DashboardCreateSessionReply {
             ok: true,
@@ -622,10 +627,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
             if mirage_real::RealEmulator::hardware_available() {
                 if let Ok(Some(real)) = mirage_real::RealEmulator::detect() {
                     let socket_path = unique_emulator_socket(&session.name);
-                    let server = mirage_remote::EmulatorServer::new(
-                        socket_path.clone(),
-                        real,
-                    );
+                    let server = mirage_remote::EmulatorServer::new(socket_path.clone(), real);
                     let listener = match server.bind() {
                         Ok(l) => l,
                         Err(e) => {
@@ -663,31 +665,26 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                     // and bind-mount it into the container.
                     if let Ok(topo_dir) = create_synthetic_topology(&session.name) {
                         mounts.push(BindMount {
-                            host_path: topo_dir.join("sys/class/kfd")
-                                .to_string_lossy()
-                                .to_string(),
+                            host_path: topo_dir.join("sys/class/kfd").to_string_lossy().to_string(),
                             container_path: "/sys/class/kfd".to_string(),
                             readonly: true,
                         });
                         // hsakmt reads topology from /sys/devices/virtual/kfd/kfd/topology
                         mounts.push(BindMount {
-                            host_path: topo_dir.join("sys/class/kfd/kfd/topology")
+                            host_path: topo_dir
+                                .join("sys/class/kfd/kfd/topology")
                                 .to_string_lossy()
                                 .to_string(),
                             container_path: "/sys/devices/virtual/kfd/kfd/topology".to_string(),
                             readonly: true,
                         });
                         mounts.push(BindMount {
-                            host_path: topo_dir.join("dev/dri")
-                                .to_string_lossy()
-                                .to_string(),
+                            host_path: topo_dir.join("dev/dri").to_string_lossy().to_string(),
                             container_path: "/dev/dri".to_string(),
                             readonly: true,
                         });
                         mounts.push(BindMount {
-                            host_path: topo_dir.join("dev/kfd")
-                                .to_string_lossy()
-                                .to_string(),
+                            host_path: topo_dir.join("dev/kfd").to_string_lossy().to_string(),
                             container_path: "/dev/kfd".to_string(),
                             readonly: true,
                         });
@@ -955,7 +952,10 @@ mod tests {
         assert_eq!(sessions.sessions[0].name.as_deref(), Some("session-a"));
     }
 
-    async fn daemon_with_mock_runtime() -> (InMemoryMirageDaemon, Arc<mirage_container::MockContainerRuntime>) {
+    async fn daemon_with_mock_runtime() -> (
+        InMemoryMirageDaemon,
+        Arc<mirage_container::MockContainerRuntime>,
+    ) {
         let mock = Arc::new(mirage_container::MockContainerRuntime::default());
         let daemon = InMemoryMirageDaemon::with_container_runtime(mock.clone());
 
@@ -1192,10 +1192,7 @@ mod tests {
                 session_name: "vllm-e2e".to_string(),
                 exec: ExecArgs {
                     command: "python".to_string(),
-                    args: vec![
-                        "-c".to_string(),
-                        "print('vLLM is running')".to_string(),
-                    ],
+                    args: vec!["-c".to_string(), "print('vLLM is running')".to_string()],
                     env: vec![],
                 },
             })
@@ -1239,10 +1236,7 @@ fn find_interceptor_so() -> Option<PathBuf> {
             "/../target/debug/libmirage_interceptor.so"
         ))),
     ];
-    candidates
-        .into_iter()
-        .flatten()
-        .find(|p| p.exists())
+    candidates.into_iter().flatten().find(|p| p.exists())
 }
 
 /// Return a unique socket path for an emulator instance.

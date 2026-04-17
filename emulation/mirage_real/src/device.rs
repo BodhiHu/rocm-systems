@@ -143,7 +143,11 @@ impl RealEmulator {
                         let target = format!("renderD{minor}");
                         let nodes = self.render_nodes.lock().unwrap();
                         for node in nodes.iter() {
-                            if node.path.file_name().map_or(false, |n| n == target.as_str()) {
+                            if node
+                                .path
+                                .file_name()
+                                .map_or(false, |n| n == target.as_str())
+                            {
                                 return Some(node.fd.as_raw_fd());
                             }
                         }

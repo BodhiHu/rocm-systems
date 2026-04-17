@@ -59,29 +59,31 @@ impl RemoteEmulator {
     }
 
     fn round_trip(&self, request: WireRequest) -> AmdgpuResult<WireResponse> {
-        THREAD_CONNS.try_with(|cell| {
-            let mut cache = cell.borrow_mut();
-            // Try up to twice: if a cached socket has gone stale (peer
-            // closed, daemon restarted), drop it and reconnect once.
-            for attempt in 0..2 {
-                if cache.get_for(&self.socket_path).is_none() {
-                    match UnixStream::connect(&self.socket_path) {
-                        Ok(stream) => cache.insert(self.socket_path.clone(), stream),
-                        Err(e) => return Err(io_to_amdgpu(&e)),
+        THREAD_CONNS
+            .try_with(|cell| {
+                let mut cache = cell.borrow_mut();
+                // Try up to twice: if a cached socket has gone stale (peer
+                // closed, daemon restarted), drop it and reconnect once.
+                for attempt in 0..2 {
+                    if cache.get_for(&self.socket_path).is_none() {
+                        match UnixStream::connect(&self.socket_path) {
+                            Ok(stream) => cache.insert(self.socket_path.clone(), stream),
+                            Err(e) => return Err(io_to_amdgpu(&e)),
+                        }
+                    }
+                    let stream = cache.get_for(&self.socket_path).expect("just inserted");
+                    match do_round_trip(stream, &request) {
+                        Ok(response) => return Ok(response),
+                        Err(WireError::Io(ref e)) if attempt == 0 && is_retryable_io(e) => {
+                            cache.forget(&self.socket_path);
+                            continue;
+                        }
+                        Err(e) => return Err(wire_to_amdgpu(&e)),
                     }
                 }
-                let stream = cache.get_for(&self.socket_path).expect("just inserted");
-                match do_round_trip(stream, &request) {
-                    Ok(response) => return Ok(response),
-                    Err(WireError::Io(ref e)) if attempt == 0 && is_retryable_io(e) => {
-                        cache.forget(&self.socket_path);
-                        continue;
-                    }
-                    Err(e) => return Err(wire_to_amdgpu(&e)),
-                }
-            }
-            Err(AmdgpuError::Io)
-        }).unwrap_or(Err(AmdgpuError::Io))
+                Err(AmdgpuError::Io)
+            })
+            .unwrap_or(Err(AmdgpuError::Io))
     }
 }
 

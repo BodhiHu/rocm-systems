@@ -29,8 +29,9 @@ fn main() {
         .and_then(|path| path.parent())
         .expect("mirage_uapi lives under emulation/");
 
-    let default_kfd_header = repo_root
-        .join("experimental/rocjitsu/lib/rocjitsu/external_headers/hsa_headers/linux/uapi/kfd_ioctl.h");
+    let default_kfd_header = repo_root.join(
+        "experimental/rocjitsu/lib/rocjitsu/external_headers/hsa_headers/linux/uapi/kfd_ioctl.h",
+    );
     let default_drm_header = manifest_dir.join("include/amdgpu_drm_compat.h");
 
     let kfd_header = env::var("MIRAGE_UAPI_KFD_HEADER")

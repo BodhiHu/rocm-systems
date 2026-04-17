@@ -5,18 +5,16 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use mirage_schema::common::{
-    ExecArgs, HealthStatus, ProfileDef, SessionDef, SimulatorMode, Time,
-};
+use mirage_schema::common::{ExecArgs, HealthStatus, ProfileDef, SessionDef, SimulatorMode, Time};
 use mirage_schema::daemon::{MirageDaemon, MirageDaemonClient, MirageDaemonError};
 use mirage_schema::paths;
 use mirage_schema::socket::{
     BootSessionReply, BootSessionRequest, CreateProfileReply, CreateProfileRequest,
     DashboardCreateSessionReply, DashboardCreateSessionRequest, DashboardDeleteSessionReply,
-    DashboardDeleteSessionRequest, DeleteProfileReply, DeleteProfileRequest,
-    ExecInSessionRequest, GetOverviewRequest, GetSessionDetailRequest, GetSimulatorRequest,
-    HealthRequest, ListProfilesRequest, ListSessionsRequest, ListSimulatorsRequest,
-    ShutdownSessionReply, ShutdownSessionRequest, TimeRequest,
+    DashboardDeleteSessionRequest, DeleteProfileReply, DeleteProfileRequest, ExecInSessionRequest,
+    GetOverviewRequest, GetSessionDetailRequest, GetSimulatorRequest, HealthRequest,
+    ListProfilesRequest, ListSessionsRequest, ListSimulatorsRequest, ShutdownSessionReply,
+    ShutdownSessionRequest, TimeRequest,
 };
 
 #[derive(Debug)]
@@ -510,7 +508,11 @@ async fn run_command(daemon: &dyn MirageDaemon, command: Command) -> CliResult {
                     name: args.name.clone(),
                 })
                 .await?;
-            handle_shutdown_reply(reply, args.json, &format!("session '{}' shut down", args.name))?;
+            handle_shutdown_reply(
+                reply,
+                args.json,
+                &format!("session '{}' shut down", args.name),
+            )?;
         }
     }
 
