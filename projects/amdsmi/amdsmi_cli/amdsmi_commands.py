@@ -1489,6 +1489,17 @@ class AMDSMICommands:
                     e.get_error_info(),
                 )
             try:
+                mem_alloc_mode = amdsmi_interface.amdsmi_get_gpu_compute_partition_mem_alloc_mode(
+                    args.gpu
+                )
+            except amdsmi_exception.AmdSmiLibraryException as e:
+                mem_alloc_mode = "N/A"
+                logging.debug(
+                    "Failed to get compute partition mem alloc mode for gpu %s | %s",
+                    gpu_id,
+                    e.get_error_info(),
+                )
+            try:
                 kfd_info = amdsmi_interface.amdsmi_get_gpu_kfd_info(args.gpu)
                 partition_id = kfd_info["current_partition_id"]
             except amdsmi_exception.AmdSmiLibraryException as e:
@@ -1500,6 +1511,7 @@ class AMDSMICommands:
                 "accelerator_partition": compute_partition,
                 "memory_partition": memory_partition,
                 "partition_id": partition_id,
+                "compute_partition_mem_alloc_mode": mem_alloc_mode,
             }
         if "soc_pstate" in current_platform_args:
             if args.soc_pstate:
@@ -8185,6 +8197,7 @@ class AMDSMICommands:
         ptl_status=None,
         ptl_format=None,
         mem_carveout=None,
+        compute_partition_mem_alloc_mode=None,
     ):
         """Issue reset commands to target gpu(s)
 
@@ -8204,6 +8217,7 @@ class AMDSMICommands:
             process_isolation (int, optional): Value override for args.process_isolation. Defaults to None.
             ptl_status (int, optional): Value override for args.ptl_status. Defaults to None.
             ptl_format(string, optional): Value override for args.ptl_format. Defaults to None.
+            compute_partition_mem_alloc_mode (str, optional): Value override for args.compute_partition_mem_alloc_mode. Defaults to None.
         Raises:
             ValueError: Value error if no gpu value is provided
             IndexError: Index error if gpu list is empty
@@ -8244,6 +8258,8 @@ class AMDSMICommands:
             args.ptl_format = ptl_format
         if mem_carveout is not None:
             args.mem_carveout = mem_carveout
+        if compute_partition_mem_alloc_mode:
+            args.compute_partition_mem_alloc_mode = compute_partition_mem_alloc_mode
 
         # Handle No GPU passed
         if args.gpu == None:
@@ -8281,6 +8297,7 @@ class AMDSMICommands:
                     getattr(args, "ptl_format", None) is not None,
                     getattr(args, "process_isolation", None) is not None,
                     getattr(args, "mem_carveout", None) is not None,
+                    getattr(args, "compute_partition_mem_alloc_mode", None) is not None,
                 ]
             ):
                 command = " ".join(sys.argv[1:])
@@ -8595,6 +8612,30 @@ class AMDSMICommands:
                         self.logger.clear_multiple_devices_output()
                         return
                 self.logger.store_output(args.gpu, "memory_partition", out)
+                self.logger.print_output()
+                self.logger.clear_multiple_devices_output()
+                return
+            if getattr(args, "compute_partition_mem_alloc_mode", None):
+                try:
+                    mode = amdsmi_interface.AmdSmiComputePartitionMemAllocModeType[
+                        args.compute_partition_mem_alloc_mode
+                    ]
+                    amdsmi_interface.amdsmi_set_gpu_compute_partition_mem_alloc_mode(args.gpu, mode)
+                    out = f"Successfully set compute partition memory allocation mode to {args.compute_partition_mem_alloc_mode}"
+                except amdsmi_exception.AmdSmiLibraryException as e:
+                    out = f"[{e.get_error_info(detailed=False)}] Unable to set compute partition memory allocation mode to {args.compute_partition_mem_alloc_mode}"
+                    if e.get_error_code() == amdsmi_interface.amdsmi_wrapper.AMDSMI_STATUS_NO_PERM:
+                        out = "[AMDSMI_STATUS_NO_PERM] Command requires elevation"
+                        self.logger.store_output(args.gpu, "compute_partition_mem_alloc_mode", out)
+                        self.logger.print_output()
+                        self.logger.clear_multiple_devices_output()
+                        raise PermissionError("Command requires elevation") from e
+                    else:
+                        self.logger.store_output(args.gpu, "compute_partition_mem_alloc_mode", out)
+                        self.logger.print_output()
+                        self.logger.clear_multiple_devices_output()
+                        return
+                self.logger.store_output(args.gpu, "compute_partition_mem_alloc_mode", out)
                 self.logger.print_output()
                 self.logger.clear_multiple_devices_output()
                 return
@@ -9246,6 +9287,7 @@ class AMDSMICommands:
             "perf_determinism",
             "compute_partition",
             "memory_partition",
+            "compute_partition_mem_alloc_mode",
             "power_cap",
             "soc_pstate",
             "xgmi_plpd",
@@ -9314,6 +9356,7 @@ class AMDSMICommands:
                         args.perf_determinism is not None,
                         args.compute_partition is not None,
                         args.memory_partition is not None,
+                        getattr(args, "compute_partition_mem_alloc_mode", None) is not None,
                         args.power_cap is not None,
                         args.soc_pstate is not None,
                         args.xgmi_plpd is not None,

@@ -8,6 +8,13 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
 
 ### Added
 
+- **Added compute partition memory allocation mode API**.
+  - New `amd-smi static --partition` output includes `COMPUTE_PARTITION_MEM_ALLOC_MODE` field.
+  - New `amd-smi set --compute-partition-mem-alloc-mode [CAPPING|ALL]` to control memory allocation mode (requires sudo).
+  - New APIs: `amdsmi_get_gpu_compute_partition_mem_alloc_mode()`, `amdsmi_set_gpu_compute_partition_mem_alloc_mode()`.
+  - New enum: `amdsmi_compute_partition_mem_alloc_mode_t` (`AMDSMI_COMPUTE_PARTITION_MEM_ALLOC_CAPPING`, `AMDSMI_COMPUTE_PARTITION_MEM_ALLOC_ALL`).
+  - Reads/writes sysfs: `/sys/class/drm/cardN/device/compute_partition_mem_alloc_mode`.
+
 - **Added VRAM and GTT tuning interface**.  
   - New `amd-smi static --mem-carveout` to view VRAM carveout options.
   - New `amd-smi set --mem-carveout` to change the VRAM carveout (APU).
