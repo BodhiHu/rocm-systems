@@ -79,15 +79,27 @@ void CommandProcessor::init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf,
     }
   }
 
-  // System SGPR: workgroup_id_x after user SGPRs.
-  cu->write_sgpr(sbase + pkt.num_user_sgprs, global_wg_id);
+  // System SGPRs: workgroup_id_{x,y,z} placed sequentially after user SGPRs.
+  // workgroup_id_x is always present. Y and Z are conditional on COMPUTE_PGM_RSRC2
+  // enable bits and only occupy an SGPR slot when enabled.
+  uint32_t sys_idx = pkt.num_user_sgprs;
+  if (pkt.enable_wg_id_y || pkt.enable_wg_id_z) {
+    uint32_t gx = pkt.grid_wgs_x > 0 ? pkt.grid_wgs_x : 1;
+    uint32_t gy = pkt.grid_wgs_y > 0 ? pkt.grid_wgs_y : 1;
+    cu->write_sgpr(sbase + sys_idx++, global_wg_id % gx);
+    if (pkt.enable_wg_id_y)
+      cu->write_sgpr(sbase + sys_idx++, (global_wg_id / gx) % gy);
+    if (pkt.enable_wg_id_z)
+      cu->write_sgpr(sbase + sys_idx++, global_wg_id / (gx * gy));
+  } else {
+    cu->write_sgpr(sbase + sys_idx, global_wg_id);
+  }
 
   util::Logger::vm([&](auto &os) {
     static thread_local uint64_t init_count = 0;
     if (++init_count <= 5 || (init_count % 40) == 0)
-      os << std::format("CP: init_wf #{} cu={} wf={} global_wg={} s[{}]={} kernarg={:#x}",
-                        init_count, cu->name(), wf->wf_id(), global_wg_id,
-                        sbase + pkt.num_user_sgprs, global_wg_id, pkt.kernarg_addr);
+      os << std::format("CP: init_wf #{} cu={} wf={} global_wg={} kernarg={:#x}", init_count,
+                        cu->name(), wf->wf_id(), global_wg_id, pkt.kernarg_addr);
   });
 
   // Workitem ID: v0 = workitem_id_x within the workgroup.
@@ -601,76 +613,6 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
   uint32_t wave_size = cus_.empty() ? 64 : cus_[0]->wf_size();
   uint32_t wfs_per_wg = (wg_size + wave_size - 1) / wave_size;
 
-  // Fast-path: detect ROCR multi-WF blit copy kernels and execute them as memcpy.
-  // The ROCR CopyAligned blit with wfs_per_wg > 1 and kcp == 0x8 (only kernarg_ptr
-  // enabled) copies data from src to dst using a shader loop. For large copies
-  // (e.g., 27MB Tensile code object), this takes minutes in simulation. Detect the
-  // pattern and do a direct memcpy instead.
-  // Kernarg layout (from trace): dw[0:1]=src, dw[2:3]=dst, dw[8]=size_bytes.
-  // Fast-path for ROCR blit copy kernels: detect multi-WF copy dispatches with
-  // large grids and execute as memcpy. Only fires when both src and dst are
-  // host-mapped, and the data pattern matches a CopyAligned blit.
-  // Fast-path for ALL large blit copies (grid >= 4096), including single-WF
-  // CopyAligned blits. These are host-to-GPU or GPU-to-GPU copies dispatched
-  // by ROCR to load code objects and move tensor data.
-  // Fast-path for blit copy kernels with kcp=0x8 (only kernarg_ptr enabled).
-  // Covers both CopyAligned (single-WF, grid=16384) and multi-phase copy
-  // (multi-WF, grid=256+). Excludes Tensile GEMM kernels which have kcp
-  // with additional enable bits or different user_sgpr counts.
-  // Fast-path for blit copy kernels. Matches kcp=0x8 (only kernarg_ptr) with
-  // vgprs <= 24 (blits use 8-24 VGPRs, Tensile GEMM uses 64+).
-  // Fast-path for multi-WF blit copies only: wfs_per_wg >= 4 AND vgprs <= 16
-  // AND signal=0 AND user_sgprs >= 8. This catches the 27MB Tensile code object
-  // copy kernel but not CopyAligned (single-WF) or Tensile GEMM (high vgprs).
-  // Fast-path for ROCR blit copy kernels: replace instruction simulation with
-  // a single memcpy. Detected by: kcp=0x8 (only kernarg_ptr), vgprs 16-24
-  // (copies use 24, fills use 8), and both src/dst are host-mapped.
-  //
-  // ROCR CopyAligned kernarg layout (4-phase copy):
-  //   dw[0:1]   = phase1_src_start    dw[2:3]   = phase1_dst_start
-  //   dw[4:5]   = phase2_src_start    dw[6:7]   = phase2_dst_start
-  //   dw[8:9]   = phase3_src_start    dw[10:11] = phase3_dst_start
-  //   dw[12:13] = phase4_src_start    dw[14:15] = phase4_dst_start
-  //   dw[16:17] = phase4_src_end      dw[18:19] = phase4_dst_end
-  //   dw[20]    = num_workitems
-  //
-  // For the fast-path we compute total_size = phase4_src_end - phase1_src_start
-  // and do a single memcpy from phase1_src to phase1_dst.
-  uint16_t kcp = kd.kernel_code_properties;
-  if (host_accessible && kcp == 0x8 && vgprs >= 16 && vgprs <= 24 &&
-      pkt.kernarg_address != nullptr && memory_) {
-    auto *ka = reinterpret_cast<const uint64_t *>(pkt.kernarg_address);
-    uint64_t src = ka[0];     // phase1_src_start
-    uint64_t dst = ka[1];     // phase1_dst_start
-    uint64_t src_end = ka[8]; // phase4_src_end
-    if (src_end > src && src != 0 && dst != 0) {
-      uint64_t size = src_end - src;
-      bool src_mapped = size <= 256 * 1024 * 1024 && memory_->is_host_mapped(src) &&
-                        memory_->is_host_mapped(src + size - 1);
-      bool dst_mapped = memory_->is_host_mapped(dst) && memory_->is_host_mapped(dst + size - 1);
-      if (src_mapped && dst_mapped) {
-        std::memcpy(reinterpret_cast<void *>(dst), reinterpret_cast<const void *>(src), size);
-        util::Logger::vm("CP: blit fast-path memcpy 0x", std::hex, src, " -> 0x", dst, std::dec,
-                         " size=", size, " signal=0x", std::hex, pkt.completion_signal.handle);
-        // Fire completion signal if present.
-        if (pkt.completion_signal.handle != 0) {
-          constexpr uint32_t SIG_VAL_OFF = 8, MAILBOX_PTR_OFF = 16, EVENT_ID_OFF = 24;
-          auto *val = reinterpret_cast<int64_t *>(pkt.completion_signal.handle + SIG_VAL_OFF);
-          std::atomic_ref<int64_t>(*val).fetch_sub(1, std::memory_order_release);
-          auto mbp = *reinterpret_cast<uint64_t *>(pkt.completion_signal.handle + MAILBOX_PTR_OFF);
-          if (mbp != 0) {
-            auto eid = *reinterpret_cast<uint32_t *>(pkt.completion_signal.handle + EVENT_ID_OFF);
-            std::atomic_ref<uint64_t>(*reinterpret_cast<uint64_t *>(mbp))
-                .store(uint64_t(eid), std::memory_order_release);
-            if (interrupt_cb_)
-              interrupt_cb_(eid);
-          }
-        }
-        return;
-      }
-    }
-  }
-
   uint32_t grid_wgs_x = pkt.workgroup_size_x > 0 ? pkt.grid_size_x / pkt.workgroup_size_x : 1;
   uint32_t grid_wgs_y = pkt.workgroup_size_y > 0 ? pkt.grid_size_y / pkt.workgroup_size_y : 1;
   uint32_t grid_wgs_z = pkt.workgroup_size_z > 0 ? pkt.grid_size_z / pkt.workgroup_size_z : 1;
@@ -697,6 +639,13 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
   }
 
   dp.workgroup_id_offset = workgroup_id_offset_;
+  dp.grid_wgs_x = grid_wgs_x;
+  dp.grid_wgs_y = grid_wgs_y;
+  dp.grid_wgs_z = grid_wgs_z;
+  dp.enable_wg_id_y = AMDHSA_BITS_GET(kd.compute_pgm_rsrc2,
+                                       COMPUTE_PGM_RSRC2_ENABLE_SGPR_WORKGROUP_ID_Y);
+  dp.enable_wg_id_z = AMDHSA_BITS_GET(kd.compute_pgm_rsrc2,
+                                       COMPUTE_PGM_RSRC2_ENABLE_SGPR_WORKGROUP_ID_Z);
   dp.completion_signal = pkt.completion_signal.handle;
   dp.host_signal = host_accessible;
   dp.ordered = host_accessible;
@@ -779,13 +728,7 @@ void CommandProcessor::fetch_from_queue(HwQueue &queue) {
     }
     if (read_idx >= write_idx)
       return;
-    // Acknowledge all SDMA submissions by advancing read_ptr to match write_ptr.
-    // This unblocks ROCR's SDMA queue init. Full SDMA packet parsing is in
-    // process_sdma_ring() for when HSA_ENABLE_SDMA is enabled.
-    if (queue.host_accessible) {
-      std::atomic_ref<uint64_t>(*reinterpret_cast<uint64_t *>(queue.read_ptr_va))
-          .store(write_idx, std::memory_order_release);
-    }
+    process_sdma_ring(queue, read_idx, write_idx);
     return;
   }
 
@@ -1021,11 +964,10 @@ void CommandProcessor::process_sdma_ring(HwQueue &queue, uint64_t read_idx, uint
   auto *ring = reinterpret_cast<const uint32_t *>(queue.ring_base_va);
   uint32_t ring_mask = (queue.ring_size / sizeof(uint32_t)) - 1;
 
-  // SDMA write/read pointers are in DWORD units on GFX9 hardware.
-  // ROCR writes cached_commit_index_ (which accumulates dword-sized packet sizes)
-  // to both *queue_wptr_ and *queue_doorbell_.
-  uint64_t rpos = read_idx;
-  uint64_t wpos = write_idx;
+  // ROCR SDMA queue pointers are in BYTE units. Convert to dword units for
+  // ring buffer indexing (each SDMA packet field is a 32-bit dword).
+  uint64_t rpos = read_idx / sizeof(uint32_t);
+  uint64_t wpos = write_idx / sizeof(uint32_t);
 
   auto dw = [&](uint64_t off) -> uint32_t { return ring[(rpos + off) & ring_mask]; };
 
@@ -1077,17 +1019,17 @@ void CommandProcessor::process_sdma_ring(HwQueue &queue, uint64_t read_idx, uint
       break;
     }
     case sdma::OP_POLL_REGMEM: {
-      // Poll memory until (value & mask) == reference.
-      // In functional mode, the polled value should already be ready
-      // (no pipeline latency). Spin briefly if needed.
+      bool mem_poll = (header >> 31) & 1;
       uint64_t addr = static_cast<uint64_t>(dw(1)) | (static_cast<uint64_t>(dw(2)) << 32);
       uint32_t ref = dw(3);
       uint32_t mask = dw(4);
-      auto *ptr = reinterpret_cast<uint32_t *>(addr);
-      for (int i = 0; i < 10000; ++i) {
-        uint32_t val = std::atomic_ref<uint32_t>(*ptr).load(std::memory_order_acquire);
-        if ((val & mask) == ref)
-          break;
+      if (mem_poll && addr > 0x1000) {
+        auto *ptr = reinterpret_cast<uint32_t *>(addr);
+        for (int i = 0; i < 10000; ++i) {
+          uint32_t val = std::atomic_ref<uint32_t>(*ptr).load(std::memory_order_acquire);
+          if ((val & mask) == ref)
+            break;
+        }
       }
       pkt_dwords = sdma::POLL_REGMEM_SIZE;
       break;
@@ -1155,10 +1097,9 @@ void CommandProcessor::process_sdma_ring(HwQueue &queue, uint64_t read_idx, uint
     rpos += pkt_dwords;
   }
 
-  // Update the read pointer to match what we consumed (in dword units).
   if (queue.host_accessible) {
     std::atomic_ref<uint64_t>(*reinterpret_cast<uint64_t *>(queue.read_ptr_va))
-        .store(rpos, std::memory_order_release);
+        .store(rpos * sizeof(uint32_t), std::memory_order_release);
   }
 }
 

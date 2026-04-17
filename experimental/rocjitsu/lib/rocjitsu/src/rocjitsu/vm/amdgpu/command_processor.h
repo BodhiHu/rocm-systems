@@ -178,6 +178,11 @@ private:
     uint64_t dispatch_ptr = 0;           ///< Host address of the AQL dispatch packet.
     uint64_t queue_ptr = 0;              ///< Host address of the amd_queue_t struct.
     uint32_t workgroup_id_offset = 0;
+    uint32_t grid_wgs_x = 0;
+    uint32_t grid_wgs_y = 1;
+    uint32_t grid_wgs_z = 1;
+    bool enable_wg_id_y = false;
+    bool enable_wg_id_z = false;
     uint64_t completion_signal = 0;    ///< AQL completion signal handle (0 = none).
     uint64_t scratch_backing_addr = 0; ///< GPU VA of scratch backing memory (from amd_queue_t).
     uint32_t private_segment_fixed_size =
