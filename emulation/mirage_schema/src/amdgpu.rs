@@ -267,6 +267,71 @@ simple_enum! {
     }
 }
 
+simple_enum! {
+    /// KFD debug-trap operations.
+    KfdDbgTrapOp : u32 {
+        Enable = 0,
+        Disable = 1,
+        SendRuntimeEvent = 2,
+        SetExceptionsEnabled = 3,
+        SetWaveLaunchOverride = 4,
+        SetWaveLaunchMode = 5,
+        SuspendQueues = 6,
+        ResumeQueues = 7,
+        SetNodeAddressWatch = 8,
+        ClearNodeAddressWatch = 9,
+        SetFlags = 10,
+        QueryDebugEvent = 11,
+        QueryExceptionInfo = 12,
+        GetQueueSnapshot = 13,
+        GetDeviceSnapshot = 14
+    }
+}
+
+simple_enum! {
+    /// Override mode for `KFD_IOC_DBG_TRAP_SET_WAVE_LAUNCH_OVERRIDE`.
+    KfdDbgTrapOverrideMode : u32 {
+        Or = 0,
+        Replace = 1
+    }
+}
+
+simple_enum! {
+    /// Wave launch mode for `KFD_IOC_DBG_TRAP_SET_WAVE_LAUNCH_MODE`.
+    KfdDbgTrapWaveLaunchMode : u32 {
+        Normal = 0,
+        Halt = 1,
+        Debug = 3
+    }
+}
+
+simple_enum! {
+    /// Address-watch mode for `KFD_IOC_DBG_TRAP_SET_NODE_ADDRESS_WATCH`.
+    KfdDbgTrapAddressWatchMode : u32 {
+        Read = 0,
+        Nonread = 1,
+        Atomic = 2,
+        All = 3
+    }
+}
+
+simple_enum! {
+    /// PC-sampling method.
+    KfdPcSampleMethod : u32 {
+        Hosttrap = 1,
+        Stochastic = 2
+    }
+}
+
+simple_enum! {
+    /// PC-sampling interval type.
+    KfdPcSampleType : u32 {
+        TimeUs = 0,
+        ClockCycles = 1,
+        Instructions = 2
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KfdMemoryRange {
     pub va_addr: u64,
@@ -346,6 +411,30 @@ pub struct UserqFenceInfo {
     pub value: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UserqMqd {
+    pub gfx11: Option<UserqMqdGfx11>,
+    pub sdma_gfx11: Option<UserqMqdSdmaGfx11>,
+    pub compute_gfx11: Option<UserqMqdComputeGfx11>,
+    pub raw_data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserqMqdGfx11 {
+    pub shadow_va: u64,
+    pub csa_va: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserqMqdSdmaGfx11 {
+    pub csa_va: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserqMqdComputeGfx11 {
+    pub eop_va: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GemListHandlesEntry {
     pub gem_handle: u32,
@@ -368,15 +457,255 @@ pub struct KfdProcessDeviceAperture {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdMemoryExceptionFailure {
+    pub not_present: u32,
+    pub read_only: u32,
+    pub no_execute: u32,
+    pub imprecise: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdMemoryExceptionData {
+    pub failure: KfdMemoryExceptionFailure,
+    pub va: u64,
+    pub gpu_id: u32,
+    pub error_type: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdHwExceptionData {
+    pub reset_type: u32,
+    pub reset_cause: u32,
+    pub memory_lost: u32,
+    pub gpu_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdSignalEventData {
+    pub last_event_age: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KfdEventData {
     pub event_id: u32,
-    pub last_event_age: u64,
+    pub memory_exception_data: Option<KfdMemoryExceptionData>,
+    pub hw_exception_data: Option<KfdHwExceptionData>,
+    pub signal_event_data: Option<KfdSignalEventData>,
+    pub kfd_event_data_ext: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KfdSvmAttribute {
     pub attr_type: u32,
     pub value: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdCriuDeviceBucket {
+    pub user_gpu_id: u32,
+    pub actual_gpu_id: u32,
+    pub drm_fd: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdCriuBoBucket {
+    pub addr: u64,
+    pub size: u64,
+    pub offset: u64,
+    pub restored_offset: u64,
+    pub gpu_id: u32,
+    pub alloc_flags: u32,
+    pub dmabuf_fd: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapEnableArgs {
+    pub exception_mask: u64,
+    pub rinfo_size: u32,
+    pub dbg_fd: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapSendRuntimeEventArgs {
+    pub exception_mask: u64,
+    pub gpu_id: u32,
+    pub queue_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapSetExceptionsEnabledArgs {
+    pub exception_mask: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapSetWaveLaunchOverrideArgs {
+    pub override_mode: KfdDbgTrapOverrideMode,
+    pub enable_mask: u32,
+    pub support_request_mask: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapSetWaveLaunchModeArgs {
+    pub launch_mode: KfdDbgTrapWaveLaunchMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapSuspendQueuesArgs {
+    pub exception_mask: u64,
+    pub queue_ids: Vec<u32>,
+    pub grace_period: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapResumeQueuesArgs {
+    pub queue_ids: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapSetNodeAddressWatchArgs {
+    pub address: u64,
+    pub mode: KfdDbgTrapAddressWatchMode,
+    pub mask: u32,
+    pub gpu_id: u32,
+    pub id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapClearNodeAddressWatchArgs {
+    pub gpu_id: u32,
+    pub id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapSetFlagsArgs {
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapQueryDebugEventArgs {
+    pub exception_mask: u64,
+    pub gpu_id: u32,
+    pub queue_id: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgTrapQueryExceptionInfoArgs {
+    pub info: Vec<u8>,
+    pub info_size: u32,
+    pub source_id: u32,
+    pub exception_code: u32,
+    pub clear_exception: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdQueueSnapshotEntry {
+    pub exception_status: u64,
+    pub ring_base_address: u64,
+    pub write_pointer_address: u64,
+    pub read_pointer_address: u64,
+    pub ctx_save_restore_address: u64,
+    pub queue_id: u32,
+    pub gpu_id: u32,
+    pub ring_size: u32,
+    pub queue_type: u32,
+    pub ctx_save_restore_area_size: u32,
+    pub reserved: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdDbgDeviceInfoEntry {
+    pub exception_status: u64,
+    pub lds_base: u64,
+    pub lds_limit: u64,
+    pub scratch_base: u64,
+    pub scratch_limit: u64,
+    pub gpuvm_base: u64,
+    pub gpuvm_limit: u64,
+    pub gpu_id: u32,
+    pub location_id: u32,
+    pub vendor_id: u32,
+    pub device_id: u32,
+    pub revision_id: u32,
+    pub subsystem_vendor_id: u32,
+    pub subsystem_device_id: u32,
+    pub fw_version: u32,
+    pub gfx_target_version: u32,
+    pub simd_count: u32,
+    pub max_waves_per_simd: u32,
+    pub array_count: u32,
+    pub simd_arrays_per_engine: u32,
+    pub num_xcc: u32,
+    pub capability: u32,
+    pub debug_prop: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KfdDbgTrapQueueSnapshotArgs {
+    pub exception_mask: u64,
+    pub entries: Vec<KfdQueueSnapshotEntry>,
+    pub num_queues: u32,
+    pub entry_size: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KfdDbgTrapDeviceSnapshotArgs {
+    pub exception_mask: u64,
+    pub entries: Vec<KfdDbgDeviceInfoEntry>,
+    pub num_devices: u32,
+    pub entry_size: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KfdDbgTrapArgs {
+    pub enable: Option<KfdDbgTrapEnableArgs>,
+    pub send_runtime_event: Option<KfdDbgTrapSendRuntimeEventArgs>,
+    pub set_exceptions_enabled: Option<KfdDbgTrapSetExceptionsEnabledArgs>,
+    pub launch_override: Option<KfdDbgTrapSetWaveLaunchOverrideArgs>,
+    pub launch_mode: Option<KfdDbgTrapSetWaveLaunchModeArgs>,
+    pub suspend_queues: Option<KfdDbgTrapSuspendQueuesArgs>,
+    pub resume_queues: Option<KfdDbgTrapResumeQueuesArgs>,
+    pub set_node_address_watch: Option<KfdDbgTrapSetNodeAddressWatchArgs>,
+    pub clear_node_address_watch: Option<KfdDbgTrapClearNodeAddressWatchArgs>,
+    pub set_flags: Option<KfdDbgTrapSetFlagsArgs>,
+    pub query_debug_event: Option<KfdDbgTrapQueryDebugEventArgs>,
+    pub query_exception_info: Option<KfdDbgTrapQueryExceptionInfoArgs>,
+    pub queue_snapshot: Option<KfdDbgTrapQueueSnapshotArgs>,
+    pub device_snapshot: Option<KfdDbgTrapDeviceSnapshotArgs>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdPcSampleInfo {
+    pub interval: u64,
+    pub interval_min: u64,
+    pub interval_max: u64,
+    pub flags: u64,
+    pub method: KfdPcSampleMethod,
+    pub sample_type: KfdPcSampleType,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KfdPcSampleArgs {
+    pub sample_info: Vec<KfdPcSampleInfo>,
+    pub num_sample_info: u32,
+    pub op: KfdPcSampleOp,
+    pub gpu_id: u32,
+    pub trace_id: u32,
+    pub flags: u32,
+    pub reserved: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KfdPmcSettings {
+    pub gpu_id: u32,
+    pub lock: u32,
+    pub perfcount_enable: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KfdProfilerArgs {
+    pub pc_sample: Option<KfdPcSampleArgs>,
+    pub pmc: Option<KfdPmcSettings>,
+    pub version: Option<u32>,
 }
 
 ioctl_dsl! {
@@ -482,7 +811,7 @@ ioctl_dsl! {
             timeout : u32,
         } => {
             wait_result : u32,
-            events : Vec<u8>,
+            events : Vec<KfdEventData>,
         };
 
         /// `AMDKFD_IOC_DBG_REGISTER_DEPRECATED` — deprecated debugger register.
@@ -655,8 +984,8 @@ ioctl_dsl! {
             num_devices : u32,
             num_bos : u32,
             num_objects : u32,
-            devices : Vec<u8>,
-            bos : Vec<u8>,
+            devices : Vec<KfdCriuDeviceBucket>,
+            bos : Vec<KfdCriuBoBucket>,
             priv_data : Vec<u8>,
         } => {
             num_devices : u32,
@@ -664,8 +993,8 @@ ioctl_dsl! {
             num_objects : u32,
             priv_data_size : u64,
             pid : u32,
-            devices : Vec<u8>,
-            bos : Vec<u8>,
+            devices : Vec<KfdCriuDeviceBucket>,
+            bos : Vec<KfdCriuBoBucket>,
             priv_data : Vec<u8>,
         };
 
@@ -691,9 +1020,11 @@ ioctl_dsl! {
 
         /// `AMDKFD_IOC_DBG_TRAP` — debugger trap interface.
         AMDKFD_IOC_DBG_TRAP(0x26) {
-            raw_args : Vec<u8>,
+            pid : u32,
+            op : KfdDbgTrapOp,
+            args : KfdDbgTrapArgs,
         } => {
-            raw_args : Vec<u8>,
+            args : KfdDbgTrapArgs,
         };
 
         /// `AMDKFD_IOC_CREATE_PROCESS` — create secondary KFD context.
@@ -704,7 +1035,7 @@ ioctl_dsl! {
         /// `AMDKFD_IOC_IPC_IMPORT_HANDLE` — import an IPC share handle.
         AMDKFD_IOC_IPC_IMPORT_HANDLE(0x80) {
             va_addr : u64,
-            share_handle : Vec<u8>,
+            share_handle : [u32; 4],
             gpu_id : u32,
         } => {
             handle : u64,
@@ -718,7 +1049,7 @@ ioctl_dsl! {
             gpu_id : u32,
             flags : u32,
         } => {
-            share_handle : Vec<u8>,
+            share_handle : [u32; 4],
         };
 
         /// `AMDKFD_IOC_CROSS_MEMORY_COPY` — copy between VM ranges of two processes.
@@ -746,17 +1077,17 @@ ioctl_dsl! {
 
         /// `AMDKFD_IOC_PC_SAMPLE` — program counter sampling interface.
         AMDKFD_IOC_PC_SAMPLE(0x85) {
-            raw_args : Vec<u8>,
+            args : KfdPcSampleArgs,
         } => {
-            raw_args : Vec<u8>,
+            args : KfdPcSampleArgs,
         };
 
         /// `AMDKFD_IOC_PROFILER` — per-device profiler control.
         AMDKFD_IOC_PROFILER(0x86) {
             op : KfdProfilerOp,
-            raw_args : Vec<u8>,
+            args : KfdProfilerArgs,
         } => {
-            raw_args : Vec<u8>,
+            args : KfdProfilerArgs,
         };
 
         /// `AMDKFD_IOC_AIS_OP` — AMD Infinity Storage direct I/O.
@@ -841,11 +1172,13 @@ ioctl_dsl! {
             op : GemMetadataOp,
             flags : u64,
             tiling_info : u64,
-            data : Vec<u8>,
+            data_size_bytes : u32,
+            data : Vec<u32>,
         } => {
             flags : u64,
             tiling_info : u64,
-            data : Vec<u8>,
+            data_size_bytes : u32,
+            data : Vec<u32>,
         };
 
         /// `DRM_AMDGPU_GEM_WAIT_IDLE` — wait for a BO to become idle.
@@ -951,7 +1284,8 @@ ioctl_dsl! {
             queue_size : u64,
             rptr_va : u64,
             wptr_va : u64,
-            mqd : Vec<u8>,
+            mqd : UserqMqd,
+            mqd_size : u64,
         } => {
             queue_id : u32,
         };
