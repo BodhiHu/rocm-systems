@@ -52,12 +52,12 @@ impl ForwardDrmIoctl for VersionEmulator {
     }
 }
 
-impl mirage_schema::syscalls::ForwardFsSyscalls for VersionEmulator {
-    fn forward_fs_syscall(
+impl mirage_schema::syscalls::ForwardDeviceSyscalls for VersionEmulator {
+    fn forward_device_syscall(
         &self,
         _ctx: IoctlCtx,
-        _request: mirage_schema::syscalls::AnyFsSyscallRequest,
-    ) -> AmdgpuResult<mirage_schema::syscalls::AnyFsSyscallResponse> {
+        _request: mirage_schema::syscalls::AnyDeviceSyscallRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::AnyDeviceSyscallResponse> {
         Err(AmdgpuError::NoSys)
     }
 }
@@ -66,7 +66,15 @@ impl mirage_schema::amdgpu::HandleAnyKfdIoctl for VersionEmulator {}
 
 impl mirage_schema::amdgpu::HandleAnyDrmIoctl for VersionEmulator {}
 
-impl mirage_schema::syscalls::HandleAnyFsSyscalls for VersionEmulator {}
+impl mirage_schema::syscalls::HandleAnyDeviceSyscalls for VersionEmulator {}
+
+impl mirage_schema::topology::ProvideTopology for VersionEmulator {
+    fn get_topology(&self) -> AmdgpuResult<mirage_schema::topology::Topology> {
+        Ok(mirage_schema::topology::Topology {
+            files: std::collections::BTreeMap::new(),
+        })
+    }
+}
 
 fn unique_socket() -> std::path::PathBuf {
     let nanos = std::time::SystemTime::now()

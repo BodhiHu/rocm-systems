@@ -15,7 +15,8 @@ use mirage_schema::amdgpu::{
     AnyDrmIoctlRequest, AnyDrmIoctlResponse, AnyKfdIoctlRequest, AnyKfdIoctlResponse, IoctlCtx,
 };
 use mirage_schema::amdgpu_error::AmdgpuError;
-use mirage_schema::syscalls::{AnyFsSyscallRequest, AnyFsSyscallResponse};
+use mirage_schema::syscalls::{AnyDeviceSyscallRequest, AnyDeviceSyscallResponse};
+use mirage_schema::topology::Topology;
 
 /// Wire-level result so a remote error round-trips as data rather than
 /// causing a transport-level failure.
@@ -35,11 +36,13 @@ pub enum WireRequest {
         ctx: IoctlCtx,
         request: AnyDrmIoctlRequest,
     },
-    /// A non-ioctl filesystem syscall (open/close/stat/mmap/…).
-    Fs {
+    /// A non-ioctl device syscall (open/close/stat/mmap/…).
+    Device {
         ctx: IoctlCtx,
-        request: AnyFsSyscallRequest,
+        request: AnyDeviceSyscallRequest,
     },
+    /// Fetch the entire KFD sysfs topology in one shot.
+    GetTopology,
     /// Simple liveness probe — server echoes a [`WireResponse::Pong`].
     Ping,
 }
@@ -49,7 +52,8 @@ pub enum WireRequest {
 pub enum WireResponse {
     Kfd(WireResult<AnyKfdIoctlResponse>),
     Drm(WireResult<AnyDrmIoctlResponse>),
-    Fs(WireResult<AnyFsSyscallResponse>),
+    Device(WireResult<AnyDeviceSyscallResponse>),
+    Topology(WireResult<Topology>),
     Pong,
 }
 

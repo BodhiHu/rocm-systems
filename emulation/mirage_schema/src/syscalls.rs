@@ -8,15 +8,18 @@
 //! set of glibc entry points listed below. Each entry here documents:
 //!
 //! * the matching POSIX / glibc call,
-//! * which intercepted paths trigger it (GPU device node, sysfs
-//!   topology, `/proc/self/fd/N`, …),
+//! * which intercepted paths trigger it (GPU device node,
+//!   `/proc/self/fd/N`, …),
 //! * what the shim does with the result (e.g. install a memfd-backed
-//!   cookie fd, fake a character-device `stat`, proxy a sysfs read).
+//!   cookie fd, fake a character-device `stat`).
 //!
-//! Every syscall goes through the [`HandleFsSyscalls`] trait exactly
+//! Every syscall goes through the [`HandleDeviceSyscalls`] trait exactly
 //! the way every ioctl goes through [`HandleKfdIoctl`](crate::amdgpu::HandleKfdIoctl)
 //! / [`HandleDrmIoctl`](crate::amdgpu::HandleDrmIoctl). A `Remote*`
-//! proxy forwards by implementing [`ForwardFsSyscalls`].
+//! proxy forwards by implementing [`ForwardDeviceSyscalls`].
+//!
+//! Topology reads (files under `/sys/class/kfd/kfd/topology/`) are
+//! handled separately via [`ProvideTopology`](crate::topology::ProvideTopology).
 //!
 //! # Paths that drive interposition
 //!
@@ -25,7 +28,6 @@
 //! | `/dev/kfd`                                   | [`DeviceClass::Kfd`]    |
 //! | `/dev/dri/renderD<N>`                        | [`DeviceClass::DrmRender`] |
 //! | `/dev/dri/card<N>`                           | [`DeviceClass::DrmCard` ] |
-//! | `/sys/class/kfd/kfd/topology/**`             | [`DeviceClass::SysfsTopology`] |
 //! | `/proc/self/fd/<N>` for a tracked `N`        | handled by readlink     |
 
 use serde::{Deserialize, Serialize};
@@ -44,8 +46,6 @@ pub enum DeviceClass {
     DrmRender,
     /// `/dev/dri/card<N>` — the AMDGPU DRM primary node.
     DrmCard,
-    /// A file under `/sys/class/kfd/kfd/topology/`.
-    SysfsTopology,
 }
 
 /// Subset of `struct stat` fields the shim actually fills. Keeping the
@@ -77,7 +77,7 @@ pub type MmapFlags = u32;
 pub type OpenFlags = u32;
 
 syscall_dsl! {
-    fs {
+    device {
         /// `open(const char*, int, mode_t)` / `open64` / `openat` — when
         /// the path matches [`DeviceClass::Kfd`], [`DeviceClass::DrmRender`],
         /// or [`DeviceClass::DrmCard`]. The shim allocates a local
@@ -92,19 +92,6 @@ syscall_dsl! {
             class : DeviceClass,
         } => {
             virtual_fd : i32,
-        };
-
-        /// Counterpart to [`SyscallOpen`] on a sysfs file under
-        /// `/sys/class/kfd/kfd/topology`. The server responds with the
-        /// file's full contents; the shim installs that content in a
-        /// fresh `memfd` so `read`, `lseek`, `mmap` on it behave like
-        /// the real sysfs entry. Mirrors `do_sysfs_proxy_open` /
-        /// `DispatchSysfsRead`.
-        SyscallSysfsRead {
-            path : String,
-            max_size : u32,
-        } => {
-            data : Vec<u8>,
         };
 
         /// `close(int)` — forwarded so the server can drop its
@@ -191,8 +178,8 @@ syscall_dsl! {
 
         /// `read(fd, buf, count)` on a tracked GPU fd. DRM event
         /// files return an empty event stream in the simulator; sysfs
-        /// reads go through [`SyscallSysfsRead`] and never reach this
-        /// path. Mirrors the `read` interposer.
+        /// reads go through [`ProvideTopology`](crate::topology::ProvideTopology)
+        /// and never reach this path. Mirrors the `read` interposer.
         SyscallReadDevice {
             virtual_fd : i32,
             count : u64,

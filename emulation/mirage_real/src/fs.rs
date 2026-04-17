@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
 use std::ffi::CString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use mirage_schema::amdgpu::IoctlCtx;
 use mirage_schema::amdgpu_error::{AmdgpuError, AmdgpuResult};
-use mirage_schema::syscalls::{FakeStat, HandleAnyFsSyscalls, HandleFsSyscalls};
+use mirage_schema::syscalls::{FakeStat, HandleAnyDeviceSyscalls, HandleDeviceSyscalls};
+use mirage_schema::topology::{ProvideTopology, Topology};
 
 use crate::RealEmulator;
 use crate::ioctl::from_io_error;
@@ -12,7 +14,7 @@ use crate::ioctl::from_io_error;
 // these. We simply proxy the request back to libc (for `stat`-family
 // and `access`) or report `NoSys` for the ones that only make sense
 // against the *virtual* fd table a `RemoteEmulator` server would own.
-impl HandleFsSyscalls for RealEmulator {
+impl HandleDeviceSyscalls for RealEmulator {
     fn syscall_open(
         &self,
         _ctx: IoctlCtx,
@@ -154,24 +156,41 @@ impl HandleFsSyscalls for RealEmulator {
         let rc = unsafe { libc::access(c.as_ptr(), request.mode as i32) };
         Ok(mirage_schema::syscalls::SyscallAccessResponse { allowed: rc == 0 })
     }
+}
 
-    fn syscall_sysfs_read(
-        &self,
-        _ctx: IoctlCtx,
-        request: mirage_schema::syscalls::SyscallSysfsReadRequest,
-    ) -> AmdgpuResult<mirage_schema::syscalls::SyscallSysfsReadResponse> {
-        let mut data = std::fs::read(&request.path).map_err(|error| {
-            error
-                .raw_os_error()
-                .map(AmdgpuError::from_errno)
-                .unwrap_or(AmdgpuError::NoEntry)
-        })?;
-        data.truncate(request.max_size as usize);
-        Ok(mirage_schema::syscalls::SyscallSysfsReadResponse { data })
+impl HandleAnyDeviceSyscalls for RealEmulator {}
+
+impl ProvideTopology for RealEmulator {
+    fn get_topology(&self) -> AmdgpuResult<Topology> {
+        let root = Path::new("/sys/class/kfd/kfd/topology");
+        let mut files = BTreeMap::new();
+        read_topology_recursive(root, root, &mut files);
+        Ok(Topology { files })
     }
 }
 
-impl HandleAnyFsSyscalls for RealEmulator {}
+/// Recursively read all files under `dir` into the map, keyed by their
+/// path relative to `root`.
+fn read_topology_recursive(root: &Path, dir: &Path, files: &mut BTreeMap<String, Vec<u8>>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if ft.is_dir() {
+            read_topology_recursive(root, &path, files);
+        } else if ft.is_file() {
+            if let Ok(data) = std::fs::read(&path) {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    files.insert(rel.to_string_lossy().into_owned(), data);
+                }
+            }
+        }
+    }
+}
 
 fn stat_real_device(path: &str) -> AmdgpuResult<FakeStat> {
     let c = CString::new(path).map_err(|_| AmdgpuError::Invalid)?;

@@ -14,9 +14,10 @@
 //!   socket to a daemon holding any other `Emulator`.
 
 use crate::amdgpu::{HandleAnyDrmIoctl, HandleAnyKfdIoctl, HandleDrmIoctl, HandleKfdIoctl};
-use crate::syscalls::{HandleAnyFsSyscalls, HandleFsSyscalls};
+use crate::syscalls::{HandleAnyDeviceSyscalls, HandleDeviceSyscalls};
+use crate::topology::ProvideTopology;
 
-/// Combined KFD + DRM + filesystem-syscall emulator.
+/// Combined KFD + DRM + device-syscall + topology emulator.
 ///
 /// Supertraits:
 ///
@@ -24,9 +25,10 @@ use crate::syscalls::{HandleAnyFsSyscalls, HandleFsSyscalls};
 ///   subsystems defined via [`ioctl_dsl!`](crate::ioctl_dsl).
 /// * [`HandleAnyKfdIoctl`] / [`HandleAnyDrmIoctl`] — dispatch helpers,
 ///   callable on `&dyn Emulator`.
-/// * [`HandleFsSyscalls`] / [`HandleAnyFsSyscalls`] — open/close/stat
+/// * [`HandleDeviceSyscalls`] / [`HandleAnyDeviceSyscalls`] — open/close/stat
 ///   family and mmap, defined via
 ///   [`syscall_dsl!`](crate::syscall_dsl).
+/// * [`ProvideTopology`] — single-call KFD sysfs topology provider.
 ///
 /// Implementors must use interior mutability and be `Send + Sync` so
 /// they can be shared across threads.
@@ -35,8 +37,9 @@ pub trait Emulator:
     + HandleDrmIoctl
     + HandleAnyKfdIoctl
     + HandleAnyDrmIoctl
-    + HandleFsSyscalls
-    + HandleAnyFsSyscalls
+    + HandleDeviceSyscalls
+    + HandleAnyDeviceSyscalls
+    + ProvideTopology
     + Send
     + Sync
 {
@@ -47,8 +50,9 @@ impl<T> Emulator for T where
         + HandleDrmIoctl
         + HandleAnyKfdIoctl
         + HandleAnyDrmIoctl
-        + HandleFsSyscalls
-        + HandleAnyFsSyscalls
+        + HandleDeviceSyscalls
+        + HandleAnyDeviceSyscalls
+        + ProvideTopology
         + Send
         + Sync
 {

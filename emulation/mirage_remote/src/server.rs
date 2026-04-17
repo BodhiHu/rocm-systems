@@ -108,8 +108,9 @@ fn dispatch(emulator: &dyn Emulator, request: WireRequest) -> WireResponse {
         WireRequest::Drm { ctx, request } => {
             WireResponse::Drm(emulator.handle_any_drm_ioctl(ctx, request))
         }
-        WireRequest::Fs { ctx, request } => {
-            WireResponse::Fs(emulator.handle_any_fs_syscall(ctx, request))
+        WireRequest::Device { ctx, request } => {
+            WireResponse::Device(emulator.handle_any_device_syscall(ctx, request))
         }
+        WireRequest::GetTopology => WireResponse::Topology(emulator.get_topology()),
     }
 }

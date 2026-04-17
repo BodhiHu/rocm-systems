@@ -37,7 +37,7 @@ use libc::{O_CLOEXEC, size_t};
 use mirage_remote::RemoteEmulator;
 use mirage_schema::amdgpu::{self, HandleDrmIoctl, HandleKfdIoctl, IoctlCtx};
 use mirage_schema::amdgpu_error::AmdgpuError;
-use mirage_schema::syscalls::{self, DeviceClass, FakeStat, HandleFsSyscalls};
+use mirage_schema::syscalls::{self, DeviceClass, FakeStat, HandleDeviceSyscalls};
 use mirage_uapi::{drm, ioc as uapi_ioc, kfd};
 
 /// Path to the KFD char device.
@@ -61,6 +61,60 @@ fn remote() -> Option<&'static RemoteEmulator> {
             std::env::var_os(MIRAGE_SOCKET_ENV).map(|s| RemoteEmulator::new(PathBuf::from(s)))
         })
         .as_ref()
+}
+
+/// Lazily cached KFD sysfs topology, fetched once from the daemon.
+static TOPOLOGY: OnceLock<Option<mirage_schema::topology::Topology>> = OnceLock::new();
+
+/// Sysfs topology prefix the interceptor recognises.
+const SYSFS_TOPO_PREFIX: &str = "/sys/class/kfd/kfd/topology/";
+
+/// Alternative sysfs path that hsakmt reads from.
+const SYSFS_TOPO_PREFIX_ALT: &str = "/sys/devices/virtual/kfd/kfd/topology/";
+
+fn cached_topology() -> Option<&'static mirage_schema::topology::Topology> {
+    TOPOLOGY
+        .get_or_init(|| {
+            use mirage_schema::topology::ProvideTopology;
+            remote().and_then(|r| r.get_topology().ok())
+        })
+        .as_ref()
+}
+
+/// Look up a sysfs topology file by its absolute path, returning the
+/// file contents from the cached topology if present.
+fn topology_lookup(path: &str) -> Option<&'static [u8]> {
+    let rel = path
+        .strip_prefix(SYSFS_TOPO_PREFIX)
+        .or_else(|| path.strip_prefix(SYSFS_TOPO_PREFIX_ALT))?;
+    let topo = cached_topology()?;
+    topo.files.get(rel).map(|v| v.as_slice())
+}
+
+/// Returns `true` if the path is under the KFD sysfs topology tree.
+fn is_topology_path(path: &str) -> bool {
+    path.starts_with(SYSFS_TOPO_PREFIX) || path.starts_with(SYSFS_TOPO_PREFIX_ALT)
+}
+
+/// Create a memfd pre-filled with `data` so that subsequent reads
+/// see the cached topology file contents.
+fn memfd_from_topology_data(data: &[u8]) -> c_int {
+    let name = CString::new("mirage-topo").unwrap();
+    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC as u32) };
+    if fd < 0 {
+        return -1;
+    }
+    if !data.is_empty() {
+        let written =
+            unsafe { libc::write(fd, data.as_ptr() as *const c_void, data.len()) };
+        if written < 0 {
+            unsafe { libc::close(fd) };
+            return -1;
+        }
+        // Rewind to the beginning so reads start from offset 0.
+        unsafe { libc::lseek(fd, 0, libc::SEEK_SET) };
+    }
+    fd
 }
 
 /// Device class a tracked fd refers to.
@@ -1235,6 +1289,17 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
         if ps.contains("dri") || ps.contains("kfd") || ps.contains("render") || ps.contains("gpu") {
             debug_log(&format!("open ALL path={}", p.display()));
         }
+        // Serve topology files from cached Topology instead of hitting
+        // the filesystem or forwarding to the daemon.
+        if is_topology_path(ps) {
+            if let Some(data) = topology_lookup(ps) {
+                let fd = memfd_from_topology_data(data);
+                if fd >= 0 {
+                    return fd;
+                }
+            }
+            // Fall through to real open (may hit bind-mounted topology).
+        }
         if let Some(kind) = DeviceKind::classify(&p)
             && let Some(remote) = remote()
         {
@@ -1313,6 +1378,15 @@ pub unsafe extern "C" fn openat(
         let ps = p.to_str().unwrap_or("");
         if ps.contains("dri") || ps.contains("kfd") || ps.contains("render") || ps.contains("gpu") {
             debug_log(&format!("openat ALL dirfd={dirfd} path={}", p.display()));
+        }
+        // Serve topology files from cached Topology.
+        if dirfd == libc::AT_FDCWD && is_topology_path(ps) {
+            if let Some(data) = topology_lookup(ps) {
+                let fd = memfd_from_topology_data(data);
+                if fd >= 0 {
+                    return fd;
+                }
+            }
         }
     }
     if dirfd == libc::AT_FDCWD

@@ -187,14 +187,23 @@ impl mirage_schema::amdgpu::ForwardDrmIoctl for RemoteEmulator {
     }
 }
 
-impl mirage_schema::syscalls::ForwardFsSyscalls for RemoteEmulator {
-    fn forward_fs_syscall(
+impl mirage_schema::syscalls::ForwardDeviceSyscalls for RemoteEmulator {
+    fn forward_device_syscall(
         &self,
         ctx: IoctlCtx,
-        request: mirage_schema::syscalls::AnyFsSyscallRequest,
-    ) -> AmdgpuResult<mirage_schema::syscalls::AnyFsSyscallResponse> {
-        match self.round_trip(WireRequest::Fs { ctx, request })? {
-            WireResponse::Fs(result) => result,
+        request: mirage_schema::syscalls::AnyDeviceSyscallRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::AnyDeviceSyscallResponse> {
+        match self.round_trip(WireRequest::Device { ctx, request })? {
+            WireResponse::Device(result) => result,
+            _ => Err(AmdgpuError::Invalid),
+        }
+    }
+}
+
+impl mirage_schema::topology::ProvideTopology for RemoteEmulator {
+    fn get_topology(&self) -> AmdgpuResult<mirage_schema::topology::Topology> {
+        match self.round_trip(WireRequest::GetTopology)? {
+            WireResponse::Topology(result) => result,
             _ => Err(AmdgpuError::Invalid),
         }
     }
@@ -204,4 +213,4 @@ impl mirage_schema::amdgpu::HandleAnyKfdIoctl for RemoteEmulator {}
 
 impl mirage_schema::amdgpu::HandleAnyDrmIoctl for RemoteEmulator {}
 
-impl mirage_schema::syscalls::HandleAnyFsSyscalls for RemoteEmulator {}
+impl mirage_schema::syscalls::HandleAnyDeviceSyscalls for RemoteEmulator {}

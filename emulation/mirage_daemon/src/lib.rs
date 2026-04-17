@@ -626,6 +626,11 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
             // Try to start a real-hardware-backed emulator server.
             if mirage_real::RealEmulator::hardware_available() {
                 if let Ok(Some(real)) = mirage_real::RealEmulator::detect() {
+                    // Fetch the topology from the emulator before moving it
+                    // into the server (the server takes ownership).
+                    use mirage_schema::topology::ProvideTopology;
+                    let topology = real.get_topology().ok();
+
                     let socket_path = unique_emulator_socket(&session.name);
                     let server = mirage_remote::EmulatorServer::new(socket_path.clone(), real);
                     let listener = match server.bind() {
@@ -661,33 +666,34 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
 
                     // Create synthetic sysfs topology and device stubs so
                     // HIP discovers the simulated GPUs without real device
-                    // nodes.  We snapshot the host's sysfs into a temp dir
-                    // and bind-mount it into the container.
-                    if let Ok(topo_dir) = create_synthetic_topology(&session.name) {
-                        mounts.push(BindMount {
-                            host_path: topo_dir.join("sys/class/kfd").to_string_lossy().to_string(),
-                            container_path: "/sys/class/kfd".to_string(),
-                            readonly: true,
-                        });
-                        // hsakmt reads topology from /sys/devices/virtual/kfd/kfd/topology
-                        mounts.push(BindMount {
-                            host_path: topo_dir
-                                .join("sys/class/kfd/kfd/topology")
-                                .to_string_lossy()
-                                .to_string(),
-                            container_path: "/sys/devices/virtual/kfd/kfd/topology".to_string(),
-                            readonly: true,
-                        });
-                        mounts.push(BindMount {
-                            host_path: topo_dir.join("dev/dri").to_string_lossy().to_string(),
-                            container_path: "/dev/dri".to_string(),
-                            readonly: true,
-                        });
-                        mounts.push(BindMount {
-                            host_path: topo_dir.join("dev/kfd").to_string_lossy().to_string(),
-                            container_path: "/dev/kfd".to_string(),
-                            readonly: true,
-                        });
+                    // nodes.  Use the Topology fetched from the emulator.
+                    if let Some(ref topo) = topology {
+                        if let Ok(topo_dir) = create_synthetic_topology(&session.name, topo) {
+                            mounts.push(BindMount {
+                                host_path: topo_dir.join("sys/class/kfd").to_string_lossy().to_string(),
+                                container_path: "/sys/class/kfd".to_string(),
+                                readonly: true,
+                            });
+                            // hsakmt reads topology from /sys/devices/virtual/kfd/kfd/topology
+                            mounts.push(BindMount {
+                                host_path: topo_dir
+                                    .join("sys/class/kfd/kfd/topology")
+                                    .to_string_lossy()
+                                    .to_string(),
+                                container_path: "/sys/devices/virtual/kfd/kfd/topology".to_string(),
+                                readonly: true,
+                            });
+                            mounts.push(BindMount {
+                                host_path: topo_dir.join("dev/dri").to_string_lossy().to_string(),
+                                container_path: "/dev/dri".to_string(),
+                                readonly: true,
+                            });
+                            mounts.push(BindMount {
+                                host_path: topo_dir.join("dev/kfd").to_string_lossy().to_string(),
+                                container_path: "/dev/kfd".to_string(),
+                                readonly: true,
+                            });
+                        }
                     }
 
                     // Force GPU access through the interceptor — do NOT
@@ -1266,71 +1272,45 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
     Ok(())
 }
 
-/// Snapshot the host KFD sysfs topology into a temp directory so it can be
+/// Write a [`Topology`] to a session-specific temp directory so it can be
 /// bind-mounted into a container.  Also creates stub render-node files
 /// under `dev/dri/` and a stub `dev/kfd` file so that `open()` calls from
 /// the interceptor find something to classify.
 ///
 /// Returns the root of the temp directory tree.
-fn create_synthetic_topology(session_name: &str) -> std::io::Result<PathBuf> {
+fn create_synthetic_topology(
+    session_name: &str,
+    topology: &mirage_schema::topology::Topology,
+) -> std::io::Result<PathBuf> {
     let root = std::env::temp_dir()
         .join("mirage")
         .join(format!("topo-{session_name}"));
-    let host_topo = std::path::Path::new("/sys/class/kfd/kfd/topology");
 
-    // sys/class/kfd/kfd/topology/nodes/*/
-    let nodes_src = host_topo.join("nodes");
-    if !nodes_src.is_dir() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "host sysfs topology not found",
-        ));
-    }
+    let topo_base = root.join("sys/class/kfd/kfd/topology");
 
+    // Write every file from the Topology map.
     let mut render_minors: Vec<u32> = Vec::new();
-
-    for entry in std::fs::read_dir(&nodes_src)? {
-        let entry = entry?;
-        let node_name = entry.file_name();
-        let src_dir = entry.path();
-        if !src_dir.is_dir() {
-            continue;
+    for (rel_path, data) in &topology.files {
+        let dst = topo_base.join(rel_path);
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
         }
-        let dst_dir = root
-            .join("sys/class/kfd/kfd/topology/nodes")
-            .join(&node_name);
-        std::fs::create_dir_all(&dst_dir)?;
+        std::fs::write(&dst, data)?;
 
-        // Recursively copy the entire node directory tree.
-        copy_dir_recursive(&src_dir, &dst_dir)?;
-
-        // Collect render minors for later /dev/dri stubs.
-        let props_path = src_dir.join("properties");
-        if let Ok(props) = std::fs::read_to_string(&props_path) {
-            for line in props.lines() {
-                if let Some(rest) = line.strip_prefix("drm_render_minor ") {
-                    if let Ok(minor) = rest.trim().parse::<u32>() {
-                        if minor > 0 {
-                            render_minors.push(minor);
+        // Collect render minors from node properties files.
+        if rel_path.ends_with("/properties") {
+            if let Ok(text) = std::str::from_utf8(data) {
+                for line in text.lines() {
+                    if let Some(rest) = line.strip_prefix("drm_render_minor ") {
+                        if let Ok(minor) = rest.trim().parse::<u32>() {
+                            if minor > 0 {
+                                render_minors.push(minor);
+                            }
                         }
                     }
                 }
             }
         }
-    }
-
-    // Copy system_properties if present.
-    let sys_props = host_topo.join("system_properties");
-    if sys_props.is_file() {
-        let dst = root.join("sys/class/kfd/kfd/topology/system_properties");
-        let _ = std::fs::copy(&sys_props, &dst);
-    }
-
-    // Copy generation_id if present.
-    let gen_id = host_topo.join("generation_id");
-    if gen_id.is_file() {
-        let dst = root.join("sys/class/kfd/kfd/topology/generation_id");
-        let _ = std::fs::copy(&gen_id, &dst);
     }
 
     // Create /dev/dri/renderDxxx stubs (empty files — the interceptor

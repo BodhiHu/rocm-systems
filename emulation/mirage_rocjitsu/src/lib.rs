@@ -71,7 +71,7 @@ use mirage_schema::amdgpu::{
     KfdPcSampleArgs, KfdPcSampleInfo, KfdProcessDeviceAperture,
 };
 use mirage_schema::amdgpu_error::{AmdgpuError, AmdgpuResult};
-use mirage_schema::syscalls::{HandleAnyFsSyscalls, HandleFsSyscalls};
+use mirage_schema::syscalls::{HandleAnyDeviceSyscalls, HandleDeviceSyscalls};
 use mirage_uapi::ioctl::{kfd_ior, kfd_iow, kfd_iowr, maybe_mut_ptr, IoctlCmd};
 use mirage_uapi::kfd;
 use mirage_uapi::kfd_marshal::{
@@ -1300,7 +1300,7 @@ impl HandleAnyDrmIoctl for RocjitsuEmulator {}
 // ---------------------------------------------------------------------------
 // FS syscalls — mmap/munmap go through the simulated driver; rest is NoSys.
 
-impl HandleFsSyscalls for RocjitsuEmulator {
+impl HandleDeviceSyscalls for RocjitsuEmulator {
     fn syscall_mmap(
         &self,
         _ctx: IoctlCtx,
@@ -1359,7 +1359,6 @@ impl HandleFsSyscalls for RocjitsuEmulator {
 
     nosys_methods!(
         fn syscall_open(mirage_schema::syscalls::SyscallOpenRequest) -> mirage_schema::syscalls::SyscallOpenResponse;
-        fn syscall_sysfs_read(mirage_schema::syscalls::SyscallSysfsReadRequest) -> mirage_schema::syscalls::SyscallSysfsReadResponse;
         fn syscall_close(mirage_schema::syscalls::SyscallCloseRequest) -> mirage_schema::syscalls::SyscallCloseResponse;
         fn syscall_stat_device(mirage_schema::syscalls::SyscallStatDeviceRequest) -> mirage_schema::syscalls::SyscallStatDeviceResponse;
         fn syscall_access(mirage_schema::syscalls::SyscallAccessRequest) -> mirage_schema::syscalls::SyscallAccessResponse;
@@ -1370,7 +1369,15 @@ impl HandleFsSyscalls for RocjitsuEmulator {
     );
 }
 
-impl HandleAnyFsSyscalls for RocjitsuEmulator {}
+impl HandleAnyDeviceSyscalls for RocjitsuEmulator {}
+
+impl mirage_schema::topology::ProvideTopology for RocjitsuEmulator {
+    fn get_topology(&self) -> AmdgpuResult<mirage_schema::topology::Topology> {
+        Ok(mirage_schema::topology::Topology {
+            files: std::collections::BTreeMap::new(),
+        })
+    }
+}
 
 // Compile-time proof that `RocjitsuEmulator` satisfies `Emulator`.
 const _: fn() = || {
