@@ -51,11 +51,7 @@ mod syscall_macro;
 pub mod emulator;
 pub mod syscalls;
 pub mod topology;
-pub mod ctl;
 
-pub use ctl::*;
-pub use mirage_macros::ctl_dsl;
 
 pub use mirage_uapi::amdgpu;
 pub use mirage_uapi::amdgpu_error;
-pub use mirage_uapi::ioctl_dsl;
