@@ -235,6 +235,66 @@ impl ForwardDrmIoctl for RealEmulator {
     }
 }
 
+// Filesystem-syscall surface: the real host kernel already provides
+// these. We simply proxy the request back to libc (for `stat`-family
+// and `access`) or report `NoSys` for the ones that only make sense
+// against the *virtual* fd table a `RemoteEmulator` server would own.
+impl mirage_schema::syscalls::ForwardFsSyscalls for RealEmulator {
+    fn forward_fs_syscall(
+        &self,
+        _ctx: IoctlCtx,
+        request: mirage_schema::syscalls::AnyFsSyscallRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::AnyFsSyscallResponse> {
+        use mirage_schema::syscalls::*;
+        match request {
+            AnyFsSyscallRequest::SyscallStatDevice(SyscallStatDeviceRequest { path, .. }) => {
+                stat_real_device(&path).map(|stat| {
+                    AnyFsSyscallResponse::SyscallStatDevice(SyscallStatDeviceResponse { stat })
+                })
+            }
+            AnyFsSyscallRequest::SyscallAccess(SyscallAccessRequest { path, mode, .. }) => {
+                let c = std::ffi::CString::new(path).map_err(|_| AmdgpuError::Invalid)?;
+                // SAFETY: `access` takes a NUL-terminated string.
+                let rc = unsafe { libc::access(c.as_ptr(), mode as i32) };
+                Ok(AnyFsSyscallResponse::SyscallAccess(SyscallAccessResponse {
+                    allowed: rc == 0,
+                }))
+            }
+            AnyFsSyscallRequest::SyscallSysfsRead(SyscallSysfsReadRequest { path, max_size }) => {
+                let mut data = std::fs::read(&path).map_err(|e| {
+                    e.raw_os_error()
+                        .map(AmdgpuError::from_errno)
+                        .unwrap_or(AmdgpuError::NoEntry)
+                })?;
+                data.truncate(max_size as usize);
+                Ok(AnyFsSyscallResponse::SyscallSysfsRead(
+                    SyscallSysfsReadResponse { data },
+                ))
+            }
+            _ => Err(AmdgpuError::NoSys),
+        }
+    }
+}
+
+fn stat_real_device(path: &str) -> AmdgpuResult<mirage_schema::syscalls::FakeStat> {
+    let c = std::ffi::CString::new(path).map_err(|_| AmdgpuError::Invalid)?;
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `stat(2)` with a NUL-terminated path and valid out pointer.
+    let rc = unsafe { libc::stat(c.as_ptr(), &mut st) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error()
+            .raw_os_error()
+            .map(AmdgpuError::from_errno)
+            .unwrap_or(AmdgpuError::Io));
+    }
+    Ok(mirage_schema::syscalls::FakeStat {
+        mode: st.st_mode as u32,
+        nlink: st.st_nlink as u32,
+        rdev: st.st_rdev as u64,
+        size: st.st_size as u64,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

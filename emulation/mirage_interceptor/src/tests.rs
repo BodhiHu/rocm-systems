@@ -52,6 +52,16 @@ impl ForwardDrmIoctl for VersionEmulator {
     }
 }
 
+impl mirage_schema::syscalls::ForwardFsSyscalls for VersionEmulator {
+    fn forward_fs_syscall(
+        &self,
+        _ctx: IoctlCtx,
+        _request: mirage_schema::syscalls::AnyFsSyscallRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::AnyFsSyscallResponse> {
+        Err(AmdgpuError::NoSys)
+    }
+}
+
 fn unique_socket() -> std::path::PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

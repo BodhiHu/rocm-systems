@@ -18,4 +18,6 @@ mirage_ctl = { path = "mirage_ctl" }
 mirage_daemon = { path = "mirage_daemon" }
 mirage_real = { path = "mirage_real" }
 mirage_remote = { path = "mirage_remote" }
+mirage_rocjitsu = { path = "mirage_rocjitsu" }
+mirage_uapi = { path = "mirage_uapi" }
 rocjitsu_sys = { path = "rocjitsu_sys" }

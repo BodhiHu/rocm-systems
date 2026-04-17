@@ -186,3 +186,16 @@ impl mirage_schema::amdgpu::ForwardDrmIoctl for RemoteEmulator {
         }
     }
 }
+
+impl mirage_schema::syscalls::ForwardFsSyscalls for RemoteEmulator {
+    fn forward_fs_syscall(
+        &self,
+        ctx: IoctlCtx,
+        request: mirage_schema::syscalls::AnyFsSyscallRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::AnyFsSyscallResponse> {
+        match self.round_trip(WireRequest::Fs { ctx, request })? {
+            WireResponse::Fs(result) => result,
+            _ => Err(AmdgpuError::Invalid),
+        }
+    }
+}

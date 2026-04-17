@@ -1,0 +1,14 @@
+[package]
+name = "mirage_rocjitsu"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+description = "Emulator backed by the rocjitsu virtual machine simulator."
+
+[lib]
+doctest = false
+
+[dependencies]
+mirage_schema = { workspace = true }
+rocjitsu_sys = { workspace = true }
+libc = { workspace = true }

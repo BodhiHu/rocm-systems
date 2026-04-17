@@ -15,6 +15,7 @@ use mirage_schema::amdgpu::{
     AnyDrmIoctlRequest, AnyDrmIoctlResponse, AnyKfdIoctlRequest, AnyKfdIoctlResponse, IoctlCtx,
 };
 use mirage_schema::amdgpu_error::AmdgpuError;
+use mirage_schema::syscalls::{AnyFsSyscallRequest, AnyFsSyscallResponse};
 
 /// Wire-level result so a remote error round-trips as data rather than
 /// causing a transport-level failure.
@@ -28,10 +29,16 @@ pub enum WireRequest {
         ctx: IoctlCtx,
         request: AnyKfdIoctlRequest,
     },
-    /// A DRM-AMDGPU ioctl targeting `/dev/dri/renderD*`.
+    /// A DRM-AMDGPU ioctl targeting `/dev/dri/renderD*` or
+    /// `/dev/dri/card*`.
     Drm {
         ctx: IoctlCtx,
         request: AnyDrmIoctlRequest,
+    },
+    /// A non-ioctl filesystem syscall (open/close/stat/mmap/…).
+    Fs {
+        ctx: IoctlCtx,
+        request: AnyFsSyscallRequest,
     },
     /// Simple liveness probe — server echoes a [`WireResponse::Pong`].
     Ping,
@@ -42,6 +49,7 @@ pub enum WireRequest {
 pub enum WireResponse {
     Kfd(WireResult<AnyKfdIoctlResponse>),
     Drm(WireResult<AnyDrmIoctlResponse>),
+    Fs(WireResult<AnyFsSyscallResponse>),
     Pong,
 }
 

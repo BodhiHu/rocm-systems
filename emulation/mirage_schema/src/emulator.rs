@@ -14,22 +14,42 @@
 //!   socket to a daemon holding any other `Emulator`.
 
 use crate::amdgpu::{HandleAnyDrmIoctl, HandleAnyKfdIoctl, HandleDrmIoctl, HandleKfdIoctl};
+use crate::syscalls::{HandleAnyFsSyscalls, HandleFsSyscalls};
 
-/// Combined KFD + DRM ioctl emulator.
+/// Combined KFD + DRM + filesystem-syscall emulator.
 ///
-/// All methods are inherited from [`HandleKfdIoctl`] and [`HandleDrmIoctl`].
-/// [`HandleAnyKfdIoctl`] and [`HandleAnyDrmIoctl`] are listed as
-/// supertraits so that the dynamic-dispatch helpers (`handle_any_*_ioctl`)
-/// are callable on `&dyn Emulator` as well as on concrete types.
+/// Supertraits:
 ///
-/// Implementors must use interior mutability and be `Send + Sync` so they
-/// can be shared across threads.
+/// * [`HandleKfdIoctl`] / [`HandleDrmIoctl`] — the two ioctl
+///   subsystems defined via [`ioctl_dsl!`](crate::ioctl_dsl).
+/// * [`HandleAnyKfdIoctl`] / [`HandleAnyDrmIoctl`] — dispatch helpers,
+///   callable on `&dyn Emulator`.
+/// * [`HandleFsSyscalls`] / [`HandleAnyFsSyscalls`] — open/close/stat
+///   family and mmap, defined via
+///   [`syscall_dsl!`](crate::syscall_dsl).
+///
+/// Implementors must use interior mutability and be `Send + Sync` so
+/// they can be shared across threads.
 pub trait Emulator:
-    HandleKfdIoctl + HandleDrmIoctl + HandleAnyKfdIoctl + HandleAnyDrmIoctl + Send + Sync
+    HandleKfdIoctl
+    + HandleDrmIoctl
+    + HandleAnyKfdIoctl
+    + HandleAnyDrmIoctl
+    + HandleFsSyscalls
+    + HandleAnyFsSyscalls
+    + Send
+    + Sync
 {
 }
 
 impl<T> Emulator for T where
-    T: HandleKfdIoctl + HandleDrmIoctl + HandleAnyKfdIoctl + HandleAnyDrmIoctl + Send + Sync
+    T: HandleKfdIoctl
+        + HandleDrmIoctl
+        + HandleAnyKfdIoctl
+        + HandleAnyDrmIoctl
+        + HandleFsSyscalls
+        + HandleAnyFsSyscalls
+        + Send
+        + Sync
 {
 }

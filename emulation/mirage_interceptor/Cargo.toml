@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 mirage_schema = { workspace = true }
 mirage_remote = { workspace = true }
+mirage_uapi = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
