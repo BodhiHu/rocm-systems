@@ -9,6 +9,7 @@ async-trait = { version = "0.1.89" }
 paste = { version = "1" }
 libc = { version = "0.2" }
 clap = { version = "4.0", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "io-util", "sync", "fs"] }
 
 amdgpu_protocol = { path = "amdgpu_protocol" }
 mirage_schema = { path = "mirage_schema" }

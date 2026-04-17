@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::common::{ExecArgs, SetEnv};
+use crate::common::ExecArgs;
 
 // ---------------------------------------------------------------------------
 //  Bind mounts
