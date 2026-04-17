@@ -1131,15 +1131,18 @@ class CodeGenerator:
         if cls in ('buffer_store', 'tbuffer_store'):
             return self._gen_buffer_store(dst_ops, src_ops, sem, cls)
 
-        if cls == 'ds_read':
-            return self._gen_ds_read(dst_ops, src_ops, sem)
-        if cls == 'ds_read2':
-            return self._gen_ds_read2(dst_ops, src_ops, sem)
-
-        if cls == 'ds_write':
-            return self._gen_ds_write(dst_ops, src_ops, sem)
-        if cls == 'ds_write2':
-            return self._gen_ds_write2(dst_ops, src_ops, sem)
+        if cls in ('ds_read', 'ds_read2', 'ds_write', 'ds_write2'):
+            gds_guard = ''
+            if self._enc_has_field('gds'):
+                gds_guard = ('  if (inst_.gds)\n'
+                             '    throw util::UnimplementedInst(mnemonic());\n')
+            if cls == 'ds_read':
+                return gds_guard + self._gen_ds_read(dst_ops, src_ops, sem)
+            if cls == 'ds_read2':
+                return gds_guard + self._gen_ds_read2(dst_ops, src_ops, sem)
+            if cls == 'ds_write':
+                return gds_guard + self._gen_ds_write(dst_ops, src_ops, sem)
+            return gds_guard + self._gen_ds_write2(dst_ops, src_ops, sem)
 
         if cls == 'dcache_inv':
             return '  wf.cu().l1_scalar().invalidate_all();'
@@ -1157,7 +1160,11 @@ class CodeGenerator:
             return self._gen_buffer_atomic(dst_ops, src_ops, sem)
 
         if cls == 'ds_atomic':
-            return self._gen_ds_atomic(dst_ops, src_ops, sem)
+            gds_guard = ''
+            if self._enc_has_field('gds'):
+                gds_guard = ('  if (inst_.gds)\n'
+                             '    throw util::UnimplementedInst(mnemonic());\n')
+            return gds_guard + self._gen_ds_atomic(dst_ops, src_ops, sem)
 
         if cls == 'ds_permute':
             is_bpermute = 'BPERMUTE' in sem.name.upper()
@@ -4490,6 +4497,20 @@ class CodeGenerator:
         L.append('  set_data(std::move(d));')
         return '\n'.join(L)
 
+    def _enc_has_field(self, field_name: str) -> bool:
+        """Check if the current encoding struct has a named field.
+
+        Uses the struct field names from the machine instruction encoding.
+        Falls back to checking _current_inst_fields (ucode_fields + parent
+        fields) and the encoding name for known patterns.
+        """
+        if hasattr(self, '_current_inst_fields') and self._current_inst_fields:
+            if field_name in self._current_inst_fields:
+                return True
+        if field_name == 'gds' and hasattr(self, '_current_enc') and self._current_enc:
+            return self._current_enc.enc_name.upper() == 'ENC_DS'
+        return False
+
     def _enc_has_semantics(self, enc: InstEncoding) -> bool:
         """Check if any instruction in this encoding has semantics."""
         if not self.semantics:
@@ -4842,6 +4863,7 @@ class CodeGenerator:
                     )
                     if sem:
                         self._current_inst_fields = inst_field_names
+                        self._current_enc = enc
                         body = self._gen_execute_body(inst, sem, enc.enc_name)
                         # VOP1/VOP2: prepend DPP preamble so the encoding
                         # base's apply_dpp() runs before the ALU logic.
