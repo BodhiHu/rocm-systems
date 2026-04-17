@@ -120,11 +120,7 @@ impl RealEmulator {
         };
         let mut entries: Vec<_> = dir
             .flatten()
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("renderD")
-            })
+            .filter(|e| e.file_name().to_string_lossy().starts_with("renderD"))
             .collect();
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {

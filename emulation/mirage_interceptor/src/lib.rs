@@ -32,9 +32,9 @@ use std::sync::{Mutex, OnceLock};
 
 use libc::{O_CLOEXEC, size_t};
 
+use mirage_remote::RemoteEmulator;
 use mirage_schema::amdgpu::{AmdkfdIocGetVersionRequest, HandleKfdIoctl, IoctlCtx};
 use mirage_schema::amdgpu_error::AmdgpuError;
-use mirage_remote::RemoteEmulator;
 
 /// Path to the KFD char device.
 pub const KFD_PATH: &str = "/dev/kfd";
@@ -332,7 +332,8 @@ pub unsafe extern "C" fn openat(
         }
         return fd;
     }
-    let Some(real) = next_fn!(openat : fn(d: c_int, p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
+    let Some(real) =
+        next_fn!(openat : fn(d: c_int, p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
     else {
         return errno_to_rc(libc::ENOSYS);
     };
@@ -359,8 +360,7 @@ pub unsafe extern "C" fn ioctl(fd: c_int, cmd: libc::c_ulong, arg: *mut c_void) 
     if let Some(kind) = lookup_fd(fd) {
         return dispatch_tracked_ioctl(kind, cmd as u32, arg);
     }
-    let Some(real) =
-        next_fn!(ioctl : fn(f: c_int, c: libc::c_ulong, a: *mut c_void) -> c_int)
+    let Some(real) = next_fn!(ioctl : fn(f: c_int, c: libc::c_ulong, a: *mut c_void) -> c_int)
     else {
         return errno_to_rc(libc::ENOSYS);
     };

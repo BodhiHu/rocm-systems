@@ -73,9 +73,7 @@ impl RemoteEmulator {
                 let stream = cache.get_for(&self.socket_path).expect("just inserted");
                 match do_round_trip(stream, &request) {
                     Ok(response) => return Ok(response),
-                    Err(WireError::Io(ref e))
-                        if attempt == 0 && is_retryable_io(e) =>
-                    {
+                    Err(WireError::Io(ref e)) if attempt == 0 && is_retryable_io(e) => {
                         cache.forget(&self.socket_path);
                         continue;
                     }

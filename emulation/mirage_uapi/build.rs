@@ -21,7 +21,11 @@ fn main() {
     let drm_header = env::var("MIRAGE_UAPI_DRM_HEADER")
         .unwrap_or_else(|_| "/usr/include/drm/amdgpu_drm.h".to_string());
 
-    generate(&kfd_header, &out_dir.join("kfd.rs"), "kfd_ioctl_.*|AMDKFD_.*");
+    generate(
+        &kfd_header,
+        &out_dir.join("kfd.rs"),
+        "kfd_ioctl_.*|AMDKFD_.*",
+    );
     generate(
         &drm_header,
         &out_dir.join("drm.rs"),

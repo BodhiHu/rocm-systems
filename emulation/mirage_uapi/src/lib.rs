@@ -76,7 +76,10 @@ pub mod ioc {
     }
     #[inline]
     pub const fn iowr(ty: u32, nr: u32, size: u32) -> u32 {
-        ((DIR_READ | DIR_WRITE) << DIRSHIFT) | (ty << TYPESHIFT) | (nr << NRSHIFT) | (size << SIZESHIFT)
+        ((DIR_READ | DIR_WRITE) << DIRSHIFT)
+            | (ty << TYPESHIFT)
+            | (nr << NRSHIFT)
+            | (size << SIZESHIFT)
     }
     #[inline]
     pub const fn iow(ty: u32, nr: u32, size: u32) -> u32 {

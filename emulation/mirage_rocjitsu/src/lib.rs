@@ -161,10 +161,7 @@ impl RocjitsuEmulator {
     ///
     /// `schema_path` must point at the `simulation_config.fbs`
     /// FlatBuffers schema that ships with rocjitsu.
-    pub fn from_config_string(
-        json: &str,
-        schema_path: &Path,
-    ) -> Result<Self, RocjitsuError> {
+    pub fn from_config_string(json: &str, schema_path: &Path) -> Result<Self, RocjitsuError> {
         let json_c = CString::new(json)?;
         let schema_c = CString::new(schema_path.as_os_str().as_encoded_bytes())?;
         let mut vm: *mut rocjitsu_sys::rj_vm_t = ptr::null_mut();
@@ -183,17 +180,13 @@ impl RocjitsuEmulator {
     }
 
     /// Build an emulator from an on-disk rocjitsu JSON config file.
-    pub fn from_config_file(
-        json_path: &Path,
-        schema_path: &Path,
-    ) -> Result<Self, RocjitsuError> {
+    pub fn from_config_file(json_path: &Path, schema_path: &Path) -> Result<Self, RocjitsuError> {
         let json_c = CString::new(json_path.as_os_str().as_encoded_bytes())?;
         let schema_c = CString::new(schema_path.as_os_str().as_encoded_bytes())?;
         let mut vm: *mut rocjitsu_sys::rj_vm_t = ptr::null_mut();
         // SAFETY: same as `from_config_string`.
-        let status = unsafe {
-            rocjitsu_sys::rj_vm_create(json_c.as_ptr(), schema_c.as_ptr(), &mut vm)
-        };
+        let status =
+            unsafe { rocjitsu_sys::rj_vm_create(json_c.as_ptr(), schema_c.as_ptr(), &mut vm) };
         check(status)?;
         let handle = ptr::NonNull::new(vm).ok_or(RocjitsuError::Status(
             rocjitsu_sys::rj_status_e_ROCJITSU_STATUS_ERROR,

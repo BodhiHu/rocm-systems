@@ -49,7 +49,11 @@ fn main() {
     // --- headers + bindings -----------------------------------------------
     let include_dir = resolve_include_dir();
     let Some(include_dir) = include_dir else {
-        std::fs::write(&bindings_out, "// rocjitsu headers not found at build time.\n").unwrap();
+        std::fs::write(
+            &bindings_out,
+            "// rocjitsu headers not found at build time.\n",
+        )
+        .unwrap();
         build_stub();
         return;
     };
@@ -164,7 +168,10 @@ fn build_rocjitsu(source_dir: &Path) -> PathBuf {
         .define("RJ_BUILD_GUI", "OFF")
         .define("BUILD_TESTING", "OFF")
         .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
-        .define("FETCHCONTENT_BASE_DIR", fetch_dir.to_string_lossy().as_ref())
+        .define(
+            "FETCHCONTENT_BASE_DIR",
+            fetch_dir.to_string_lossy().as_ref(),
+        )
         .profile("Release")
         .build_target("rocjitsu_kmd_shim")
         .very_verbose(false)

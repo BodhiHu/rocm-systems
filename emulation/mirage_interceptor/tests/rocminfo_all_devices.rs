@@ -169,7 +169,8 @@ fn rocminfo_matches_when_hardware_present() {
     }
 
     assert_eq!(
-        intercepted_norm, baseline_norm,
+        intercepted_norm,
+        baseline_norm,
         "rocminfo output under the interceptor diverged from the real kernel\n\
          baseline stdout:\n{baseline_out}\n\
          intercepted stdout:\n{intercepted_out}\n\
