@@ -431,6 +431,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mirage_macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "mirage_real"
 version = "0.1.0"
 dependencies = [
@@ -464,7 +473,9 @@ name = "mirage_schema"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "clap",
  "libc",
+ "mirage_macros",
  "mirage_uapi",
  "paste",
  "serde",
