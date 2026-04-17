@@ -133,23 +133,51 @@ void mubuf_calculate_addresses(const MubufInst &inst, amdgpu::Wavefront &wf, Vec
 ///           inst.offset.
 template <typename MtbufInst>
 void mtbuf_calculate_addresses(const MtbufInst &inst, amdgpu::Wavefront &wf, VectorMemState &d) {
-  assert(!inst.idxen && "Mtbuf idxen not yet supported");
   auto &cu = wf.cu();
   uint64_t exec = wf.exec();
   d.lane_mask = exec;
   d.exec_mask = exec;
   uint32_t sb = wf.sgpr_alloc().base + inst.srsrc * 4;
-  uint64_t base_addr =
-      (static_cast<uint64_t>(cu.read_sgpr(sb + 1) & 0xFFFF) << 32) | cu.read_sgpr(sb);
+  uint32_t srd0 = cu.read_sgpr(sb);
+  uint32_t srd1 = cu.read_sgpr(sb + 1);
+  uint32_t srd2 = cu.read_sgpr(sb + 2);
+  uint32_t srd3 = cu.read_sgpr(sb + 3);
+  uint64_t base_addr = (static_cast<uint64_t>(srd1 & 0xFFFF) << 32) | srd0;
   uint32_t soffset_val =
       (inst.soffset == 0x80) ? 0u : cu.read_sgpr(wf.sgpr_alloc().base + inst.soffset);
+  uint32_t num_records = srd2;
+  uint32_t stride = (srd1 >> 16) & 0x3FFF;
+  bool oob_raw = (srd3 >> 31) & 1;
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
+    uint32_t vgpr_base = wf.vgpr_alloc().base + inst.vaddr;
+    uint32_t index = 0;
     uint32_t voffset = 0;
-    if (inst.offen)
-      voffset = cu.read_vgpr(wf.vgpr_alloc().base + inst.vaddr, lane);
-    d.per_lane_addr[lane] = base_addr + voffset + inst.offset + soffset_val;
+    if (inst.idxen && inst.offen) {
+      index = cu.read_vgpr(vgpr_base, lane);
+      voffset = cu.read_vgpr(vgpr_base + 1, lane);
+    } else if (inst.idxen) {
+      index = cu.read_vgpr(vgpr_base, lane);
+    } else if (inst.offen) {
+      voffset = cu.read_vgpr(vgpr_base, lane);
+    }
+    uint64_t offset_part = static_cast<uint64_t>(voffset) + inst.offset;
+    uint64_t total_offset = static_cast<uint64_t>(index) * stride + offset_part + soffset_val;
+    bool oob;
+    if (oob_raw) {
+      oob = (offset_part + soffset_val) >= num_records;
+    } else if (stride > 0) {
+      oob = index >= num_records;
+    } else {
+      oob = offset_part >= num_records;
+    }
+    if (num_records == 0 || oob) {
+      d.lane_mask &= ~(1ULL << lane);
+      d.per_lane_addr[lane] = 0;
+    } else {
+      d.per_lane_addr[lane] = base_addr + total_offset;
+    }
   }
 }
 
