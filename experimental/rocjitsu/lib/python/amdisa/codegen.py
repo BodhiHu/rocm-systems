@@ -3853,20 +3853,20 @@ class CodeGenerator:
         }
         in_bits = _INPUT_BITS.get(input_type, 32)
 
-        # Map input types to mfma::extract_* function names.
+        # Map input types to amdgpu::extract_* function names.
         _EXTRACT_A = {
-            'F32': 'mfma::extract_f32', 'XF32': 'mfma::extract_f32',
-            'F16': 'mfma::extract_f16', 'BF16': 'mfma::extract_bf16',
-            'FP8_FP8': 'mfma::extract_fp8', 'FP8_BF8': 'mfma::extract_fp8',
-            'BF8_FP8': 'mfma::extract_bf8', 'BF8_BF8': 'mfma::extract_bf8',
-            'F8_F6_F4': 'mfma::extract_fp8', 'F8F6F4': 'mfma::extract_fp8',
+            'F32': 'amdgpu::extract_f32', 'XF32': 'amdgpu::extract_f32',
+            'F16': 'amdgpu::extract_f16', 'BF16': 'amdgpu::extract_bf16',
+            'FP8_FP8': 'amdgpu::extract_fp8', 'FP8_BF8': 'amdgpu::extract_fp8',
+            'BF8_FP8': 'amdgpu::extract_bf8', 'BF8_BF8': 'amdgpu::extract_bf8',
+            'F8_F6_F4': 'amdgpu::extract_fp8', 'F8F6F4': 'amdgpu::extract_fp8',
         }
         _EXTRACT_B = {
-            'F32': 'mfma::extract_f32', 'XF32': 'mfma::extract_f32',
-            'F16': 'mfma::extract_f16', 'BF16': 'mfma::extract_bf16',
-            'FP8_FP8': 'mfma::extract_fp8', 'FP8_BF8': 'mfma::extract_bf8',
-            'BF8_FP8': 'mfma::extract_fp8', 'BF8_BF8': 'mfma::extract_bf8',
-            'F8_F6_F4': 'mfma::extract_fp8', 'F8F6F4': 'mfma::extract_fp8',
+            'F32': 'amdgpu::extract_f32', 'XF32': 'amdgpu::extract_f32',
+            'F16': 'amdgpu::extract_f16', 'BF16': 'amdgpu::extract_bf16',
+            'FP8_FP8': 'amdgpu::extract_fp8', 'FP8_BF8': 'amdgpu::extract_bf8',
+            'BF8_FP8': 'amdgpu::extract_fp8', 'BF8_BF8': 'amdgpu::extract_bf8',
+            'F8_F6_F4': 'amdgpu::extract_fp8', 'F8F6F4': 'amdgpu::extract_fp8',
         }
 
         L = []
@@ -3878,51 +3878,78 @@ class CodeGenerator:
         arch = self.isa_spec.arch_name.lower()
         has_acc_cd = arch in ('cdna2', 'cdna3', 'cdna4')
         if has_acc_cd:
-            L.append(f'  uint32_t dst = mfma::dst_base(vb, {d}.encoding_value_, inst_.acc_cd);')
+            L.append(f'  uint32_t dst = amdgpu::dst_base(vb, {d}.encoding_value_, inst_.acc_cd);')
         else:
-            L.append(f'  uint32_t dst = mfma::dst_base(vb, {d}.encoding_value_, 1);')
+            L.append(f'  uint32_t dst = amdgpu::dst_base(vb, {d}.encoding_value_, 1);')
         L.append(f'  uint32_t const_acc;')
-        L.append(f'  uint32_t s2 = mfma::resolve_acc(vb, dst,')
+        L.append(f'  uint32_t s2 = amdgpu::resolve_acc(vb, dst,')
         L.append(f'      {s2}.encoding_value_, const_acc,'
                  f' [&] {{ return {s2}.read_scalar(wf); }});')
 
         if result_type == 'F64':
-            L.append(f'  mfma::exec_f64(cu, {M}, {N}, {K}, {B}, dst,')
-            L.append(f'                 mfma::src_base(vb, {s0}.encoding_value_),')
-            L.append(f'                 mfma::src_base(vb, {s1}.encoding_value_),')
+            L.append(f'  amdgpu::exec_f64(cu, {M}, {N}, {K}, {B}, dst,')
+            L.append(f'                 amdgpu::src_base(vb, {s0}.encoding_value_),')
+            L.append(f'                 amdgpu::src_base(vb, {s1}.encoding_value_),')
             L.append(f'                 s2, const_acc);')
         elif result_type == 'I32':
-            L.append(f'  mfma::exec_i32_i8(cu, {M}, {N}, {K}, {B}, dst,')
-            L.append(f'                     mfma::src_base(vb, {s0}.encoding_value_),')
-            L.append(f'                     mfma::src_base(vb, {s1}.encoding_value_),')
+            L.append(f'  amdgpu::exec_i32_i8(cu, {M}, {N}, {K}, {B}, dst,')
+            L.append(f'                     amdgpu::src_base(vb, {s0}.encoding_value_),')
+            L.append(f'                     amdgpu::src_base(vb, {s1}.encoding_value_),')
             L.append(f'                     s2, const_acc);')
         else:
             # F32, F16, BF16 result types all use exec_f32 (accumulate in f32,
             # WMMA F16/BF16 results are truncated at writeback — handled by the
             # register layout, not by separate exec functions).
-            ea = _EXTRACT_A.get(input_type, 'mfma::extract_f32')
-            eb = _EXTRACT_B.get(input_type, 'mfma::extract_f32')
+            ea = _EXTRACT_A.get(input_type, 'amdgpu::extract_f32')
+            eb = _EXTRACT_B.get(input_type, 'amdgpu::extract_f32')
             # CDNA1-4 VOP3P_MFMA encoding has cbsz/abid/blgp fields for
             # A-matrix broadcast and B-matrix lane permutation. RDNA does
             # not have MFMA (only WMMA), so these fields don't exist.
             has_blgp = arch in ('cdna1', 'cdna2', 'cdna3', 'cdna4')
-            L.append(f'  mfma::exec_f32(cu, {M}, {N}, {K}, {B}, {in_bits}, dst,')
-            L.append(f'                 mfma::src_base(vb, {s0}.encoding_value_),')
-            L.append(f'                 mfma::src_base(vb, {s1}.encoding_value_),')
+            L.append(f'  amdgpu::exec_f32(cu, {M}, {N}, {K}, {B}, {in_bits}, dst,')
+            L.append(f'                 amdgpu::src_base(vb, {s0}.encoding_value_),')
+            L.append(f'                 amdgpu::src_base(vb, {s1}.encoding_value_),')
             if has_blgp:
                 L.append(f'                 s2, {ea}, {eb}, const_acc,')
                 L.append(f'                 inst_.cbsz, inst_.abid, inst_.blgp);')
             else:
                 L.append(f'                 s2, {ea}, {eb}, const_acc);')
 
-            # VOP3PX2 (MFMA_SCALE): apply scale factors from the X2
-            # extension dwords to the accumulator after the MFMA.
-            # scale_src0/scale_src1 are stored on the instruction by
-            # the constructor (read from the raw inst dword at offset 2).
             if input_type in ('F8_F6_F4', 'F8F6F4'):
-                L.append('  // Apply VOP3PX2 scale: multiply accumulators by 2^scale.')
-                L.append(f'  // scale_src0_/scale_src1_ set by constructor from X2 extension.')
-                L.append(f'  // TODO: apply scale_src0_ and scale_src1_ as exponent biases.')
+                # Rewrite the MFMA call: if ABID[0]=1 (scaling enabled),
+                # use exec_f32_scaled which applies per-32-K-block E8M0
+                # exponent biases from scale VGPRs in the X2 prefix.
+                # Dwords 0-1 of the VOP3PX2 encoding are at inst[-2]/[-1]
+                # relative to the MFMA encoding pointer.
+                # Dword 1 bits [8:0] = scale_src0, bits [17:9] = scale_src1.
+                L_scaled = []
+                L_scaled.append('  if (inst_.abid & 1u) {')
+                L_scaled.append('    auto *raw = reinterpret_cast<const uint32_t *>(&inst_);')
+                L_scaled.append('    uint32_t x2_dw1 = raw[-1];')
+                L_scaled.append('    uint32_t scale_src0_enc = x2_dw1 & 0x1FFu;')
+                L_scaled.append('    uint32_t scale_src1_enc = (x2_dw1 >> 9) & 0x1FFu;')
+                L_scaled.append('    uint32_t sa_base = amdgpu::src_base(vb, scale_src0_enc);')
+                L_scaled.append('    uint32_t sb_base = amdgpu::src_base(vb, scale_src1_enc);')
+                L_scaled.append(f'    amdgpu::exec_f32_scaled(cu, {M}, {N}, {K}, {B}, {in_bits}, dst,')
+                L_scaled.append(f'        amdgpu::src_base(vb, {s0}.encoding_value_),')
+                L_scaled.append(f'        amdgpu::src_base(vb, {s1}.encoding_value_),')
+                L_scaled.append(f'        s2, {ea}, {eb}, const_acc,')
+                L_scaled.append(f'        inst_.cbsz, inst_.abid, inst_.blgp, sa_base, sb_base);')
+                L_scaled.append('  }')
+                # Replace the unscaled MFMA call with a conditional:
+                # if ABID[0]=1 use scaled path, else the existing unscaled path.
+                # Find and wrap the existing exec_f32 call in an else block.
+                for i, line in enumerate(L):
+                    if 'amdgpu::exec_f32(' in line:
+                        L.insert(i, '  if (!(inst_.abid & 1u)) {')
+                        # Find the closing semicolon
+                        for j in range(i + 1, len(L)):
+                            if L[j].rstrip().endswith(';'):
+                                L.insert(j + 1, '  } else {')
+                                break
+                        break
+                L.extend(L_scaled)
+                L.append('  }')
 
         return '\n'.join(L)
 

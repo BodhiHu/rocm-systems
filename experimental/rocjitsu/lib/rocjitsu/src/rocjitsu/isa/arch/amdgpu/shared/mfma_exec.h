@@ -33,7 +33,7 @@
 
 namespace rocjitsu {
 namespace amdgpu {
-namespace mfma {
+// MFMA register mapping, element extraction, and execution functions.
 
 /// Accumulator register mode, determined by CDNA generation.
 enum class AccMode {
@@ -341,6 +341,63 @@ void exec_f32(amdgpu::ComputeUnitCore &cu, uint32_t M, uint32_t N, uint32_t K, u
     cu.write_vgpr(dst + r.reg, r.lane, r.val);
 }
 
+/// Scaled MFMA execute for f32 output with FP8/FP6/FP4 input (VOP3PX2).
+///
+/// Applies per-32-K-element-block E8M0 exponent biases from scale VGPRs.
+/// Scale format: 8-bit biased exponent (bias=127), so 2^(scale - 127).
+/// Each lane's scale VGPR holds packed 8-bit scale values (one byte per block).
+///
+/// @param scale_a_base  VGPR base for A-matrix scale values.
+/// @param scale_b_base  VGPR base for B-matrix scale values.
+template <typename ExtractA, typename ExtractB>
+void exec_f32_scaled(amdgpu::ComputeUnitCore &cu, uint32_t M, uint32_t N, uint32_t K, uint32_t B,
+                     uint32_t in_bits, uint32_t dst, uint32_t s0, uint32_t s1, uint32_t s2,
+                     ExtractA ea, ExtractB eb, uint32_t const_acc, uint32_t cbsz, uint32_t abid,
+                     uint32_t blgp, uint32_t scale_a_base, uint32_t scale_b_base) {
+  constexpr uint32_t BLOCK_K = 32;
+  struct Result {
+    uint32_t reg;
+    uint32_t lane;
+    uint32_t val;
+  };
+  std::vector<Result> results;
+  results.reserve(M * N * B);
+  uint32_t num_blocks = (K + BLOCK_K - 1) / BLOCK_K;
+  for (uint32_t b = 0; b < B; ++b) {
+    for (uint32_t row = 0; row < M; ++row) {
+      for (uint32_t col = 0; col < N; ++col) {
+        auto out = output_loc_32(M, N, row, col, b);
+        float acc = (const_acc != ACC_FROM_VGPR)
+                        ? std::bit_cast<float>(const_acc)
+                        : std::bit_cast<float>(cu.read_vgpr(s2 + out.reg, out.lane));
+        for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+          float block_sum = 0.0f;
+          uint32_t k_start = blk * BLOCK_K;
+          uint32_t k_end = std::min(k_start + BLOCK_K, K);
+          for (uint32_t k = k_start; k < k_end; ++k) {
+            auto al = input_loc(M, K, B, row, k, b, in_bits);
+            auto bl = input_loc(N, K, B, col, k, b, in_bits);
+            if (cbsz != 0)
+              al.lane = permute_a_lane(al.lane, cbsz, abid);
+            if (blgp != 0)
+              bl.lane = permute_b_lane(bl.lane, blgp);
+            block_sum += ea(cu, s0, al) * eb(cu, s1, bl);
+          }
+          uint32_t sa_raw = cu.read_vgpr(scale_a_base, out.lane);
+          uint32_t sb_raw = cu.read_vgpr(scale_b_base, out.lane);
+          uint8_t sa_e8m0 = static_cast<uint8_t>((sa_raw >> (blk * 8)) & 0xFF);
+          uint8_t sb_e8m0 = static_cast<uint8_t>((sb_raw >> (blk * 8)) & 0xFF);
+          int scale_exp = static_cast<int>(sa_e8m0) + static_cast<int>(sb_e8m0) - 254;
+          acc += std::ldexp(block_sum, scale_exp);
+        }
+        results.push_back({out.reg, out.lane, std::bit_cast<uint32_t>(acc)});
+      }
+    }
+  }
+  for (const auto &r : results)
+    cu.write_vgpr(dst + r.reg, r.lane, r.val);
+}
+
 /// MFMA execute for i32 output with i8 input: D = C + A x B.
 inline void exec_i32_i8(amdgpu::ComputeUnitCore &cu, uint32_t M, uint32_t N, uint32_t K, uint32_t B,
                         uint32_t dst, uint32_t s0, uint32_t s1, uint32_t s2,
@@ -415,7 +472,6 @@ inline void exec_f64(amdgpu::ComputeUnitCore &cu, uint32_t M, uint32_t N, uint32
   }
 }
 
-} // namespace mfma
 } // namespace amdgpu
 } // namespace rocjitsu
 
