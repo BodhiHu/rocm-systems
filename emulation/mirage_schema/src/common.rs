@@ -6,6 +6,7 @@
 //! that every other schema module depends on.
 
 use serde::{Deserialize, Serialize};
+use clap::ValueEnum;
 
 // ---------------------------------------------------------------------------
 //  GPU family & definition
@@ -89,7 +90,7 @@ pub struct GpuDef {
 /// | `Functional`    | High-level instruction execution, no timing detail. |
 /// | `Clocked`       | Discrete time-step simulation (per-instruction).    |
 /// | `CycleAccurate` | Full per-cycle modelling – most detailed & slowest. |
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum SimulatorMode {
     /// Functional mode models the hardware at a high level — the simulator
@@ -162,7 +163,7 @@ fn one_u32() -> u32 {
 /// | `Always`    | Clean up on both success and failure (default).          |
 /// | `Never`     | Leave the session running after the workload completes.  |
 /// | `OnSuccess` | Clean up only on success; preserve on failure.           |
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupPolicy {
     /// Automatically shut down the temporary session and clean up

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use mirage_container::{
-    ContainerHandle, ContainerRuntime, ExecRequest, StartContainerRequest, StartedContainer,
+    ContainerHandle, ContainerRuntime, ExecRequest, StartContainerRequest,
 };
 use mirage_schema::common::{
     ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SessionDef, SetEnv, SimulatorMode, Time,
@@ -17,24 +17,27 @@ use mirage_schema::common::{
 use mirage_schema::config::DaemonDef;
 use mirage_schema::container::{BindMount, ContainerDef};
 use mirage_schema::daemon::{
-    MirageDaemonAttach, MirageDaemonBoot, MirageDaemonExec, MirageDaemonHealth,
-    MirageDaemonOverview, MirageDaemonProfiles, MirageDaemonRegistration, MirageDaemonResult,
-    MirageDaemonSessions, MirageDaemonShutdown, MirageDaemonSimulators, MirageDaemonTime,
-    MirageDaemonWorkloads,
+    MirageDaemonAttach, MirageDaemonBoot, MirageDaemonCreateProfile, MirageDaemonCreateSession,
+    MirageDaemonCreateWorkload, MirageDaemonDeleteProfile, MirageDaemonDeleteSession,
+    MirageDaemonDeleteWorkload, MirageDaemonExec, MirageDaemonGetSessionDetail,
+    MirageDaemonGetSimulator, MirageDaemonGetWorkload, MirageDaemonHealth,
+    MirageDaemonListProfiles, MirageDaemonListSessions, MirageDaemonListSimulators,
+    MirageDaemonListWorkloads, MirageDaemonOverview, MirageDaemonRegistration,
+    MirageDaemonResult, MirageDaemonShutdown, MirageDaemonTime,
 };
 use mirage_schema::simulator::SimulatorInfo;
 use mirage_schema::socket::{
-    AttachReply, AttachRequest, BootSessionReply, BootSessionRequest, CreateProfileReply,
-    CreateProfileRequest, CreateWorkloadReply, CreateWorkloadRequest,
-    DashboardCreateSessionReply, DashboardCreateSessionRequest, DashboardDeleteSessionReply,
-    DashboardDeleteSessionRequest, DeleteProfileReply, DeleteProfileRequest, DeleteWorkloadReply,
-    DeleteWorkloadRequest, ExecInSessionReply, ExecInSessionRequest, GetOverviewReply,
-    GetOverviewRequest, GetSessionDetailReply, GetSessionDetailRequest, GetSimulatorReply,
-    GetSimulatorRequest, GetWorkloadReply, GetWorkloadRequest, HealthReply, HealthRequest,
-    ListProfilesReply, ListProfilesRequest, ListSessionsReply, ListSessionsRequest,
-    ListSimulatorsReply, ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest,
-    RegisterSimReply, RegisterSimRequest, SessionSummary, ShutdownSessionReply,
-    ShutdownSessionRequest, SimulatorSummary, TimeReply, TimeRequest, WorkloadSummary,
+    AttachInput, AttachOutput, AttachReply, AttachRequest, BootSessionReply, BootSessionRequest,
+    CreateProfileReply, CreateProfileRequest, CreateSessionReply, CreateSessionRequest,
+    CreateWorkloadReply, CreateWorkloadRequest, DeleteProfileReply, DeleteProfileRequest,
+    DeleteSessionReply, DeleteSessionRequest, DeleteWorkloadReply, DeleteWorkloadRequest,
+    ExecInSessionReply, ExecInSessionRequest, GetOverviewReply, GetOverviewRequest,
+    GetSessionDetailReply, GetSessionDetailRequest, GetSimulatorReply, GetSimulatorRequest,
+    GetWorkloadReply, GetWorkloadRequest, HealthReply, HealthRequest, ListProfilesReply,
+    ListProfilesRequest, ListSessionsReply, ListSessionsRequest, ListSimulatorsReply,
+    ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest, RegisterSimReply,
+    RegisterSimRequest, SessionSummary, ShutdownSessionReply, ShutdownSessionRequest,
+    SimulatorSummary, TimeReply, TimeRequest, WorkloadSummary,
 };
 
 pub struct InMemoryMirageDaemon {
@@ -188,6 +191,67 @@ impl InMemoryMirageDaemon {
     fn simulator_supports_gpu(info: &SimulatorInfo, gpu_name: &str) -> bool {
         info.supported_gpus.iter().any(|gpu| gpu.name == gpu_name)
     }
+
+    fn profile_from_request(request: CreateProfileRequest) -> ProfileDef {
+        ProfileDef {
+            name: request.name,
+            simulator: request.simulator,
+            mode: request.mode,
+            gpu: request.gpu,
+            num_gpus: request.gpus_per_node,
+            num_nodes: request.nodes,
+        }
+    }
+
+    fn session_from_parts(name: String, profile: String, image: String) -> SessionDef {
+        SessionDef {
+            name,
+            profile,
+            image,
+        }
+    }
+
+    fn exec_from_command(command: Vec<String>) -> MirageDaemonResult<ExecArgs> {
+        let Some((program, args)) = command.split_first() else {
+            return Err(mirage_schema::daemon::MirageDaemonError::Remote(
+                "no command provided".to_string(),
+            ));
+        };
+
+        Ok(ExecArgs {
+            command: program.clone(),
+            args: args.to_vec(),
+            env: vec![],
+        })
+    }
+
+    fn parse_csv_exec(spec: &str) -> ExecArgs {
+        let parts: Vec<&str> = spec.split(',').collect();
+        ExecArgs {
+            command: parts.first().copied().unwrap_or_default().to_string(),
+            args: parts[1..].iter().map(|value| (*value).to_string()).collect(),
+            env: vec![],
+        }
+    }
+
+    fn workload_from_request(request: CreateWorkloadRequest) -> WorkloadDef {
+        let CreateWorkloadRequest {
+            name,
+            profile,
+            image,
+            startup,
+            execs,
+            cleanup,
+        } = request;
+        WorkloadDef {
+            name,
+            profile,
+            image,
+            startup: startup.as_deref().map(Self::parse_csv_exec),
+            execs: execs.iter().map(|value| Self::parse_csv_exec(value)).collect(),
+            cleanup,
+        }
+    }
 }
 
 #[async_trait]
@@ -237,7 +301,13 @@ impl MirageDaemonTime for InMemoryMirageDaemon {
 
 #[async_trait]
 impl MirageDaemonAttach for InMemoryMirageDaemon {
-    async fn attach(&self, _request: AttachRequest) -> MirageDaemonResult<Vec<AttachReply>> {
+    async fn attach(
+        &self,
+        _request: AttachRequest,
+        mut input: tokio::sync::mpsc::Receiver<AttachInput>,
+        _output: tokio::sync::mpsc::Sender<AttachOutput>,
+    ) -> MirageDaemonResult<AttachReply> {
+        while input.recv().await.is_some() {}
         Err(mirage_schema::daemon::MirageDaemonError::Remote(
             "attach is not implemented by the in-memory daemon".to_string(),
         ))
@@ -284,7 +354,7 @@ impl MirageDaemonOverview for InMemoryMirageDaemon {
 }
 
 #[async_trait]
-impl MirageDaemonSimulators for InMemoryMirageDaemon {
+impl MirageDaemonListSimulators for InMemoryMirageDaemon {
     async fn list_simulators(
         &self,
         _request: ListSimulatorsRequest,
@@ -297,7 +367,10 @@ impl MirageDaemonSimulators for InMemoryMirageDaemon {
             .collect();
         Ok(ListSimulatorsReply { simulators })
     }
+}
 
+#[async_trait]
+impl MirageDaemonGetSimulator for InMemoryMirageDaemon {
     async fn get_simulator(
         &self,
         request: GetSimulatorRequest,
@@ -312,7 +385,7 @@ impl MirageDaemonSimulators for InMemoryMirageDaemon {
 }
 
 #[async_trait]
-impl MirageDaemonProfiles for InMemoryMirageDaemon {
+impl MirageDaemonListProfiles for InMemoryMirageDaemon {
     async fn list_profiles(
         &self,
         request: ListProfilesRequest,
@@ -323,7 +396,7 @@ impl MirageDaemonProfiles for InMemoryMirageDaemon {
             .values()
             .filter(|profile| {
                 request
-                    .simulator_filter
+                    .simulator
                     .as_ref()
                     .is_none_or(|filter| profile.simulator == *filter)
             })
@@ -331,12 +404,15 @@ impl MirageDaemonProfiles for InMemoryMirageDaemon {
             .collect();
         Ok(ListProfilesReply { profiles })
     }
+}
 
+#[async_trait]
+impl MirageDaemonCreateProfile for InMemoryMirageDaemon {
     async fn create_profile(
         &self,
         request: CreateProfileRequest,
     ) -> MirageDaemonResult<CreateProfileReply> {
-        let profile = request.profile;
+        let profile = Self::profile_from_request(request);
         if profile.name.trim().is_empty() {
             return Ok(CreateProfileReply {
                 ok: false,
@@ -400,7 +476,10 @@ impl MirageDaemonProfiles for InMemoryMirageDaemon {
             error: None,
         })
     }
+}
 
+#[async_trait]
+impl MirageDaemonDeleteProfile for InMemoryMirageDaemon {
     async fn delete_profile(
         &self,
         request: DeleteProfileRequest,
@@ -436,7 +515,7 @@ impl MirageDaemonProfiles for InMemoryMirageDaemon {
 }
 
 #[async_trait]
-impl MirageDaemonSessions for InMemoryMirageDaemon {
+impl MirageDaemonListSessions for InMemoryMirageDaemon {
     async fn list_sessions(
         &self,
         request: ListSessionsRequest,
@@ -447,7 +526,7 @@ impl MirageDaemonSessions for InMemoryMirageDaemon {
             .values()
             .filter(|session| {
                 request
-                    .profile_filter
+                    .profile
                     .as_ref()
                     .is_none_or(|filter| session.session.profile == *filter)
             })
@@ -461,14 +540,17 @@ impl MirageDaemonSessions for InMemoryMirageDaemon {
             .collect();
         Ok(ListSessionsReply { sessions })
     }
+}
 
+#[async_trait]
+impl MirageDaemonCreateSession for InMemoryMirageDaemon {
     async fn create_session(
         &self,
-        request: DashboardCreateSessionRequest,
-    ) -> MirageDaemonResult<DashboardCreateSessionReply> {
-        let session = request.session;
+        request: CreateSessionRequest,
+    ) -> MirageDaemonResult<CreateSessionReply> {
+        let session = Self::session_from_parts(request.name, request.profile, request.image);
         if session.name.trim().is_empty() {
-            return Ok(DashboardCreateSessionReply {
+            return Ok(CreateSessionReply {
                 ok: false,
                 error: Some("session name must not be empty".to_string()),
             });
@@ -476,21 +558,21 @@ impl MirageDaemonSessions for InMemoryMirageDaemon {
 
         let mut state = self.state.write().await;
         if state.sessions.contains_key(&session.name) {
-            return Ok(DashboardCreateSessionReply {
+            return Ok(CreateSessionReply {
                 ok: false,
                 error: Some(format!("session '{}' already exists", session.name)),
             });
         }
 
         let Some(profile) = state.profiles.get(&session.profile).cloned() else {
-            return Ok(DashboardCreateSessionReply {
+            return Ok(CreateSessionReply {
                 ok: false,
                 error: Some(format!("profile '{}' does not exist", session.profile)),
             });
         };
 
         if !state.simulators.contains_key(&profile.simulator) {
-            return Ok(DashboardCreateSessionReply {
+            return Ok(CreateSessionReply {
                 ok: false,
                 error: Some(format!(
                     "simulator '{}' is not registered",
@@ -525,30 +607,36 @@ impl MirageDaemonSessions for InMemoryMirageDaemon {
             },
         );
 
-        Ok(DashboardCreateSessionReply {
+        Ok(CreateSessionReply {
             ok: true,
             error: None,
         })
     }
+}
 
+#[async_trait]
+impl MirageDaemonDeleteSession for InMemoryMirageDaemon {
     async fn delete_session(
         &self,
-        request: DashboardDeleteSessionRequest,
-    ) -> MirageDaemonResult<DashboardDeleteSessionReply> {
+        request: DeleteSessionRequest,
+    ) -> MirageDaemonResult<DeleteSessionReply> {
         let mut state = self.state.write().await;
         if state.sessions.remove(&request.name).is_none() {
-            return Ok(DashboardDeleteSessionReply {
+            return Ok(DeleteSessionReply {
                 ok: false,
                 error: Some(format!("session '{}' does not exist", request.name)),
             });
         }
 
-        Ok(DashboardDeleteSessionReply {
+        Ok(DeleteSessionReply {
             ok: true,
             error: None,
         })
     }
+}
 
+#[async_trait]
+impl MirageDaemonGetSessionDetail for InMemoryMirageDaemon {
     async fn get_session_detail(
         &self,
         request: GetSessionDetailRequest,
@@ -577,7 +665,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
         &self,
         request: BootSessionRequest,
     ) -> MirageDaemonResult<BootSessionReply> {
-        let session = request.session;
+        let session = Self::session_from_parts(request.name, request.profile, request.image);
         if session.name.trim().is_empty() {
             return Ok(BootSessionReply {
                 ok: false,
@@ -901,7 +989,7 @@ impl MirageDaemonExec for InMemoryMirageDaemon {
         let exec_request = ExecRequest {
             container: handle.clone(),
             exec: {
-                let mut exec = request.exec;
+                let mut exec = Self::exec_from_command(request.command)?;
                 // Force GPU access through the interceptor.
                 if let Some(ref so_path) = record.interceptor_path_container {
                     exec.env.push(SetEnv {
@@ -967,12 +1055,12 @@ impl MirageDaemonShutdown for InMemoryMirageDaemon {
 }
 
 #[async_trait]
-impl MirageDaemonWorkloads for InMemoryMirageDaemon {
+impl MirageDaemonCreateWorkload for InMemoryMirageDaemon {
     async fn create_workload(
         &self,
         request: CreateWorkloadRequest,
     ) -> MirageDaemonResult<CreateWorkloadReply> {
-        let workload = request.workload;
+        let workload = Self::workload_from_request(request);
 
         if workload.name.trim().is_empty() {
             return Ok(CreateWorkloadReply {
@@ -1011,7 +1099,10 @@ impl MirageDaemonWorkloads for InMemoryMirageDaemon {
             error: None,
         })
     }
+}
 
+#[async_trait]
+impl MirageDaemonListWorkloads for InMemoryMirageDaemon {
     async fn list_workloads(
         &self,
         _request: ListWorkloadsRequest,
@@ -1031,7 +1122,10 @@ impl MirageDaemonWorkloads for InMemoryMirageDaemon {
             .collect();
         Ok(ListWorkloadsReply { workloads })
     }
+}
 
+#[async_trait]
+impl MirageDaemonGetWorkload for InMemoryMirageDaemon {
     async fn get_workload(
         &self,
         request: GetWorkloadRequest,
@@ -1040,7 +1134,10 @@ impl MirageDaemonWorkloads for InMemoryMirageDaemon {
         let workload = state.workloads.get(&request.name).cloned();
         Ok(GetWorkloadReply { workload })
     }
+}
 
+#[async_trait]
+impl MirageDaemonDeleteWorkload for InMemoryMirageDaemon {
     async fn delete_workload(
         &self,
         request: DeleteWorkloadRequest,
@@ -1064,38 +1161,87 @@ impl MirageDaemonWorkloads for InMemoryMirageDaemon {
 mod tests {
     use super::*;
 
+    fn create_profile_request(profile: ProfileDef) -> CreateProfileRequest {
+        CreateProfileRequest {
+            name: profile.name,
+            simulator: profile.simulator,
+            gpu: profile.gpu,
+            mode: profile.mode,
+            gpus_per_node: profile.num_gpus,
+            nodes: profile.num_nodes,
+        }
+    }
+
+    fn create_session_request(session: SessionDef) -> CreateSessionRequest {
+        CreateSessionRequest {
+            name: session.name,
+            profile: session.profile,
+            image: session.image,
+        }
+    }
+
+    fn boot_session_request(session: SessionDef) -> BootSessionRequest {
+        BootSessionRequest {
+            name: session.name,
+            profile: session.profile,
+            image: session.image,
+        }
+    }
+
+    fn exec_in_session_request(session_name: impl Into<String>, exec: ExecArgs) -> ExecInSessionRequest {
+        let mut command = vec![exec.command];
+        command.extend(exec.args);
+        ExecInSessionRequest {
+            session_name: session_name.into(),
+            command,
+        }
+    }
+
+    fn create_workload_request(workload: WorkloadDef) -> CreateWorkloadRequest {
+        let to_csv = |exec: ExecArgs| {
+            let mut parts = vec![exec.command];
+            parts.extend(exec.args);
+            parts.join(",")
+        };
+
+        CreateWorkloadRequest {
+            name: workload.name,
+            profile: workload.profile,
+            image: workload.image,
+            startup: workload.startup.map(to_csv),
+            execs: workload.execs.into_iter().map(to_csv).collect(),
+            cleanup: workload.cleanup,
+        }
+    }
+
     #[tokio::test]
     async fn creates_profile_only_for_registered_simulator() {
         let daemon = InMemoryMirageDaemon::new();
 
         // Unknown simulator should fail.
         let reply = daemon
-            .create_profile(CreateProfileRequest {
-                profile: ProfileDef {
-                    name: "custom".to_string(),
-                    simulator: "nonexistent".to_string(),
-                    mode: SimulatorMode::Functional,
-                    gpu: "MI300X".to_string(),
-                    num_gpus: 1,
-                    num_nodes: 1,
-                },
-            })
+            .create_profile(create_profile_request(ProfileDef {
+                name: "custom".to_string(),
+                simulator: "nonexistent".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
             .await
             .unwrap();
         assert!(!reply.ok);
 
         // Built-in rocjitsu should succeed.
         let reply = daemon
-            .create_profile(CreateProfileRequest {
-                profile: ProfileDef {
-                    name: "mi300x".to_string(),
-                    simulator: "rocjitsu".to_string(),
-                    mode: SimulatorMode::Functional,
-                    gpu: "MI300X".to_string(),
-                    num_gpus: 1,
-                    num_nodes: 1,
-                },
-            })
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
             .await
             .unwrap();
         assert!(reply.ok);
@@ -1105,27 +1251,23 @@ mod tests {
     async fn creates_and_lists_sessions() {
         let daemon = InMemoryMirageDaemon::new();
         daemon
-            .create_profile(CreateProfileRequest {
-                profile: ProfileDef {
-                    name: "mi300x".to_string(),
-                    simulator: "rocjitsu".to_string(),
-                    mode: SimulatorMode::Functional,
-                    gpu: "MI300X".to_string(),
-                    num_gpus: 1,
-                    num_nodes: 1,
-                },
-            })
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
             .await
             .unwrap();
 
         let reply = daemon
-            .create_session(DashboardCreateSessionRequest {
-                session: SessionDef {
-                    name: "session-a".to_string(),
-                    profile: "mi300x".to_string(),
-                    image: "ghcr.io/example/image:latest".to_string(),
-                },
-            })
+            .create_session(create_session_request(SessionDef {
+                name: "session-a".to_string(),
+                profile: "mi300x".to_string(),
+                image: "ghcr.io/example/image:latest".to_string(),
+            }))
             .await
             .unwrap();
         assert!(reply.ok);
@@ -1146,16 +1288,14 @@ mod tests {
         let daemon = InMemoryMirageDaemon::with_container_runtime(mock.clone());
 
         daemon
-            .create_profile(CreateProfileRequest {
-                profile: ProfileDef {
-                    name: "mi300x".to_string(),
-                    simulator: "rocjitsu".to_string(),
-                    mode: SimulatorMode::Functional,
-                    gpu: "MI300X".to_string(),
-                    num_gpus: 1,
-                    num_nodes: 1,
-                },
-            })
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
             .await
             .unwrap();
 
@@ -1167,13 +1307,11 @@ mod tests {
         let (daemon, mock) = daemon_with_mock_runtime().await;
 
         let reply = daemon
-            .boot_session(BootSessionRequest {
-                session: SessionDef {
-                    name: "vllm-test".to_string(),
-                    profile: "mi300x".to_string(),
-                    image: "ghcr.io/rocm/vllm:latest".to_string(),
-                },
-            })
+            .boot_session(boot_session_request(SessionDef {
+                name: "vllm-test".to_string(),
+                profile: "mi300x".to_string(),
+                image: "ghcr.io/rocm/vllm:latest".to_string(),
+            }))
             .await
             .unwrap();
 
@@ -1200,13 +1338,11 @@ mod tests {
         let (daemon, _mock) = daemon_with_mock_runtime().await;
 
         let reply = daemon
-            .boot_session(BootSessionRequest {
-                session: SessionDef {
-                    name: "test".to_string(),
-                    profile: "nonexistent".to_string(),
-                    image: "img:latest".to_string(),
-                },
-            })
+            .boot_session(boot_session_request(SessionDef {
+                name: "test".to_string(),
+                profile: "nonexistent".to_string(),
+                image: "img:latest".to_string(),
+            }))
             .await
             .unwrap();
 
@@ -1220,13 +1356,11 @@ mod tests {
 
         // Boot first.
         let boot = daemon
-            .boot_session(BootSessionRequest {
-                session: SessionDef {
-                    name: "exec-test".to_string(),
-                    profile: "mi300x".to_string(),
-                    image: "img:latest".to_string(),
-                },
-            })
+            .boot_session(boot_session_request(SessionDef {
+                name: "exec-test".to_string(),
+                profile: "mi300x".to_string(),
+                image: "img:latest".to_string(),
+            }))
             .await
             .unwrap();
         assert!(boot.ok);
@@ -1249,9 +1383,9 @@ mod tests {
 
         // Exec.
         let reply = daemon
-            .exec_in_session(ExecInSessionRequest {
-                session_name: "exec-test".to_string(),
-                exec: ExecArgs {
+            .exec_in_session(exec_in_session_request(
+                "exec-test",
+                ExecArgs {
                     command: "python".to_string(),
                     args: vec![
                         "-c".to_string(),
@@ -1259,7 +1393,7 @@ mod tests {
                     ],
                     env: vec![],
                 },
-            })
+            ))
             .await
             .unwrap();
 
@@ -1272,14 +1406,14 @@ mod tests {
         let (daemon, _mock) = daemon_with_mock_runtime().await;
 
         let result = daemon
-            .exec_in_session(ExecInSessionRequest {
-                session_name: "nonexistent".to_string(),
-                exec: ExecArgs {
+            .exec_in_session(exec_in_session_request(
+                "nonexistent",
+                ExecArgs {
                     command: "echo".to_string(),
                     args: vec!["hello".to_string()],
                     env: vec![],
                 },
-            })
+            ))
             .await;
 
         assert!(result.is_err());
@@ -1291,13 +1425,11 @@ mod tests {
 
         // Boot.
         let boot = daemon
-            .boot_session(BootSessionRequest {
-                session: SessionDef {
-                    name: "shutdown-test".to_string(),
-                    profile: "mi300x".to_string(),
-                    image: "img:latest".to_string(),
-                },
-            })
+            .boot_session(boot_session_request(SessionDef {
+                name: "shutdown-test".to_string(),
+                profile: "mi300x".to_string(),
+                image: "img:latest".to_string(),
+            }))
             .await
             .unwrap();
         assert!(boot.ok);
@@ -1345,13 +1477,11 @@ mod tests {
 
         // 1. Boot a vLLM session.
         let boot = daemon
-            .boot_session(BootSessionRequest {
-                session: SessionDef {
-                    name: "vllm-e2e".to_string(),
-                    profile: "mi300x".to_string(),
-                    image: "ghcr.io/rocm/vllm:latest".to_string(),
-                },
-            })
+            .boot_session(boot_session_request(SessionDef {
+                name: "vllm-e2e".to_string(),
+                profile: "mi300x".to_string(),
+                image: "ghcr.io/rocm/vllm:latest".to_string(),
+            }))
             .await
             .unwrap();
         assert!(boot.ok);
@@ -1374,14 +1504,14 @@ mod tests {
         .await;
 
         let exec_reply = daemon
-            .exec_in_session(ExecInSessionRequest {
-                session_name: "vllm-e2e".to_string(),
-                exec: ExecArgs {
+            .exec_in_session(exec_in_session_request(
+                "vllm-e2e",
+                ExecArgs {
                     command: "python".to_string(),
                     args: vec!["-c".to_string(), "print('vLLM is running')".to_string()],
                     env: vec![],
                 },
-            })
+            ))
             .await
             .unwrap();
         assert_eq!(exec_reply.exit_code, 0);
@@ -1415,16 +1545,14 @@ mod tests {
         let daemon = InMemoryMirageDaemon::with_container_runtime(mock.clone());
 
         daemon
-            .create_profile(CreateProfileRequest {
-                profile: ProfileDef {
-                    name: "mi300x-2node".to_string(),
-                    simulator: "rocjitsu".to_string(),
-                    mode: SimulatorMode::Functional,
-                    gpu: "MI300X".to_string(),
-                    num_gpus: 8,
-                    num_nodes: 2,
-                },
-            })
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x-2node".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 8,
+                num_nodes: 2,
+            }))
             .await
             .unwrap();
 
@@ -1436,13 +1564,11 @@ mod tests {
         let (daemon, mock) = daemon_with_multinode_profile().await;
 
         let reply = daemon
-            .boot_session(BootSessionRequest {
-                session: SessionDef {
-                    name: "multi-test".to_string(),
-                    profile: "mi300x-2node".to_string(),
-                    image: "ghcr.io/rocm/vllm:latest".to_string(),
-                },
-            })
+            .boot_session(boot_session_request(SessionDef {
+                name: "multi-test".to_string(),
+                profile: "mi300x-2node".to_string(),
+                image: "ghcr.io/rocm/vllm:latest".to_string(),
+            }))
             .await
             .unwrap();
 
@@ -1521,13 +1647,11 @@ mod tests {
         let (daemon, mock) = daemon_with_multinode_profile().await;
 
         let boot = daemon
-            .boot_session(BootSessionRequest {
-                session: SessionDef {
-                    name: "multi-shutdown".to_string(),
-                    profile: "mi300x-2node".to_string(),
-                    image: "img:latest".to_string(),
-                },
-            })
+            .boot_session(boot_session_request(SessionDef {
+                name: "multi-shutdown".to_string(),
+                profile: "mi300x-2node".to_string(),
+                image: "img:latest".to_string(),
+            }))
             .await
             .unwrap();
         assert!(boot.ok);
@@ -1555,16 +1679,14 @@ mod tests {
     async fn daemon_with_profile() -> InMemoryMirageDaemon {
         let daemon = InMemoryMirageDaemon::new();
         daemon
-            .create_profile(CreateProfileRequest {
-                profile: ProfileDef {
-                    name: "mi300x".to_string(),
-                    simulator: "rocjitsu".to_string(),
-                    mode: SimulatorMode::Functional,
-                    gpu: "MI300X".to_string(),
-                    num_gpus: 1,
-                    num_nodes: 1,
-                },
-            })
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
             .await
             .unwrap();
         daemon
@@ -1583,16 +1705,14 @@ mod tests {
         let daemon = daemon_with_profile().await;
 
         let reply = daemon
-            .create_workload(CreateWorkloadRequest {
-                workload: WorkloadDef {
-                    name: "torch-smoke".to_string(),
-                    profile: "mi300x".to_string(),
-                    image: "ghcr.io/example/img:latest".to_string(),
-                    startup: None,
-                    execs: vec![sample_exec("rocminfo")],
-                    cleanup: mirage_schema::common::CleanupPolicy::Always,
-                },
-            })
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "torch-smoke".to_string(),
+                profile: "mi300x".to_string(),
+                image: "ghcr.io/example/img:latest".to_string(),
+                startup: None,
+                execs: vec![sample_exec("rocminfo")],
+                cleanup: mirage_schema::common::CleanupPolicy::Always,
+            }))
             .await
             .unwrap();
         assert!(reply.ok, "create should succeed: {:?}", reply.error);
@@ -1612,16 +1732,14 @@ mod tests {
         let daemon = daemon_with_profile().await;
 
         let reply = daemon
-            .create_workload(CreateWorkloadRequest {
-                workload: WorkloadDef {
-                    name: "with-startup".to_string(),
-                    profile: "mi300x".to_string(),
-                    image: "img:latest".to_string(),
-                    startup: Some(sample_exec("init.sh")),
-                    execs: vec![sample_exec("step1"), sample_exec("step2")],
-                    cleanup: mirage_schema::common::CleanupPolicy::OnSuccess,
-                },
-            })
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "with-startup".to_string(),
+                profile: "mi300x".to_string(),
+                image: "img:latest".to_string(),
+                startup: Some(sample_exec("init.sh")),
+                execs: vec![sample_exec("step1"), sample_exec("step2")],
+                cleanup: mirage_schema::common::CleanupPolicy::OnSuccess,
+            }))
             .await
             .unwrap();
         assert!(reply.ok);
@@ -1643,16 +1761,14 @@ mod tests {
         let daemon = daemon_with_profile().await;
 
         let reply = daemon
-            .create_workload(CreateWorkloadRequest {
-                workload: WorkloadDef {
-                    name: "".to_string(),
-                    profile: "mi300x".to_string(),
-                    image: "img:latest".to_string(),
-                    startup: None,
-                    execs: vec![sample_exec("rocminfo")],
-                    cleanup: mirage_schema::common::CleanupPolicy::Always,
-                },
-            })
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "".to_string(),
+                profile: "mi300x".to_string(),
+                image: "img:latest".to_string(),
+                startup: None,
+                execs: vec![sample_exec("rocminfo")],
+                cleanup: mirage_schema::common::CleanupPolicy::Always,
+            }))
             .await
             .unwrap();
         assert!(!reply.ok);
@@ -1664,16 +1780,14 @@ mod tests {
         let daemon = daemon_with_profile().await;
 
         let reply = daemon
-            .create_workload(CreateWorkloadRequest {
-                workload: WorkloadDef {
-                    name: "no-execs".to_string(),
-                    profile: "mi300x".to_string(),
-                    image: "img:latest".to_string(),
-                    startup: None,
-                    execs: vec![],
-                    cleanup: mirage_schema::common::CleanupPolicy::Always,
-                },
-            })
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "no-execs".to_string(),
+                profile: "mi300x".to_string(),
+                image: "img:latest".to_string(),
+                startup: None,
+                execs: vec![],
+                cleanup: mirage_schema::common::CleanupPolicy::Always,
+            }))
             .await
             .unwrap();
         assert!(!reply.ok);
@@ -1685,16 +1799,14 @@ mod tests {
         let daemon = InMemoryMirageDaemon::new();
 
         let reply = daemon
-            .create_workload(CreateWorkloadRequest {
-                workload: WorkloadDef {
-                    name: "bad-profile".to_string(),
-                    profile: "nonexistent".to_string(),
-                    image: "img:latest".to_string(),
-                    startup: None,
-                    execs: vec![sample_exec("rocminfo")],
-                    cleanup: mirage_schema::common::CleanupPolicy::Always,
-                },
-            })
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "bad-profile".to_string(),
+                profile: "nonexistent".to_string(),
+                image: "img:latest".to_string(),
+                startup: None,
+                execs: vec![sample_exec("rocminfo")],
+                cleanup: mirage_schema::common::CleanupPolicy::Always,
+            }))
             .await
             .unwrap();
         assert!(!reply.ok);
@@ -1715,17 +1827,12 @@ mod tests {
         };
 
         let r1 = daemon
-            .create_workload(CreateWorkloadRequest {
-                workload: workload.clone(),
-            })
+            .create_workload(create_workload_request(workload.clone()))
             .await
             .unwrap();
         assert!(r1.ok);
 
-        let r2 = daemon
-            .create_workload(CreateWorkloadRequest { workload })
-            .await
-            .unwrap();
+        let r2 = daemon.create_workload(create_workload_request(workload)).await.unwrap();
         assert!(!r2.ok);
         assert!(r2.error.unwrap().contains("already exists"));
     }
@@ -1735,16 +1842,14 @@ mod tests {
         let daemon = daemon_with_profile().await;
 
         daemon
-            .create_workload(CreateWorkloadRequest {
-                workload: WorkloadDef {
-                    name: "showme".to_string(),
-                    profile: "mi300x".to_string(),
-                    image: "img:latest".to_string(),
-                    startup: Some(sample_exec("setup")),
-                    execs: vec![sample_exec("run")],
-                    cleanup: mirage_schema::common::CleanupPolicy::Never,
-                },
-            })
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "showme".to_string(),
+                profile: "mi300x".to_string(),
+                image: "img:latest".to_string(),
+                startup: Some(sample_exec("setup")),
+                execs: vec![sample_exec("run")],
+                cleanup: mirage_schema::common::CleanupPolicy::Never,
+            }))
             .await
             .unwrap();
 
@@ -1776,16 +1881,14 @@ mod tests {
         let daemon = daemon_with_profile().await;
 
         daemon
-            .create_workload(CreateWorkloadRequest {
-                workload: WorkloadDef {
-                    name: "deleteme".to_string(),
-                    profile: "mi300x".to_string(),
-                    image: "img:latest".to_string(),
-                    startup: None,
-                    execs: vec![sample_exec("run")],
-                    cleanup: mirage_schema::common::CleanupPolicy::Always,
-                },
-            })
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "deleteme".to_string(),
+                profile: "mi300x".to_string(),
+                image: "img:latest".to_string(),
+                startup: None,
+                execs: vec![sample_exec("run")],
+                cleanup: mirage_schema::common::CleanupPolicy::Always,
+            }))
             .await
             .unwrap();
 
@@ -1847,26 +1950,6 @@ fn unique_emulator_socket(session_name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("mirage");
     let _ = std::fs::create_dir_all(&dir);
     dir.join(format!("emu-{session_name}.sock"))
-}
-
-/// Recursively copy the contents of a directory.
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else if ty.is_file() {
-            // sysfs files may fail to read; ignore errors.
-            if let Ok(data) = std::fs::read(&src_path) {
-                let _ = std::fs::write(&dst_path, &data);
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Write a [`Topology`] to a session-specific temp directory so it can be

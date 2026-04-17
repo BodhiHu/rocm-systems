@@ -1,267 +1,91 @@
-use std::fmt;
-use std::io;
+//! Transport and trait re-exports for the Mirage daemon control protocol.
+//!
+//! The protocol surface itself is defined in [`crate::ctl`]. This module keeps
+//! the Unix-socket transport and the public compatibility re-exports that the
+//! daemon implementation and client binaries consume.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::mpsc;
 
+use crate::ctl::daemon::{
+    self, DaemonInput, DaemonOutput, DaemonReply, DaemonRequest, DaemonTransport,
+};
 use crate::paths;
-use crate::socket::{
-    AttachReply, AttachRequest, BootSessionReply, BootSessionRequest, CreateProfileReply,
-    CreateProfileRequest, CreateWorkloadReply, CreateWorkloadRequest,
-    DashboardCreateSessionReply, DashboardCreateSessionRequest, DashboardDeleteSessionReply,
-    DashboardDeleteSessionRequest, DeleteProfileReply, DeleteProfileRequest, DeleteWorkloadReply,
-    DeleteWorkloadRequest, ExecInSessionReply, ExecInSessionRequest, GetOverviewReply,
-    GetOverviewRequest, GetSessionDetailReply, GetSessionDetailRequest, GetSimulatorReply,
-    GetSimulatorRequest, GetWorkloadReply, GetWorkloadRequest, HealthReply, HealthRequest,
-    ListProfilesReply, ListProfilesRequest, ListSessionsReply, ListSessionsRequest,
-    ListSimulatorsReply, ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest,
-    RegisterSimReply, RegisterSimRequest, ShutdownSessionReply, ShutdownSessionRequest, TimeReply,
-    TimeRequest,
+
+pub use crate::ctl::{
+    MirageDaemonError, MirageDaemonResult, SessionSummary, SimulatorSummary, WorkloadSummary,
+};
+pub use crate::ctl::daemon::{
+    AttachInput, AttachOutput, AttachReply, AttachRequest, BootSessionReply, BootSessionRequest,
+    CreateProfileReply, CreateProfileRequest, CreateSessionReply, CreateSessionRequest,
+    CreateWorkloadReply, CreateWorkloadRequest, DeleteProfileReply, DeleteProfileRequest,
+    DeleteSessionReply, DeleteSessionRequest, DeleteWorkloadReply, DeleteWorkloadRequest,
+    ExecInSessionReply, ExecInSessionRequest, GetOverviewReply, GetOverviewRequest,
+    GetSessionDetailReply, GetSessionDetailRequest, GetSimulatorReply, GetSimulatorRequest,
+    GetWorkloadReply, GetWorkloadRequest, HealthReply, HealthRequest, ListProfilesReply,
+    ListProfilesRequest, ListSessionsReply, ListSessionsRequest, ListSimulatorsReply,
+    ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest, RegisterSimReply,
+    RegisterSimRequest, ShutdownSessionReply, ShutdownSessionRequest, TimeReply, TimeRequest,
+};
+pub use crate::ctl::daemon::{
+    DaemonCli as MirageDaemonCli, DaemonCommand as MirageDaemonCommand,
+    DaemonImpl as MirageDaemon, ImplAttach as MirageDaemonAttach,
+    ImplBootSession as MirageDaemonBoot, ImplCreateProfile as MirageDaemonCreateProfile,
+    ImplCreateSession as MirageDaemonCreateSession,
+    ImplCreateWorkload as MirageDaemonCreateWorkload,
+    ImplDeleteProfile as MirageDaemonDeleteProfile,
+    ImplDeleteSession as MirageDaemonDeleteSession,
+    ImplDeleteWorkload as MirageDaemonDeleteWorkload,
+    ImplExecInSession as MirageDaemonExec, ImplGetOverview as MirageDaemonOverview,
+    ImplGetSessionDetail as MirageDaemonGetSessionDetail,
+    ImplGetSimulator as MirageDaemonGetSimulator, ImplGetWorkload as MirageDaemonGetWorkload,
+    ImplHealth as MirageDaemonHealth, ImplListProfiles as MirageDaemonListProfiles,
+    ImplListSessions as MirageDaemonListSessions,
+    ImplListSimulators as MirageDaemonListSimulators,
+    ImplListWorkloads as MirageDaemonListWorkloads,
+    ImplRegisterSim as MirageDaemonRegistration, ImplShutdownSession as MirageDaemonShutdown,
+    ImplTime as MirageDaemonTime,
 };
 
-const MAX_FRAME_LEN: usize = 644 * 1024 * 1024;
-
-pub type MirageDaemonResult<T> = Result<T, MirageDaemonError>;
-
-#[derive(Debug)]
-pub enum MirageDaemonError {
-    Io(io::Error),
-    Serialization(serde_json::Error),
-    Protocol(String),
-    Remote(String),
-}
-
-impl MirageDaemonError {
-    fn protocol(message: impl Into<String>) -> Self {
-        Self::Protocol(message.into())
-    }
-}
-
-impl fmt::Display for MirageDaemonError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(error) => write!(f, "io error: {error}"),
-            Self::Serialization(error) => write!(f, "serialization error: {error}"),
-            Self::Protocol(message) => write!(f, "protocol error: {message}"),
-            Self::Remote(message) => write!(f, "remote error: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for MirageDaemonError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io(error) => Some(error),
-            Self::Serialization(error) => Some(error),
-            Self::Protocol(_) | Self::Remote(_) => None,
-        }
-    }
-}
-
-impl From<io::Error> for MirageDaemonError {
-    fn from(value: io::Error) -> Self {
-        Self::Io(value)
-    }
-}
-
-impl From<serde_json::Error> for MirageDaemonError {
-    fn from(value: serde_json::Error) -> Self {
-        Self::Serialization(value)
-    }
-}
-
-macro_rules! mirage_daemon_rpcs {
-    (
-        $(
-            $trait_name:ident {
-                $(
-                    $method:ident($request_ty:ty) -> $reply_ty:ty => $variant:ident;
-                )*
-            }
-        )*
-    ) => {
-        $(
-            #[async_trait]
-            pub trait $trait_name: Send + Sync {
-                $(
-                    async fn $method(
-                        &self,
-                        request: $request_ty,
-                    ) -> MirageDaemonResult<$reply_ty>;
-                )*
-            }
-        )*
-
-        pub trait MirageDaemon: $( $trait_name + )* Send + Sync {}
-
-        impl<T> MirageDaemon for T where T: $( $trait_name + )* Send + Sync {}
-
-        #[derive(Debug, Serialize, Deserialize)]
-        enum MirageDaemonRequest {
-            $(
-                $(
-                    $variant($request_ty),
-                )*
-            )*
-        }
-
-        #[derive(Debug, Serialize, Deserialize)]
-        enum MirageDaemonResponse {
-            $(
-                $(
-                    $variant(RpcResult<$reply_ty>),
-                )*
-            )*
-        }
-
-        impl MirageDaemonResponse {
-            fn kind(&self) -> &'static str {
-                match self {
-                    $(
-                        $(
-                            Self::$variant(_) => stringify!($variant),
-                        )*
-                    )*
-                }
-            }
-        }
-
-        $(
-            #[async_trait]
-            impl $trait_name for MirageDaemonClient {
-                $(
-                    async fn $method(
-                        &self,
-                        request: $request_ty,
-                    ) -> MirageDaemonResult<$reply_ty> {
-                        let response = self.send(MirageDaemonRequest::$variant(request)).await?;
-                        match response {
-                            MirageDaemonResponse::$variant(result) => result.into_result(),
-                            other => Err(Self::unexpected_response(stringify!($variant), &other)),
-                        }
-                    }
-                )*
-            }
-        )*
-
-        async fn dispatch_request(
-            daemon: &dyn MirageDaemon,
-            request: MirageDaemonRequest,
-        ) -> MirageDaemonResponse {
-            match request {
-                $(
-                    $(
-                        MirageDaemonRequest::$variant(request) => {
-                            MirageDaemonResponse::$variant(to_rpc_result(daemon.$method(request).await))
-                        }
-                    )*
-                )*
-            }
-        }
-    };
-}
+const MAX_FRAME_LEN: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
-struct RpcResult<T> {
-    ok: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    value: Option<T>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
+enum TransportFrame {
+    Request(DaemonRequest),
+    Input(DaemonInput),
+    Output(DaemonOutput),
+    Reply(DaemonReply),
+    Error(String),
+    EndInput,
 }
 
-impl<T> RpcResult<T> {
-    fn ok(value: T) -> Self {
-        Self {
-            ok: true,
-            value: Some(value),
-            error: None,
-        }
-    }
-
-    fn err(error: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            value: None,
-            error: Some(error.into()),
-        }
-    }
-
-    fn into_result(self) -> MirageDaemonResult<T> {
-        if self.ok {
-            self.value.ok_or_else(|| {
-                MirageDaemonError::protocol("successful rpc response missing payload")
-            })
-        } else {
-            Err(MirageDaemonError::Remote(
-                self.error
-                    .unwrap_or_else(|| "remote request failed".to_string()),
-            ))
+impl TransportFrame {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Request(request) => request.kind(),
+            Self::Input(input) => input.kind(),
+            Self::Output(output) => output.kind(),
+            Self::Reply(reply) => reply.kind(),
+            Self::Error(_) => "error",
+            Self::EndInput => "end-input",
         }
     }
 }
 
-mirage_daemon_rpcs! {
-    MirageDaemonHealth {
-        health(HealthRequest) -> HealthReply => Health;
-    }
-    MirageDaemonTime {
-        time(TimeRequest) -> TimeReply => Time;
-    }
-    MirageDaemonAttach {
-        attach(AttachRequest) -> Vec<AttachReply> => Attach;
-    }
-    MirageDaemonRegistration {
-        register_sim(RegisterSimRequest) -> RegisterSimReply => RegisterSim;
-    }
-    MirageDaemonOverview {
-        get_overview(GetOverviewRequest) -> GetOverviewReply => GetOverview;
-    }
-    MirageDaemonSimulators {
-        list_simulators(ListSimulatorsRequest) -> ListSimulatorsReply => ListSimulators;
-        get_simulator(GetSimulatorRequest) -> GetSimulatorReply => GetSimulator;
-    }
-    MirageDaemonProfiles {
-        list_profiles(ListProfilesRequest) -> ListProfilesReply => ListProfiles;
-        create_profile(CreateProfileRequest) -> CreateProfileReply => CreateProfile;
-        delete_profile(DeleteProfileRequest) -> DeleteProfileReply => DeleteProfile;
-    }
-    MirageDaemonSessions {
-        list_sessions(ListSessionsRequest) -> ListSessionsReply => ListSessions;
-        create_session(DashboardCreateSessionRequest) -> DashboardCreateSessionReply => CreateSession;
-        delete_session(DashboardDeleteSessionRequest) -> DashboardDeleteSessionReply => DeleteSession;
-        get_session_detail(GetSessionDetailRequest) -> GetSessionDetailReply => GetSessionDetail;
-    }
-    MirageDaemonBoot {
-        boot_session(BootSessionRequest) -> BootSessionReply => BootSession;
-    }
-    MirageDaemonExec {
-        exec_in_session(ExecInSessionRequest) -> ExecInSessionReply => ExecInSession;
-    }
-    MirageDaemonShutdown {
-        shutdown_session(ShutdownSessionRequest) -> ShutdownSessionReply => ShutdownSession;
-    }
-    MirageDaemonWorkloads {
-        create_workload(CreateWorkloadRequest) -> CreateWorkloadReply => CreateWorkload;
-        list_workloads(ListWorkloadsRequest) -> ListWorkloadsReply => ListWorkloads;
-        get_workload(GetWorkloadRequest) -> GetWorkloadReply => GetWorkload;
-        delete_workload(DeleteWorkloadRequest) -> DeleteWorkloadReply => DeleteWorkload;
-    }
-}
-
+/// Unix-socket client for the generated daemon control protocol.
 #[derive(Debug, Clone)]
 pub struct MirageDaemonClient {
     socket_path: PathBuf,
 }
 
 impl MirageDaemonClient {
+    /// Creates a client that talks to the daemon listening on `socket_path`.
     pub fn new<P>(socket_path: P) -> Self
     where
         P: Into<PathBuf>,
@@ -271,39 +95,99 @@ impl MirageDaemonClient {
         }
     }
 
+    /// Creates a client that talks to the default local daemon socket.
     pub fn local() -> Self {
         Self::new(paths::socket_path())
     }
 
+    /// Returns the socket path used by this client.
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
     }
 
-    async fn send(&self, request: MirageDaemonRequest) -> MirageDaemonResult<MirageDaemonResponse> {
-        let mut stream = UnixStream::connect(&self.socket_path).await?;
-        write_frame(&mut stream, &request).await?;
-        read_frame(&mut stream).await
-    }
-
-    fn unexpected_response(
-        expected: &'static str,
-        actual: &MirageDaemonResponse,
-    ) -> MirageDaemonError {
-        MirageDaemonError::protocol(format!(
-            "expected {expected} response but received {}",
-            actual.kind()
-        ))
+    async fn read_reply_frames(
+        mut reader: tokio::net::unix::OwnedReadHalf,
+        output: Option<mpsc::Sender<DaemonOutput>>,
+    ) -> MirageDaemonResult<DaemonReply> {
+        let output = output;
+        loop {
+            match read_frame::<_, TransportFrame>(&mut reader).await? {
+                TransportFrame::Output(value) => {
+                    let Some(sender) = &output else {
+                        return Err(MirageDaemonError::protocol(format!(
+                            "received unexpected {} output frame",
+                            value.kind()
+                        )));
+                    };
+                    sender.send(value).await.map_err(|_| {
+                        MirageDaemonError::protocol(
+                            "output receiver dropped before daemon output could be delivered",
+                        )
+                    })?;
+                }
+                TransportFrame::Reply(reply) => return Ok(reply),
+                TransportFrame::Error(message) => return Err(MirageDaemonError::Remote(message)),
+                other => {
+                    return Err(MirageDaemonError::protocol(format!(
+                        "expected output or reply frame but received {}",
+                        other.kind()
+                    )));
+                }
+            }
+        }
     }
 }
 
+#[async_trait::async_trait]
+impl DaemonTransport for MirageDaemonClient {
+    async fn transport_call(
+        &self,
+        request: DaemonRequest,
+        input: Option<mpsc::Receiver<DaemonInput>>,
+        output: Option<mpsc::Sender<DaemonOutput>>,
+    ) -> MirageDaemonResult<DaemonReply> {
+        let stream = UnixStream::connect(&self.socket_path).await?;
+        let (reader, mut writer) = stream.into_split();
+
+        write_frame(&mut writer, &TransportFrame::Request(request)).await?;
+
+        let write_task = tokio::spawn(async move {
+            if let Some(mut input) = input {
+                while let Some(value) = input.recv().await {
+                    write_frame(&mut writer, &TransportFrame::Input(value)).await?;
+                }
+            }
+            write_frame(&mut writer, &TransportFrame::EndInput).await
+        });
+
+        let read_result = Self::read_reply_frames(reader, output).await;
+        if read_result.is_err() {
+            write_task.abort();
+        }
+
+        match write_task.await {
+            Ok(write_result) => write_result?,
+            Err(error) if error.is_cancelled() => {}
+            Err(error) => {
+                return Err(MirageDaemonError::protocol(format!(
+                    "client writer task failed: {error}"
+                )));
+            }
+        }
+
+        read_result
+    }
+}
+
+/// Unix-socket server for the generated daemon control protocol.
 #[derive(Clone)]
 pub struct MirageDaemonServer {
     daemon: Arc<dyn MirageDaemon>,
     socket_path: PathBuf,
 }
 
-impl fmt::Debug for MirageDaemonServer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Debug for MirageDaemonServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MirageDaemonServer")
             .field("socket_path", &self.socket_path)
             .finish_non_exhaustive()
@@ -311,6 +195,7 @@ impl fmt::Debug for MirageDaemonServer {
 }
 
 impl MirageDaemonServer {
+    /// Creates a server that serves `daemon` on `socket_path`.
     pub fn new<P, D>(socket_path: P, daemon: D) -> Self
     where
         P: Into<PathBuf>,
@@ -319,6 +204,7 @@ impl MirageDaemonServer {
         Self::from_arc(socket_path, Arc::new(daemon))
     }
 
+    /// Creates a server bound to the default local daemon socket.
     pub fn local<D>(daemon: D) -> Self
     where
         D: MirageDaemon + 'static,
@@ -326,6 +212,7 @@ impl MirageDaemonServer {
         Self::new(paths::socket_path(), daemon)
     }
 
+    /// Creates a server from an already shared daemon instance.
     pub fn from_arc<P>(socket_path: P, daemon: Arc<dyn MirageDaemon>) -> Self
     where
         P: Into<PathBuf>,
@@ -336,10 +223,12 @@ impl MirageDaemonServer {
         }
     }
 
+    /// Returns the socket path served by this server.
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
     }
 
+    /// Serves daemon requests until the process exits.
     pub async fn serve(&self) -> MirageDaemonResult<()> {
         if let Some(parent) = self.socket_path.parent() {
             fs::create_dir_all(parent).await?;
@@ -347,7 +236,7 @@ impl MirageDaemonServer {
 
         match fs::remove_file(&self.socket_path).await {
             Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
 
@@ -363,20 +252,108 @@ impl MirageDaemonServer {
         }
     }
 
-    async fn handle_client(
-        daemon: Arc<dyn MirageDaemon>,
-        mut stream: UnixStream,
-    ) -> MirageDaemonResult<()> {
-        let request: MirageDaemonRequest = read_frame(&mut stream).await?;
-        let response = dispatch_request(&*daemon, request).await;
-        write_frame(&mut stream, &response).await
-    }
-}
+    async fn handle_client(daemon: Arc<dyn MirageDaemon>, stream: UnixStream) -> MirageDaemonResult<()> {
+        let (mut reader, writer) = stream.into_split();
+        let request = match read_frame::<_, TransportFrame>(&mut reader).await? {
+            TransportFrame::Request(request) => request,
+            other => {
+                return Err(MirageDaemonError::protocol(format!(
+                    "expected request frame but received {}",
+                    other.kind()
+                )));
+            }
+        };
 
-fn to_rpc_result<T>(result: MirageDaemonResult<T>) -> RpcResult<T> {
-    match result {
-        Ok(value) => RpcResult::ok(value),
-        Err(error) => RpcResult::err(error.to_string()),
+        let (transport_input_tx, transport_input_rx) = mpsc::channel(16);
+        let (transport_output_tx, mut transport_output_rx) = mpsc::channel(16);
+        let (frame_tx, mut frame_rx) = mpsc::channel::<TransportFrame>(16);
+
+        let writer_task = tokio::spawn(async move {
+            let mut writer = writer;
+            while let Some(frame) = frame_rx.recv().await {
+                write_frame(&mut writer, &frame).await?;
+            }
+            Ok::<(), MirageDaemonError>(())
+        });
+
+        let output_sender = frame_tx.clone();
+        let output_task = tokio::spawn(async move {
+            while let Some(output) = transport_output_rx.recv().await {
+                output_sender
+                    .send(TransportFrame::Output(output))
+                    .await
+                    .map_err(|_| {
+                        MirageDaemonError::protocol(
+                            "frame writer dropped before daemon output could be forwarded",
+                        )
+                    })?;
+            }
+            Ok::<(), MirageDaemonError>(())
+        });
+
+        let input_task = tokio::spawn(async move {
+            loop {
+                match read_frame::<_, TransportFrame>(&mut reader).await? {
+                    TransportFrame::Input(input) => transport_input_tx
+                        .send(input)
+                        .await
+                        .map_err(|_| {
+                            MirageDaemonError::protocol(
+                                "daemon input receiver dropped before all client input was read",
+                            )
+                        })?,
+                    TransportFrame::EndInput => break,
+                    other => {
+                        return Err(MirageDaemonError::protocol(format!(
+                            "expected input or end-input frame but received {}",
+                            other.kind()
+                        )));
+                    }
+                }
+            }
+            Ok::<(), MirageDaemonError>(())
+        });
+
+        let reply = daemon::dispatch_transport(
+            &*daemon,
+            request,
+            Some(transport_input_rx),
+            Some(transport_output_tx),
+        )
+        .await;
+
+        output_task.await.map_err(|error| {
+            MirageDaemonError::protocol(format!("server output task failed: {error}"))
+        })??;
+
+        input_task.abort();
+        match input_task.await {
+            Ok(result) => result?,
+            Err(error) if error.is_cancelled() => {}
+            Err(error) => {
+                return Err(MirageDaemonError::protocol(format!(
+                    "server input task failed: {error}"
+                )));
+            }
+        }
+
+        frame_tx
+            .send(match reply {
+                Ok(reply) => TransportFrame::Reply(reply),
+                Err(error) => TransportFrame::Error(error.to_string()),
+            })
+            .await
+            .map_err(|_| {
+                MirageDaemonError::protocol(
+                    "frame writer dropped before the final daemon reply could be sent",
+                )
+            })?;
+        drop(frame_tx);
+
+        writer_task.await.map_err(|error| {
+            MirageDaemonError::protocol(format!("server writer task failed: {error}"))
+        })??;
+        Ok(())
     }
 }
 
@@ -399,7 +376,7 @@ where
 async fn read_frame<R, T>(reader: &mut R) -> MirageDaemonResult<T>
 where
     R: AsyncRead + Unpin,
-    T: DeserializeOwned,
+    T: for<'de> Deserialize<'de>,
 {
     let mut len_bytes = [0_u8; 4];
     reader.read_exact(&mut len_bytes).await?;
@@ -418,14 +395,12 @@ where
 mod tests {
     use super::*;
 
-    use crate::common::{GpuDef, GpuFamily, HealthStatus, SimulatorMode};
-    use crate::simulator::SimulatorInfo;
-    use crate::socket::SimulatorSummary;
+    use crate::common::{CleanupPolicy, HealthStatus, ProfileDef, SimulatorMode, WorkloadDef};
 
     #[derive(Debug)]
     struct FixedDaemon;
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl MirageDaemonHealth for FixedDaemon {
         async fn health(&self, _request: HealthRequest) -> MirageDaemonResult<HealthReply> {
             Ok(HealthReply {
@@ -435,7 +410,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl MirageDaemonTime for FixedDaemon {
         async fn time(&self, _request: TimeRequest) -> MirageDaemonResult<TimeReply> {
             Ok(TimeReply {
@@ -444,14 +419,41 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl MirageDaemonAttach for FixedDaemon {
-        async fn attach(&self, _request: AttachRequest) -> MirageDaemonResult<Vec<AttachReply>> {
-            Ok(vec![])
+        async fn attach(
+            &self,
+            request: AttachRequest,
+            mut input: mpsc::Receiver<AttachInput>,
+            output: mpsc::Sender<AttachOutput>,
+        ) -> MirageDaemonResult<AttachReply> {
+            assert_eq!(request.exec_id, "exec-1");
+            let mut stdin = Vec::new();
+            while let Some(chunk) = input.recv().await {
+                stdin.extend(chunk.stream);
+            }
+            assert_eq!(stdin, b"stdin-data".to_vec());
+
+            output
+                .send(AttachOutput {
+                    is_stdout: true,
+                    output: b"stdout".to_vec(),
+                })
+                .await
+                .unwrap();
+            output
+                .send(AttachOutput {
+                    is_stdout: false,
+                    output: b"stderr".to_vec(),
+                })
+                .await
+                .unwrap();
+
+            Ok(AttachReply { exit_code: 0 })
         }
     }
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl MirageDaemonRegistration for FixedDaemon {
         async fn register_sim(
             &self,
@@ -464,7 +466,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl MirageDaemonOverview for FixedDaemon {
         async fn get_overview(
             &self,
@@ -478,8 +480,8 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl MirageDaemonSimulators for FixedDaemon {
+    #[async_trait::async_trait]
+    impl MirageDaemonListSimulators for FixedDaemon {
         async fn list_simulators(
             &self,
             _request: ListSimulatorsRequest,
@@ -489,58 +491,47 @@ mod tests {
                     name: Some("rocjitsu".to_string()),
                     version: Some("1.0.0".to_string()),
                     description: Some("functional simulator".to_string()),
-                    supported_gpus: vec![GpuDef {
-                        name: "MI300X".to_string(),
-                        arch: "gfx942".to_string(),
-                        family: GpuFamily::AmdCdna,
-                        description: None,
-                    }],
+                    supported_gpus: vec![],
                     supports_custom_gpus: false,
                     supported_modes: vec![SimulatorMode::Functional],
                     active_session_count: 0,
                 }],
             })
         }
+    }
 
+    #[async_trait::async_trait]
+    impl MirageDaemonGetSimulator for FixedDaemon {
         async fn get_simulator(
             &self,
             request: GetSimulatorRequest,
         ) -> MirageDaemonResult<GetSimulatorReply> {
-            let info = SimulatorInfo {
-                name: "rocjitsu".to_string(),
-                version: "1.0.0".to_string(),
-                description: Some("functional simulator".to_string()),
-                supported_gpus: vec![GpuDef {
-                    name: "MI300X".to_string(),
-                    arch: "gfx942".to_string(),
-                    family: GpuFamily::AmdCdna,
-                    description: None,
-                }],
-                supports_custom_gpus: false,
-                supported_modes: vec![SimulatorMode::Functional],
-            };
-            let simulator = (request.name == info.name).then(|| SimulatorSummary {
-                name: Some(info.name),
-                version: Some(info.version),
-                description: info.description,
-                supported_gpus: info.supported_gpus,
-                supports_custom_gpus: info.supports_custom_gpus,
-                supported_modes: info.supported_modes,
-                active_session_count: 0,
-            });
-            Ok(GetSimulatorReply { simulator })
+            Ok(GetSimulatorReply {
+                simulator: (request.name == "rocjitsu").then(|| SimulatorSummary {
+                    name: Some("rocjitsu".to_string()),
+                    version: Some("1.0.0".to_string()),
+                    description: Some("functional simulator".to_string()),
+                    supported_gpus: vec![],
+                    supports_custom_gpus: false,
+                    supported_modes: vec![SimulatorMode::Functional],
+                    active_session_count: 0,
+                }),
+            })
         }
     }
 
-    #[async_trait]
-    impl MirageDaemonProfiles for FixedDaemon {
+    #[async_trait::async_trait]
+    impl MirageDaemonListProfiles for FixedDaemon {
         async fn list_profiles(
             &self,
             _request: ListProfilesRequest,
         ) -> MirageDaemonResult<ListProfilesReply> {
             Ok(ListProfilesReply { profiles: vec![] })
         }
+    }
 
+    #[async_trait::async_trait]
+    impl MirageDaemonCreateProfile for FixedDaemon {
         async fn create_profile(
             &self,
             _request: CreateProfileRequest,
@@ -550,7 +541,10 @@ mod tests {
                 error: None,
             })
         }
+    }
 
+    #[async_trait::async_trait]
+    impl MirageDaemonDeleteProfile for FixedDaemon {
         async fn delete_profile(
             &self,
             _request: DeleteProfileRequest,
@@ -562,35 +556,44 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl MirageDaemonSessions for FixedDaemon {
+    #[async_trait::async_trait]
+    impl MirageDaemonListSessions for FixedDaemon {
         async fn list_sessions(
             &self,
             _request: ListSessionsRequest,
         ) -> MirageDaemonResult<ListSessionsReply> {
             Ok(ListSessionsReply { sessions: vec![] })
         }
+    }
 
+    #[async_trait::async_trait]
+    impl MirageDaemonCreateSession for FixedDaemon {
         async fn create_session(
             &self,
-            _request: DashboardCreateSessionRequest,
-        ) -> MirageDaemonResult<DashboardCreateSessionReply> {
-            Ok(DashboardCreateSessionReply {
+            _request: CreateSessionRequest,
+        ) -> MirageDaemonResult<CreateSessionReply> {
+            Ok(CreateSessionReply {
                 ok: true,
                 error: None,
             })
         }
+    }
 
+    #[async_trait::async_trait]
+    impl MirageDaemonDeleteSession for FixedDaemon {
         async fn delete_session(
             &self,
-            _request: DashboardDeleteSessionRequest,
-        ) -> MirageDaemonResult<DashboardDeleteSessionReply> {
-            Ok(DashboardDeleteSessionReply {
+            _request: DeleteSessionRequest,
+        ) -> MirageDaemonResult<DeleteSessionReply> {
+            Ok(DeleteSessionReply {
                 ok: true,
                 error: None,
             })
         }
+    }
 
+    #[async_trait::async_trait]
+    impl MirageDaemonGetSessionDetail for FixedDaemon {
         async fn get_session_detail(
             &self,
             _request: GetSessionDetailRequest,
@@ -611,7 +614,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl MirageDaemonBoot for FixedDaemon {
         async fn boot_session(
             &self,
@@ -626,13 +629,13 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl MirageDaemonExec for FixedDaemon {
         async fn exec_in_session(
             &self,
-            _request: ExecInSessionRequest,
-        ) -> MirageDaemonResult<ExecInSessionReply> {
-            Ok(ExecInSessionReply {
+            _request: crate::ctl::daemon::ExecInSessionRequest,
+        ) -> MirageDaemonResult<crate::ctl::daemon::ExecInSessionReply> {
+            Ok(crate::ctl::daemon::ExecInSessionReply {
                 exit_code: 0,
                 stdout: b"ok\n".to_vec(),
                 stderr: vec![],
@@ -640,7 +643,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl MirageDaemonShutdown for FixedDaemon {
         async fn shutdown_session(
             &self,
@@ -653,8 +656,8 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl MirageDaemonWorkloads for FixedDaemon {
+    #[async_trait::async_trait]
+    impl MirageDaemonCreateWorkload for FixedDaemon {
         async fn create_workload(
             &self,
             _request: CreateWorkloadRequest,
@@ -664,21 +667,30 @@ mod tests {
                 error: None,
             })
         }
+    }
 
+    #[async_trait::async_trait]
+    impl MirageDaemonListWorkloads for FixedDaemon {
         async fn list_workloads(
             &self,
             _request: ListWorkloadsRequest,
         ) -> MirageDaemonResult<ListWorkloadsReply> {
             Ok(ListWorkloadsReply { workloads: vec![] })
         }
+    }
 
+    #[async_trait::async_trait]
+    impl MirageDaemonGetWorkload for FixedDaemon {
         async fn get_workload(
             &self,
             _request: GetWorkloadRequest,
         ) -> MirageDaemonResult<GetWorkloadReply> {
             Ok(GetWorkloadReply { workload: None })
         }
+    }
 
+    #[async_trait::async_trait]
+    impl MirageDaemonDeleteWorkload for FixedDaemon {
         async fn delete_workload(
             &self,
             _request: DeleteWorkloadRequest,
@@ -717,7 +729,7 @@ mod tests {
 
         let client = MirageDaemonClient::new(&socket_path);
         let reply = client
-            .list_simulators(ListSimulatorsRequest::default())
+            .list_simulators(ListSimulatorsRequest {})
             .await
             .unwrap();
 
@@ -742,10 +754,7 @@ mod tests {
         });
 
         let client = MirageDaemonClient::new(&socket_path);
-        let reply = client
-            .get_overview(GetOverviewRequest::default())
-            .await
-            .unwrap();
+        let reply = client.get_overview(GetOverviewRequest {}).await.unwrap();
 
         assert_eq!(reply.simulator_count, 1);
         assert_eq!(reply.profile_count, 0);
@@ -753,5 +762,92 @@ mod tests {
 
         server_task.await.unwrap();
         let _ = fs::remove_file(&socket_path).await;
+    }
+
+    #[tokio::test]
+    async fn client_round_trips_streaming_attach() {
+        let socket_path = unique_socket_path("attach");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let daemon: Arc<dyn MirageDaemon> = Arc::new(FixedDaemon);
+
+        let server_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            MirageDaemonServer::handle_client(daemon, stream)
+                .await
+                .unwrap();
+        });
+
+        let client = MirageDaemonClient::new(&socket_path);
+        let (input_tx, input_rx) = mpsc::channel(4);
+        let (output_tx, mut output_rx) = mpsc::channel(4);
+        input_tx
+            .send(AttachInput {
+                stream: b"stdin-data".to_vec(),
+            })
+            .await
+            .unwrap();
+        drop(input_tx);
+
+        let reply = client
+            .attach(
+                AttachRequest {
+                    exec_id: "exec-1".to_string(),
+                },
+                input_rx,
+                output_tx,
+            )
+            .await
+            .unwrap();
+
+        let mut outputs = Vec::new();
+        while let Some(output) = output_rx.recv().await {
+            outputs.push(output);
+        }
+
+        assert_eq!(reply.exit_code, 0);
+        assert_eq!(outputs.len(), 2);
+        assert!(outputs[0].is_stdout);
+        assert_eq!(outputs[0].output, b"stdout".to_vec());
+        assert!(!outputs[1].is_stdout);
+        assert_eq!(outputs[1].output, b"stderr".to_vec());
+
+        server_task.await.unwrap();
+        let _ = fs::remove_file(&socket_path).await;
+    }
+
+    #[test]
+    fn generated_types_stay_serde_friendly() {
+        let profile = ProfileDef {
+            name: "default".to_string(),
+            simulator: "rocjitsu".to_string(),
+            mode: SimulatorMode::Functional,
+            gpu: "MI300X".to_string(),
+            num_gpus: 1,
+            num_nodes: 1,
+        };
+        let workload = WorkloadDef {
+            name: "smoke".to_string(),
+            profile: "default".to_string(),
+            image: "img:latest".to_string(),
+            startup: None,
+            execs: vec![],
+            cleanup: CleanupPolicy::Always,
+        };
+
+        let simulator_json = serde_json::to_string(&SimulatorSummary {
+            name: Some("rocjitsu".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            supported_gpus: vec![],
+            supports_custom_gpus: false,
+            supported_modes: vec![SimulatorMode::Functional],
+            active_session_count: 0,
+        })
+        .unwrap();
+        let workload_json = serde_json::to_string(&workload).unwrap();
+
+        assert!(simulator_json.contains("rocjitsu"));
+        assert!(workload_json.contains("smoke"));
+        assert_eq!(profile.name, "default");
     }
 }
