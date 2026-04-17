@@ -1479,56 +1479,71 @@ class CodeGenerator:
         return '\n'.join(L)
 
     def _gen_vector_div_scale(self, dst: list[str], src: list[str], dtype: str | None, is_vop3: bool = False) -> str:
-        """Generate V_DIV_SCALE body."""
+        """Generate V_DIV_SCALE body per ISA pseudocode (CDNA4 p.363-365).
+
+        S1 = denominator, S2 = numerator. S0 selects which to scale
+        (S0==S1 → scale denominator, S0==S2 → scale numerator).
+        VCC is set when V_DIV_FMAS must apply post-scaling.
+        """
+        is_f64 = (dtype == 'f64')
+        scale_exp = 128 if is_f64 else 64
+        exp_threshold = 768 if is_f64 else 96
+        tiny_exp = 53 if is_f64 else 23
+        fp_type = 'double' if is_f64 else 'float'
+        zero = '0.0' if is_f64 else '0.0f'
+        read_fn = 'read_lane64' if is_f64 else 'read_lane'
+        write_fn = 'write_lane64' if is_f64 else 'write_lane'
+        cast_to = 'uint64_t' if is_f64 else 'uint32_t'
+        nan_val = 'std::numeric_limits<double>::quiet_NaN()' if is_f64 else 'std::numeric_limits<float>::quiet_NaN()'
+
         L = []
         L.append('  uint64_t exec = wf.exec();')
         L.append('  uint64_t vcc = wf.vcc();')
         L.append('  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {')
         L.append('    if (!(exec & (1ULL << lane))) continue;')
-        if dtype == 'f64':
-            L.append(f'    double s0 = std::bit_cast<double>({src[0]}.read_lane64(wf, lane));')
-            L.append(f'    double s1 = std::bit_cast<double>({src[1]}.read_lane64(wf, lane));')
-            L.append(f'    double s2 = std::bit_cast<double>({src[2]}.read_lane64(wf, lane));')
-            if is_vop3:
-                L.extend(self._vop3_src_mod('s0', 0))
-                L.extend(self._vop3_src_mod('s1', 1))
-                L.extend(self._vop3_src_mod('s2', 2))
-            L.append('    double result = s0;')
-            L.append('    bool needs_scale = false;')
-            L.append('    if (!std::isnan(s1) && !std::isnan(s2) &&')
-            L.append('        !std::isinf(s1) && !std::isinf(s2) &&')
-            L.append('        s1 != 0.0 && s2 != 0.0) {')
-            L.append('      int exp1, exp2;')
-            L.append('      std::frexp(s1, &exp1);')
-            L.append('      std::frexp(s2, &exp2);')
-            L.append('      needs_scale = std::abs(exp1 - exp2) > 768;')
-            L.append('      if (needs_scale) result = std::ldexp(s0, exp2 > exp1 ? 1024 : -1024);')
-            L.append('    }')
-            L.append('    if (needs_scale) vcc |= (1ULL << lane);')
-            L.append('    else vcc &= ~(1ULL << lane);')
-            L.append(f'    {dst[0]}.write_lane64(wf, lane, std::bit_cast<uint64_t>(result));')
+        L.append(f'    {fp_type} s0 = std::bit_cast<{fp_type}>({src[0]}.{read_fn}(wf, lane));')
+        L.append(f'    {fp_type} s1 = std::bit_cast<{fp_type}>({src[1]}.{read_fn}(wf, lane));')
+        L.append(f'    {fp_type} s2 = std::bit_cast<{fp_type}>({src[2]}.{read_fn}(wf, lane));')
+        if is_vop3:
+            L.extend(self._vop3_src_mod('s0', 0))
+            L.extend(self._vop3_src_mod('s1', 1))
+            L.extend(self._vop3_src_mod('s2', 2))
+        L.append(f'    {fp_type} result = s0;')
+        L.append('    bool set_vcc = false;')
+        L.append(f'    if (s2 == {zero} || s1 == {zero}) {{')
+        L.append(f'      result = {nan_val};')
+        L.append('    } else {')
+        L.append('      int exp1 = 0, exp2 = 0;')
+        L.append('      std::frexp(s1, &exp1);')
+        L.append('      std::frexp(s2, &exp2);')
+        L.append(f'      if (exp2 - exp1 >= {exp_threshold}) {{')
+        L.append('        set_vcc = true;')
+        L.append(f'        if (s0 == s1) result = std::ldexp(s0, {scale_exp});')
+        L.append(f'      }} else if (std::fpclassify(s1) == FP_SUBNORMAL) {{')
+        L.append(f'        result = std::ldexp(s0, {scale_exp});')
+        if is_f64:
+            L.append(f'      }} else if (std::fpclassify(1.0 / s1) == FP_SUBNORMAL &&')
+            L.append(f'                 std::fpclassify(s2 / s1) == FP_SUBNORMAL) {{')
         else:
-            L.append(f'    float s0 = std::bit_cast<float>({src[0]}.read_lane(wf, lane));')
-            L.append(f'    float s1 = std::bit_cast<float>({src[1]}.read_lane(wf, lane));')
-            L.append(f'    float s2 = std::bit_cast<float>({src[2]}.read_lane(wf, lane));')
-            if is_vop3:
-                L.extend(self._vop3_src_mod('s0', 0))
-                L.extend(self._vop3_src_mod('s1', 1))
-                L.extend(self._vop3_src_mod('s2', 2))
-            L.append('    float result = s0;')
-            L.append('    bool needs_scale = false;')
-            L.append('    if (!std::isnan(s1) && !std::isnan(s2) &&')
-            L.append('        !std::isinf(s1) && !std::isinf(s2) &&')
-            L.append('        s1 != 0.0f && s2 != 0.0f) {')
-            L.append('      int exp1, exp2;')
-            L.append('      std::frexp(s1, &exp1);')
-            L.append('      std::frexp(s2, &exp2);')
-            L.append('      needs_scale = std::abs(exp1 - exp2) > 100;')
-            L.append('      if (needs_scale) result = std::ldexp(s0, exp2 > exp1 ? 128 : -128);')
-            L.append('    }')
-            L.append('    if (needs_scale) vcc |= (1ULL << lane);')
-            L.append('    else vcc &= ~(1ULL << lane);')
-            L.append(f'    {dst[0]}.write_lane(wf, lane, std::bit_cast<uint32_t>(result));')
+            L.append(f'      }} else if (std::fpclassify(1.0 / static_cast<double>(s1)) == FP_SUBNORMAL &&')
+            L.append(f'                 std::fpclassify(s2 / s1) == FP_SUBNORMAL) {{')
+        L.append('        set_vcc = true;')
+        L.append(f'        if (s0 == s1) result = std::ldexp(s0, {scale_exp});')
+        if is_f64:
+            L.append(f'      }} else if (std::fpclassify(1.0 / s1) == FP_SUBNORMAL) {{')
+        else:
+            L.append(f'      }} else if (std::fpclassify(1.0 / static_cast<double>(s1)) == FP_SUBNORMAL) {{')
+        L.append(f'        result = std::ldexp(s0, -{scale_exp});')
+        L.append(f'      }} else if (std::fpclassify(s2 / s1) == FP_SUBNORMAL) {{')
+        L.append('        set_vcc = true;')
+        L.append(f'        if (s0 == s2) result = std::ldexp(s0, {scale_exp});')
+        L.append(f'      }} else if (exp2 <= {tiny_exp}) {{')
+        L.append(f'        result = std::ldexp(s0, {scale_exp});')
+        L.append('      }')
+        L.append('    }')
+        L.append('    if (set_vcc) vcc |= (1ULL << lane);')
+        L.append('    else vcc &= ~(1ULL << lane);')
+        L.append(f'    {dst[0]}.{write_fn}(wf, lane, std::bit_cast<{cast_to}>(result));')
         L.append('  }')
         L.append('  wf.set_vcc(vcc);')
         return '\n'.join(L)
