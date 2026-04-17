@@ -9,7 +9,7 @@ use mirage_container::{
     ContainerHandle, ContainerRuntime, ExecRequest, StartContainerRequest, StartedContainer,
 };
 use mirage_schema::common::{
-    ExecArgs, HealthStatus, ProfileDef, SessionDef, SetEnv, SimulatorMode, Time,
+    ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SessionDef, SetEnv, SimulatorMode, Time,
 };
 use mirage_schema::config::DaemonDef;
 use mirage_schema::container::ContainerDef;
@@ -62,17 +62,57 @@ struct SessionRecord {
     container_handle: Option<ContainerHandle>,
 }
 
+/// Returns the set of simulators that are always available in the daemon.
+fn builtin_simulators() -> BTreeMap<String, SimulatorInfo> {
+    let sims = vec![
+        SimulatorInfo {
+            name: "rocjitsu".to_string(),
+            version: "0.5.0".to_string(),
+            description: Some("AMD CDNA functional simulator".to_string()),
+            supported_gpus: vec![
+                GpuDef {
+                    name: "MI300X".to_string(),
+                    arch: "gfx942".to_string(),
+                    family: GpuFamily::AmdCdna,
+                    description: Some("AMD Instinct MI300X".to_string()),
+                },
+                GpuDef {
+                    name: "MI325X".to_string(),
+                    arch: "gfx942".to_string(),
+                    family: GpuFamily::AmdCdna,
+                    description: Some("AMD Instinct MI325X".to_string()),
+                },
+                GpuDef {
+                    name: "MI350X".to_string(),
+                    arch: "gfx950".to_string(),
+                    family: GpuFamily::AmdCdna,
+                    description: Some("AMD Instinct MI350X".to_string()),
+                },
+            ],
+            supports_custom_gpus: false,
+            supported_modes: vec![SimulatorMode::Functional],
+        },
+    ];
+    sims.into_iter().map(|s| (s.name.clone(), s)).collect()
+}
+
 impl InMemoryMirageDaemon {
     pub fn new() -> Self {
         Self {
-            state: RwLock::new(State::default()),
+            state: RwLock::new(State {
+                simulators: builtin_simulators(),
+                ..State::default()
+            }),
             container_runtime: None,
         }
     }
 
     pub fn with_container_runtime(runtime: Arc<dyn ContainerRuntime>) -> Self {
         Self {
-            state: RwLock::new(State::default()),
+            state: RwLock::new(State {
+                simulators: builtin_simulators(),
+                ..State::default()
+            }),
             container_runtime: Some(runtime),
         }
     }
@@ -85,6 +125,7 @@ impl InMemoryMirageDaemon {
             .collect();
         Self {
             state: RwLock::new(State {
+                simulators: builtin_simulators(),
                 profiles,
                 ..State::default()
             }),
@@ -100,6 +141,7 @@ impl InMemoryMirageDaemon {
             .collect();
         Self {
             state: RwLock::new(State {
+                simulators: builtin_simulators(),
                 profiles,
                 ..State::default()
             }),
@@ -712,33 +754,16 @@ impl MirageDaemonShutdown for InMemoryMirageDaemon {
 mod tests {
     use super::*;
 
-    use mirage_schema::common::{GpuDef, GpuFamily};
-
-    fn test_simulator() -> SimulatorInfo {
-        SimulatorInfo {
-            name: "rocjitsu".to_string(),
-            version: "1.0.0".to_string(),
-            description: Some("functional simulator".to_string()),
-            supported_gpus: vec![GpuDef {
-                name: "MI300X".to_string(),
-                arch: "gfx942".to_string(),
-                family: GpuFamily::AmdCdna,
-                description: None,
-            }],
-            supports_custom_gpus: false,
-            supported_modes: vec![SimulatorMode::Functional],
-        }
-    }
-
     #[tokio::test]
     async fn creates_profile_only_for_registered_simulator() {
         let daemon = InMemoryMirageDaemon::new();
 
+        // Unknown simulator should fail.
         let reply = daemon
             .create_profile(CreateProfileRequest {
                 profile: ProfileDef {
-                    name: "mi300x".to_string(),
-                    simulator: "rocjitsu".to_string(),
+                    name: "custom".to_string(),
+                    simulator: "nonexistent".to_string(),
                     mode: SimulatorMode::Functional,
                     gpu: "MI300X".to_string(),
                     num_gpus: 1,
@@ -749,13 +774,7 @@ mod tests {
             .unwrap();
         assert!(!reply.ok);
 
-        daemon
-            .register_sim(RegisterSimRequest {
-                info: test_simulator(),
-            })
-            .await
-            .unwrap();
-
+        // Built-in rocjitsu should succeed.
         let reply = daemon
             .create_profile(CreateProfileRequest {
                 profile: ProfileDef {
@@ -775,12 +794,6 @@ mod tests {
     #[tokio::test]
     async fn creates_and_lists_sessions() {
         let daemon = InMemoryMirageDaemon::new();
-        daemon
-            .register_sim(RegisterSimRequest {
-                info: test_simulator(),
-            })
-            .await
-            .unwrap();
         daemon
             .create_profile(CreateProfileRequest {
                 profile: ProfileDef {
@@ -819,12 +832,6 @@ mod tests {
         let mock = Arc::new(mirage_container::MockContainerRuntime::default());
         let daemon = InMemoryMirageDaemon::with_container_runtime(mock.clone());
 
-        daemon
-            .register_sim(RegisterSimRequest {
-                info: test_simulator(),
-            })
-            .await
-            .unwrap();
         daemon
             .create_profile(CreateProfileRequest {
                 profile: ProfileDef {
