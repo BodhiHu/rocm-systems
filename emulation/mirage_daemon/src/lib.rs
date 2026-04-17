@@ -657,6 +657,42 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                         readonly: false,
                     });
 
+                    // Create synthetic sysfs topology and device stubs so
+                    // HIP discovers the simulated GPUs without real device
+                    // nodes.  We snapshot the host's sysfs into a temp dir
+                    // and bind-mount it into the container.
+                    if let Ok(topo_dir) = create_synthetic_topology(&session.name) {
+                        mounts.push(BindMount {
+                            host_path: topo_dir.join("sys/class/kfd")
+                                .to_string_lossy()
+                                .to_string(),
+                            container_path: "/sys/class/kfd".to_string(),
+                            readonly: true,
+                        });
+                        // hsakmt reads topology from /sys/devices/virtual/kfd/kfd/topology
+                        mounts.push(BindMount {
+                            host_path: topo_dir.join("sys/class/kfd/kfd/topology")
+                                .to_string_lossy()
+                                .to_string(),
+                            container_path: "/sys/devices/virtual/kfd/kfd/topology".to_string(),
+                            readonly: true,
+                        });
+                        mounts.push(BindMount {
+                            host_path: topo_dir.join("dev/dri")
+                                .to_string_lossy()
+                                .to_string(),
+                            container_path: "/dev/dri".to_string(),
+                            readonly: true,
+                        });
+                        mounts.push(BindMount {
+                            host_path: topo_dir.join("dev/kfd")
+                                .to_string_lossy()
+                                .to_string(),
+                            container_path: "/dev/kfd".to_string(),
+                            readonly: true,
+                        });
+                    }
+
                     // Force GPU access through the interceptor — do NOT
                     // pass real device nodes into the container.
                     extra_env.push(SetEnv {
@@ -1214,4 +1250,107 @@ fn unique_emulator_socket(session_name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("mirage");
     let _ = std::fs::create_dir_all(&dir);
     dir.join(format!("emu-{session_name}.sock"))
+}
+
+/// Recursively copy the contents of a directory.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if ty.is_file() {
+            // sysfs files may fail to read; ignore errors.
+            if let Ok(data) = std::fs::read(&src_path) {
+                let _ = std::fs::write(&dst_path, &data);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Snapshot the host KFD sysfs topology into a temp directory so it can be
+/// bind-mounted into a container.  Also creates stub render-node files
+/// under `dev/dri/` and a stub `dev/kfd` file so that `open()` calls from
+/// the interceptor find something to classify.
+///
+/// Returns the root of the temp directory tree.
+fn create_synthetic_topology(session_name: &str) -> std::io::Result<PathBuf> {
+    let root = std::env::temp_dir()
+        .join("mirage")
+        .join(format!("topo-{session_name}"));
+    let host_topo = std::path::Path::new("/sys/class/kfd/kfd/topology");
+
+    // sys/class/kfd/kfd/topology/nodes/*/
+    let nodes_src = host_topo.join("nodes");
+    if !nodes_src.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "host sysfs topology not found",
+        ));
+    }
+
+    let mut render_minors: Vec<u32> = Vec::new();
+
+    for entry in std::fs::read_dir(&nodes_src)? {
+        let entry = entry?;
+        let node_name = entry.file_name();
+        let src_dir = entry.path();
+        if !src_dir.is_dir() {
+            continue;
+        }
+        let dst_dir = root
+            .join("sys/class/kfd/kfd/topology/nodes")
+            .join(&node_name);
+        std::fs::create_dir_all(&dst_dir)?;
+
+        // Recursively copy the entire node directory tree.
+        copy_dir_recursive(&src_dir, &dst_dir)?;
+
+        // Collect render minors for later /dev/dri stubs.
+        let props_path = src_dir.join("properties");
+        if let Ok(props) = std::fs::read_to_string(&props_path) {
+            for line in props.lines() {
+                if let Some(rest) = line.strip_prefix("drm_render_minor ") {
+                    if let Ok(minor) = rest.trim().parse::<u32>() {
+                        if minor > 0 {
+                            render_minors.push(minor);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Copy system_properties if present.
+    let sys_props = host_topo.join("system_properties");
+    if sys_props.is_file() {
+        let dst = root.join("sys/class/kfd/kfd/topology/system_properties");
+        let _ = std::fs::copy(&sys_props, &dst);
+    }
+
+    // Copy generation_id if present.
+    let gen_id = host_topo.join("generation_id");
+    if gen_id.is_file() {
+        let dst = root.join("sys/class/kfd/kfd/topology/generation_id");
+        let _ = std::fs::copy(&gen_id, &dst);
+    }
+
+    // Create /dev/dri/renderDxxx stubs (empty files — the interceptor
+    // intercepts the actual open()).
+    let dri = root.join("dev/dri");
+    std::fs::create_dir_all(&dri)?;
+    for minor in &render_minors {
+        std::fs::write(dri.join(format!("renderD{minor}")), b"")?;
+    }
+
+    // Create /dev/kfd stub.
+    let dev = root.join("dev");
+    std::fs::create_dir_all(&dev)?;
+    std::fs::write(dev.join("kfd"), b"")?;
+
+    Ok(root)
 }

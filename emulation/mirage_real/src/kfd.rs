@@ -1708,7 +1708,7 @@ use mirage_schema::amdgpu::{
     KfdPmcSettings, KfdProcessDeviceAperture, KfdProfilerArgs, KfdQueueSnapshotEntry,
     KfdSignalEventData, KfdSvmAttribute,
 };
-use mirage_schema::amdgpu_error::AmdgpuResult;
+use mirage_schema::amdgpu_error::{AmdgpuError, AmdgpuResult};
 use mirage_uapi::kfd;
 
 use crate::ioctl::{kfd_ior, kfd_iow, kfd_iowr, maybe_mut_ptr, maybe_ptr};
@@ -2062,14 +2062,19 @@ impl HandleKfdIoctl for RealEmulator {
         _ctx: IoctlCtx,
         request: AmdkfdIocAcquireVmRequest,
     ) -> AmdgpuResult<AmdkfdIocAcquireVmResponse> {
+        // The client's drm_fd is a virtual fd — look up our own real
+        // DRM render fd for this GPU.
+        let real_drm_fd = self.find_render_fd_for_gpu(request.gpu_id)
+            .unwrap_or_else(|| {
+                self.primary_render_fd().unwrap_or(-1)
+            });
         let mut args = kfd::kfd_ioctl_acquire_vm_args {
-            drm_fd: request.drm_fd,
+            drm_fd: real_drm_fd as u32,
             gpu_id: request.gpu_id,
         };
         unsafe { self.kfd_ioctl(kfd_iow::<kfd::kfd_ioctl_acquire_vm_args>(0x15), &mut args)? };
         Ok(AmdkfdIocAcquireVmResponse {})
     }
-
     fn amdkfd_ioc_alloc_memory_of_gpu(
         &self,
         _ctx: IoctlCtx,
@@ -2372,8 +2377,14 @@ impl HandleKfdIoctl for RealEmulator {
             mode_mask: request.flags as u32,
             capabilities_mask: (request.flags >> 32) as u32,
         };
-        unsafe { self.kfd_ioctl(kfd_iowr::<kfd::kfd_ioctl_runtime_enable_args>(0x25), &mut args)? };
-        Ok(AmdkfdIocRuntimeEnableResponse {})
+        match unsafe { self.kfd_ioctl(kfd_iowr::<kfd::kfd_ioctl_runtime_enable_args>(0x25), &mut args) } {
+            Ok(()) => Ok(AmdkfdIocRuntimeEnableResponse {}),
+            // EBUSY means runtime is already enabled for this KFD process;
+            // treat as success when proxying for a remote client that shares
+            // the daemon's process context.
+            Err(AmdgpuError::Busy) => Ok(AmdkfdIocRuntimeEnableResponse {}),
+            Err(e) => Err(e),
+        }
     }
 
     fn amdkfd_ioc_dbg_trap(

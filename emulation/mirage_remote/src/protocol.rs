@@ -55,4 +55,4 @@ pub enum WireResponse {
 
 /// Maximum accepted frame payload in bytes. A KFD/DRM ioctl request is
 /// always comfortably smaller than this.
-pub const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
+pub const MAX_FRAME_LEN: usize = 64 * 1024 * 1024;

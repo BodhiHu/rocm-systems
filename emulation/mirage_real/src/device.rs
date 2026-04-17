@@ -101,4 +101,56 @@ impl RealEmulator {
             .map(|node| node.fd.as_raw_fd())
             .ok_or_else(|| io::Error::from_raw_os_error(libc::ENODEV))
     }
+
+    /// Return the raw fd of the render node at the given index.
+    pub(crate) fn render_fd_by_index(&self, index: usize) -> io::Result<i32> {
+        self.render_nodes
+            .lock()
+            .unwrap()
+            .get(index)
+            .map(|node| node.fd.as_raw_fd())
+            .ok_or_else(|| io::Error::from_raw_os_error(libc::ENODEV))
+    }
+
+    /// Return the number of render nodes.
+    pub(crate) fn render_node_count(&self) -> usize {
+        self.render_nodes.lock().unwrap().len()
+    }
+
+    /// Find the host render fd for a given KFD gpu_id by reading
+    /// the sysfs topology to find the drm_render_minor and then
+    /// matching it to our open render nodes.
+    pub(crate) fn find_render_fd_for_gpu(&self, gpu_id: u32) -> Option<i32> {
+        // Walk /sys/class/kfd/kfd/topology/nodes/*/
+        let topo = std::path::Path::new("/sys/class/kfd/kfd/topology/nodes");
+        let dir = std::fs::read_dir(topo).ok()?;
+        for entry in dir.flatten() {
+            let props_path = entry.path().join("properties");
+            let gpu_id_path = entry.path().join("gpu_id");
+            // Read gpu_id for this node.
+            let node_gpu_id: u32 = std::fs::read_to_string(&gpu_id_path)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(0);
+            if node_gpu_id != gpu_id {
+                continue;
+            }
+            // Found the node; read drm_render_minor from properties.
+            let props = std::fs::read_to_string(&props_path).ok()?;
+            for line in props.lines() {
+                if let Some(rest) = line.strip_prefix("drm_render_minor ") {
+                    if let Ok(minor) = rest.trim().parse::<u32>() {
+                        let target = format!("renderD{minor}");
+                        let nodes = self.render_nodes.lock().unwrap();
+                        for node in nodes.iter() {
+                            if node.path.file_name().map_or(false, |n| n == target.as_str()) {
+                                return Some(node.fd.as_raw_fd());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
 }

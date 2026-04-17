@@ -23,7 +23,7 @@ use crate::socket::{
     TimeRequest,
 };
 
-const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
+const MAX_FRAME_LEN: usize = 644 * 1024 * 1024;
 
 pub type MirageDaemonResult<T> = Result<T, MirageDaemonError>;
 

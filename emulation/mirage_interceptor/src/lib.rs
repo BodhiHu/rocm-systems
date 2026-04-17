@@ -339,6 +339,97 @@ fn event_type_from_raw(value: u32) -> Option<amdgpu::KfdEventType> {
     }
 }
 
+// Raw C structs matching the kernel's kfd_event_data layout for WAIT_EVENTS.
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+struct KfdMemoryExceptionFailureRaw {
+    not_present: u32,
+    read_only: u32,
+    no_execute: u32,
+    imprecise: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+struct KfdMemoryExceptionDataRaw {
+    failure: KfdMemoryExceptionFailureRaw,
+    va: u64,
+    gpu_id: u32,
+    error_type: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+struct KfdHwExceptionDataRaw {
+    reset_type: u32,
+    reset_cause: u32,
+    memory_lost: u32,
+    gpu_id: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+union KfdEventUnionRaw {
+    memory_exception_data: KfdMemoryExceptionDataRaw,
+    hw_exception_data: KfdHwExceptionDataRaw,
+}
+
+impl Default for KfdEventUnionRaw {
+    fn default() -> Self {
+        Self {
+            memory_exception_data: KfdMemoryExceptionDataRaw::default(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+struct KfdEventDataRaw {
+    payload: KfdEventUnionRaw,
+    kfd_event_data_ext: u64,
+    event_id: u32,
+    pad: u32,
+}
+
+fn event_data_to_schema(raw: &KfdEventDataRaw) -> amdgpu::KfdEventData {
+    amdgpu::KfdEventData {
+        event_id: raw.event_id,
+        memory_exception_data: None,
+        hw_exception_data: None,
+        signal_event_data: None,
+        kfd_event_data_ext: raw.kfd_event_data_ext,
+    }
+}
+
+fn event_data_from_schema(event: &amdgpu::KfdEventData, raw: &mut KfdEventDataRaw) {
+    raw.event_id = event.event_id;
+    raw.kfd_event_data_ext = event.kfd_event_data_ext;
+    if let Some(mem) = &event.memory_exception_data {
+        raw.payload = KfdEventUnionRaw {
+            memory_exception_data: KfdMemoryExceptionDataRaw {
+                failure: KfdMemoryExceptionFailureRaw {
+                    not_present: mem.failure.not_present,
+                    read_only: mem.failure.read_only,
+                    no_execute: mem.failure.no_execute,
+                    imprecise: mem.failure.imprecise,
+                },
+                va: mem.va,
+                gpu_id: mem.gpu_id,
+                error_type: mem.error_type,
+            },
+        };
+    } else if let Some(hw) = &event.hw_exception_data {
+        raw.payload = KfdEventUnionRaw {
+            hw_exception_data: KfdHwExceptionDataRaw {
+                reset_type: hw.reset_type,
+                reset_cause: hw.reset_cause,
+                memory_lost: hw.memory_lost,
+                gpu_id: hw.gpu_id,
+            },
+        };
+    }
+}
+
 fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_int) -> c_int {
     let ctx = current_ctx();
     let nr = ioc::nr(cmd);
@@ -611,6 +702,57 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                 },
             ) {
                 Ok(_) => 0,
+                Err(err) => {
+                    debug_log(&format!(
+                        "RUNTIME_ENABLE failed: {} (errno={}), r_debug={} mode_mask=0x{:x} caps=0x{:x}",
+                        err.name(), err.errno(), args.r_debug, args.mode_mask, args.capabilities_mask
+                    ));
+                    errno_to_rc(err.errno())
+                }
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_RESET_EVENT & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_reset_event_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_reset_event_args) };
+            match remote.amdkfd_ioc_reset_event(
+                ctx,
+                amdgpu::AmdkfdIocResetEventRequest { event_id: args.event_id },
+            ) {
+                Ok(_) => 0,
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_WAIT_EVENTS & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_wait_events_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_wait_events_args) };
+            let num = args.num_events as usize;
+            let events_ptr = args.events_ptr as usize as *mut KfdEventDataRaw;
+            if events_ptr.is_null() || num == 0 {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let raw_events = unsafe { std::slice::from_raw_parts(events_ptr, num) };
+            let schema_events: Vec<amdgpu::KfdEventData> =
+                raw_events.iter().map(event_data_to_schema).collect();
+            match remote.amdkfd_ioc_wait_events(
+                ctx,
+                amdgpu::AmdkfdIocWaitEventsRequest {
+                    events: schema_events,
+                    wait_for_all: args.wait_for_all != 0,
+                    timeout: args.timeout,
+                },
+            ) {
+                Ok(resp) => {
+                    args.wait_result = resp.wait_result;
+                    let out_events = unsafe { std::slice::from_raw_parts_mut(events_ptr, num) };
+                    for (raw, schema) in out_events.iter_mut().zip(resp.events.iter()) {
+                        event_data_from_schema(schema, raw);
+                    }
+                    0
+                }
                 Err(err) => errno_to_rc(err.errno()),
             }
         }
@@ -841,7 +983,14 @@ pub fn dispatch_tracked_ioctl(kind: DeviceKind, fd: c_int, cmd: u32, arg: *mut c
         ioc::nr(cmd),
         ioc::size(cmd)
     ));
-    dispatch_ioctl_with(remote, kind, cmd, arg, host_fd)
+    let rc = dispatch_ioctl_with(remote, kind, cmd, arg, host_fd);
+    debug_log(&format!(
+        "dispatch result kind={:?} nr=0x{:02x} rc={}",
+        kind,
+        ioc::nr(cmd),
+        rc
+    ));
+    rc
 }
 
 // ---------------------------------------------------------------------------
@@ -972,10 +1121,14 @@ fn tracked_fd_from_proc_path(path: &Path) -> Option<TrackedFd> {
 /// Called by the dynamic linker on behalf of user code.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mode_t) -> c_int {
-    if let Some(p) = cstr_to_path(path)
-        && let Some(kind) = DeviceKind::classify(&p)
-        && let Some(remote) = remote()
-    {
+    if let Some(p) = cstr_to_path(path) {
+        let ps = p.to_str().unwrap_or("");
+        if ps.contains("dri") || ps.contains("kfd") || ps.contains("render") || ps.contains("gpu") {
+            debug_log(&format!("open ALL path={}", p.display()));
+        }
+        if let Some(kind) = DeviceKind::classify(&p)
+            && let Some(remote) = remote()
+        {
         debug_log(&format!("open path={} kind={kind:?}", p.display()));
         let (host_fd, synthetic_host) = open_host_path_or_memfd(path, flags, mode);
         if host_fd < 0 {
@@ -1030,7 +1183,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
             fake_stat,
         });
         return fd;
-    }
+    }}
     let Some(real) = next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
     else {
         return errno_to_rc(libc::ENOSYS);
@@ -1046,6 +1199,12 @@ pub unsafe extern "C" fn openat(
     flags: c_int,
     mode: libc::mode_t,
 ) -> c_int {
+    if let Some(p) = cstr_to_path(path) {
+        let ps = p.to_str().unwrap_or("");
+        if ps.contains("dri") || ps.contains("kfd") || ps.contains("render") || ps.contains("gpu") {
+            debug_log(&format!("openat ALL dirfd={dirfd} path={}", p.display()));
+        }
+    }
     if dirfd == libc::AT_FDCWD
         && let Some(p) = cstr_to_path(path)
         && let Some(kind) = DeviceKind::classify(&p)
