@@ -18,7 +18,7 @@
 ///
 /// * `pub const $NAME: u32` — the ioctl number.
 /// * `pub struct $NameRequest` / `$NameResponse` — request / response payloads.
-/// * `Handle{Subsys}Ioctl` — async trait with one method per ioctl (takes `&self` + `IoctlCtx`).
+/// * `Handle{Subsys}Ioctl` — trait with one method per ioctl (takes `&self` + `IoctlCtx`).
 /// * `Any{Subsys}IoctlRequest` / `Any{Subsys}IoctlResponse` — dispatch enums.
 /// * `HandleAny{Subsys}Ioctl` — dispatch trait, auto-implemented for `Handle{Subsys}Ioctl`.
 #[macro_export]
@@ -66,12 +66,11 @@ macro_rules! ioctl_dsl {
                     }
                 )*
 
-                // --- per-ioctl async trait ---
+                // --- per-subsys ioctl trait ---
 
-                #[::async_trait::async_trait]
                 pub trait [< Handle $subsys:camel Ioctl >] : Send + Sync {
                     $(
-                        async fn [< $name:lower >](
+                        fn [< $name:lower >](
                             &self,
                             ctx: $crate::amdgpu::IoctlCtx,
                             request: [< $name:camel Request >],
@@ -99,18 +98,16 @@ macro_rules! ioctl_dsl {
 
                 // --- dispatch trait, blanket-impl for Handle{Subsys}Ioctl ---
 
-                #[::async_trait::async_trait]
                 pub trait [< HandleAny $subsys:camel Ioctl >] : Send + Sync {
-                    async fn [< handle_any_ $subsys _ioctl >](
+                    fn [< handle_any_ $subsys _ioctl >](
                         &self,
                         ctx: $crate::amdgpu::IoctlCtx,
                         request: [< Any $subsys:camel IoctlRequest >],
                     ) -> $crate::amdgpu_error::AmdgpuResult<[< Any $subsys:camel IoctlResponse >]>;
                 }
 
-                #[::async_trait::async_trait]
                 impl<T: [< Handle $subsys:camel Ioctl >]> [< HandleAny $subsys:camel Ioctl >] for T {
-                    async fn [< handle_any_ $subsys _ioctl >](
+                    fn [< handle_any_ $subsys _ioctl >](
                         &self,
                         ctx: $crate::amdgpu::IoctlCtx,
                         request: [< Any $subsys:camel IoctlRequest >],
@@ -118,7 +115,7 @@ macro_rules! ioctl_dsl {
                         match request {
                             $(
                                 [< Any $subsys:camel IoctlRequest >]::[< $name:camel >](req) => {
-                                    self.[< $name:lower >](ctx, req).await.map([< Any $subsys:camel IoctlResponse >]::[< $name:camel >])
+                                    self.[< $name:lower >](ctx, req).map([< Any $subsys:camel IoctlResponse >]::[< $name:camel >])
                                 }
                             )*
                         }
