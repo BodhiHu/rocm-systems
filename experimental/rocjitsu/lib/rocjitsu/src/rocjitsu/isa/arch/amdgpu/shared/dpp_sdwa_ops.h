@@ -166,6 +166,8 @@ inline int dpp_permute(uint32_t dpp_ctrl, int lane, int wf_size, bool &out_of_bo
 ///
 /// @param lane Lane index.
 /// @param row_mask 4-bit row mask (bit N enables row N, 16 lanes/row).
+///        For wave32, only bits 0-1 are meaningful (rows 0-1 cover lanes 0-31);
+///        bits 2-3 have no effect since no lanes map to rows 2-3.
 /// @param bank_mask 4-bit bank mask (bit N enables bank N, 4 lanes/bank).
 /// @returns True if the lane is disabled (should not be written).
 inline bool dpp_lane_masked(int lane, uint32_t row_mask, uint32_t bank_mask) {
