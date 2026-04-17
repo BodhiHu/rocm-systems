@@ -16,6 +16,7 @@ use crate::ioctl_dsl;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IoctlCtx {
     pub pid: u32,
+    pub tid: u32,
 }
 
 macro_rules! simple_enum {
