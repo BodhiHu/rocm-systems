@@ -102,21 +102,6 @@ impl RealEmulator {
             .ok_or_else(|| io::Error::from_raw_os_error(libc::ENODEV))
     }
 
-    /// Return the raw fd of the render node at the given index.
-    pub(crate) fn render_fd_by_index(&self, index: usize) -> io::Result<i32> {
-        self.render_nodes
-            .lock()
-            .unwrap()
-            .get(index)
-            .map(|node| node.fd.as_raw_fd())
-            .ok_or_else(|| io::Error::from_raw_os_error(libc::ENODEV))
-    }
-
-    /// Return the number of render nodes.
-    pub(crate) fn render_node_count(&self) -> usize {
-        self.render_nodes.lock().unwrap().len()
-    }
-
     /// Find the host render fd for a given KFD gpu_id by reading
     /// the sysfs topology to find the drm_render_minor and then
     /// matching it to our open render nodes.

@@ -8,6 +8,10 @@ build = "build.rs"
 doctest = false
 
 [dependencies]
+bytes = { workspace = true }
+libc = { workspace = true }
+paste = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 
 [build-dependencies]
 bindgen = "0.70"

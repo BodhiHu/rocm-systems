@@ -395,6 +395,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "libc",
+ "mirage_uapi",
  "paste",
  "serde",
  "serde_json",
@@ -406,6 +407,10 @@ name = "mirage_uapi"
 version = "0.1.0"
 dependencies = [
  "bindgen 0.70.1",
+ "bytes",
+ "libc",
+ "paste",
+ "serde",
 ]
 
 [[package]]

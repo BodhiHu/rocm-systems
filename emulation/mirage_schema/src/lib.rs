@@ -46,10 +46,11 @@ pub mod simulator;
 pub mod simulator_service;
 pub mod socket;
 
-mod ioctl_macro;
 mod syscall_macro;
 
-pub mod amdgpu;
-pub mod amdgpu_error;
 pub mod emulator;
 pub mod syscalls;
+
+pub use mirage_uapi::amdgpu;
+pub use mirage_uapi::amdgpu_error;
+pub use mirage_uapi::ioctl_dsl;

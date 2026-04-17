@@ -29,6 +29,17 @@
 #![allow(dead_code)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
+mod ioctl_macro;
+
+pub mod amdgpu;
+pub mod amdgpu_error;
+pub mod drm_marshal;
+pub mod ioctl;
+pub mod kfd_marshal;
+pub mod marshal;
+
+pub use marshal::{FromC, FromCWith, ToBytes, ToC};
+
 pub mod kfd {
     include!(concat!(env!("OUT_DIR"), "/kfd.rs"));
 }
