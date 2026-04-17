@@ -386,6 +386,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "mirage_schema",
+ "mirage_uapi",
  "rocjitsu_sys",
 ]
 

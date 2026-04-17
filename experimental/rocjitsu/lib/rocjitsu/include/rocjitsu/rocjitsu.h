@@ -6,6 +6,7 @@
 
 #include "rocjitsu/base/api.h"
 #include "rocjitsu/code/api.h"
+#include "rocjitsu/kmd/rj_kmd.h"
 #include "rocjitsu/vm/api.h"
 
 #endif // ROCJITSU_ROCJITSU_H_

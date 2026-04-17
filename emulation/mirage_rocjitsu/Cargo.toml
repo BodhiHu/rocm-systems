@@ -10,5 +10,6 @@ doctest = false
 
 [dependencies]
 mirage_schema = { workspace = true }
+mirage_uapi = { workspace = true }
 rocjitsu_sys = { workspace = true }
 libc = { workspace = true }

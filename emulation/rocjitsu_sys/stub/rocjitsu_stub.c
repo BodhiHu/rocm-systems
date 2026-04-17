@@ -232,3 +232,71 @@ const void *rj_code_inst_next(const void *inst) {
   (void)inst;
   return NULL;
 }
+
+/* ---- KMD (simulated kernel-mode driver) ------------------------------- */
+
+int rj_kmd_create_default(void **driver) {
+  if (driver) {
+    *driver = NULL;
+  }
+  return RJ_STUB_STATUS_ERROR;
+}
+
+int rj_kmd_open(void *driver, int *fd) {
+  (void)driver;
+  if (fd) {
+    *fd = -1;
+  }
+  return RJ_STUB_STATUS_ERROR;
+}
+
+int rj_kmd_close(void *driver) {
+  (void)driver;
+  return RJ_STUB_STATUS_ERROR;
+}
+
+int rj_kmd_ioctl(void *driver, unsigned long request, void *arg, int *result) {
+  (void)driver;
+  (void)request;
+  (void)arg;
+  if (result) {
+    *result = -1;
+  }
+  return RJ_STUB_STATUS_ERROR;
+}
+
+int rj_kmd_mmap(void *driver, void *addr, size_t length, int prot, int flags,
+                int64_t offset, void **result) {
+  (void)driver;
+  (void)addr;
+  (void)length;
+  (void)prot;
+  (void)flags;
+  (void)offset;
+  if (result) {
+    *result = (void *)(uintptr_t)-1; /* MAP_FAILED */
+  }
+  return RJ_STUB_STATUS_ERROR;
+}
+
+int rj_kmd_munmap(void *driver, void *addr, size_t length, int *result) {
+  (void)driver;
+  (void)addr;
+  (void)length;
+  if (result) {
+    *result = -1;
+  }
+  return RJ_STUB_STATUS_ERROR;
+}
+
+int rj_kmd_fd(const void *driver) {
+  (void)driver;
+  return -1;
+}
+
+const char *rj_kmd_topology_path(const void *driver) {
+  (void)driver;
+  return NULL;
+}
+
+void rj_kmd_destroy(void *driver) { (void)driver; }
