@@ -50,7 +50,6 @@ use mirage_uapi::kfd_marshal::{
 use mirage_uapi::{FromC, ToC};
 
 use crate::RealEmulator;
-use crate::ioctl::{kfd_ior, kfd_iow, kfd_iowr, maybe_mut_ptr, maybe_ptr};
 
 impl HandleKfdIoctl for RealEmulator {
     fn amdkfd_ioc_get_version(

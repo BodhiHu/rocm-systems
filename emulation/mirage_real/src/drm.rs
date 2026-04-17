@@ -24,9 +24,6 @@ use mirage_uapi::ioctl::{drm_iow, drm_iowr, maybe_mut_ptr, maybe_ptr};
 use mirage_uapi::{FromC, FromCWith, ToBytes, ToC};
 
 use crate::RealEmulator;
-use crate::ioctl::{
-    DrmBoListEntry, DrmCsChunk, DrmCsChunkDep, drm_iow, drm_iowr, maybe_mut_ptr, maybe_ptr,
-};
 
 impl HandleDrmIoctl for RealEmulator {
     fn drm_amdgpu_gem_create(
