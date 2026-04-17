@@ -388,12 +388,11 @@ inline void exec_f64(amdgpu::ComputeUnitCore &cu, uint32_t M, uint32_t N, uint32
   for (uint32_t b = 0; b < B; ++b) {
     for (uint32_t row = 0; row < M; ++row) {
       for (uint32_t col = 0; col < N; ++col) {
-        auto out = output_loc_64(M, N, col, row, b);
+        // AMD convention: i=row (register dimension), j=col (lane dimension).
+        auto out = output_loc_64(M, N, row, col, b);
         double acc;
         if (const_acc != ACC_FROM_VGPR) {
-          uint64_t bits64 =
-              static_cast<uint64_t>(const_acc) | (static_cast<uint64_t>(const_acc) << 32);
-          acc = std::bit_cast<double>(bits64);
+          acc = static_cast<double>(std::bit_cast<float>(const_acc));
         } else {
           uint32_t lo = cu.read_vgpr(s2 + out.reg, out.lane);
           uint32_t hi = cu.read_vgpr(s2 + out.reg + 1, out.lane);
