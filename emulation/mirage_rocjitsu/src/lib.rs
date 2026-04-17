@@ -17,9 +17,9 @@
 //! * owns an optional `rj_vm_t` handle with safe RAII drop;
 //! * exposes [`RocjitsuEmulator::from_config_string`] / [`from_config_file`]
 //!   constructors that build the VM from a rocjitsu JSON config;
-//! * satisfies the [`Emulator`] supertraits by implementing the
-//!   `Forward*` wire-level traits, with every request currently
-//!   answered as [`AmdgpuError::NoSys`].
+//! * satisfies the [`Emulator`] supertraits with direct `Handle*` /
+//!   `HandleAny*` impls, with every request currently answered as
+//!   [`AmdgpuError::NoSys`].
 //!
 //! As rocjitsu grows an ioctl surface, individual match arms will be
 //! filled in — the same incremental path [`mirage_real`] already uses
@@ -41,11 +41,24 @@ use std::ptr;
 use std::sync::Mutex;
 
 use mirage_schema::amdgpu::{
-    AnyDrmIoctlRequest, AnyDrmIoctlResponse, AnyKfdIoctlRequest, AnyKfdIoctlResponse,
-    ForwardDrmIoctl, ForwardKfdIoctl, IoctlCtx,
+    HandleAnyDrmIoctl, HandleAnyKfdIoctl, HandleDrmIoctl, HandleKfdIoctl, IoctlCtx,
 };
 use mirage_schema::amdgpu_error::{AmdgpuError, AmdgpuResult};
-use mirage_schema::syscalls::{AnyFsSyscallRequest, AnyFsSyscallResponse, ForwardFsSyscalls};
+use mirage_schema::syscalls::{HandleAnyFsSyscalls, HandleFsSyscalls};
+
+macro_rules! nosys_methods {
+    ($(fn $method:ident($request:ty) -> $response:ty;)*) => {
+        $(
+            fn $method(
+                &self,
+                _ctx: IoctlCtx,
+                _request: $request,
+            ) -> AmdgpuResult<$response> {
+                Err(AmdgpuError::NoSys)
+            }
+        )*
+    };
+}
 
 // ---------------------------------------------------------------------------
 // Error type.
@@ -234,42 +247,105 @@ impl RocjitsuEmulator {
 // Emulator trait surface. Every ioctl / syscall is currently a stub;
 // see module docs for the rationale.
 
-impl ForwardKfdIoctl for RocjitsuEmulator {
-    fn forward_kfd_ioctl(
-        &self,
-        _ctx: IoctlCtx,
-        _request: AnyKfdIoctlRequest,
-    ) -> AmdgpuResult<AnyKfdIoctlResponse> {
-        // TODO: dispatch to the VM once rocjitsu grows a KFD ioctl
-        // surface. Until then, unsupported paths surface cleanly as
-        // ENOSYS rather than silent no-ops.
-        Err(AmdgpuError::NoSys)
-    }
+impl HandleKfdIoctl for RocjitsuEmulator {
+    nosys_methods!(
+        fn amdkfd_ioc_get_version(mirage_schema::amdgpu::AmdkfdIocGetVersionRequest) -> mirage_schema::amdgpu::AmdkfdIocGetVersionResponse;
+        fn amdkfd_ioc_create_queue(mirage_schema::amdgpu::AmdkfdIocCreateQueueRequest) -> mirage_schema::amdgpu::AmdkfdIocCreateQueueResponse;
+        fn amdkfd_ioc_destroy_queue(mirage_schema::amdgpu::AmdkfdIocDestroyQueueRequest) -> mirage_schema::amdgpu::AmdkfdIocDestroyQueueResponse;
+        fn amdkfd_ioc_set_memory_policy(mirage_schema::amdgpu::AmdkfdIocSetMemoryPolicyRequest) -> mirage_schema::amdgpu::AmdkfdIocSetMemoryPolicyResponse;
+        fn amdkfd_ioc_get_clock_counters(mirage_schema::amdgpu::AmdkfdIocGetClockCountersRequest) -> mirage_schema::amdgpu::AmdkfdIocGetClockCountersResponse;
+        fn amdkfd_ioc_get_process_apertures(mirage_schema::amdgpu::AmdkfdIocGetProcessAperturesRequest) -> mirage_schema::amdgpu::AmdkfdIocGetProcessAperturesResponse;
+        fn amdkfd_ioc_update_queue(mirage_schema::amdgpu::AmdkfdIocUpdateQueueRequest) -> mirage_schema::amdgpu::AmdkfdIocUpdateQueueResponse;
+        fn amdkfd_ioc_create_event(mirage_schema::amdgpu::AmdkfdIocCreateEventRequest) -> mirage_schema::amdgpu::AmdkfdIocCreateEventResponse;
+        fn amdkfd_ioc_destroy_event(mirage_schema::amdgpu::AmdkfdIocDestroyEventRequest) -> mirage_schema::amdgpu::AmdkfdIocDestroyEventResponse;
+        fn amdkfd_ioc_set_event(mirage_schema::amdgpu::AmdkfdIocSetEventRequest) -> mirage_schema::amdgpu::AmdkfdIocSetEventResponse;
+        fn amdkfd_ioc_reset_event(mirage_schema::amdgpu::AmdkfdIocResetEventRequest) -> mirage_schema::amdgpu::AmdkfdIocResetEventResponse;
+        fn amdkfd_ioc_wait_events(mirage_schema::amdgpu::AmdkfdIocWaitEventsRequest) -> mirage_schema::amdgpu::AmdkfdIocWaitEventsResponse;
+        fn amdkfd_ioc_dbg_register_deprecated(mirage_schema::amdgpu::AmdkfdIocDbgRegisterDeprecatedRequest) -> mirage_schema::amdgpu::AmdkfdIocDbgRegisterDeprecatedResponse;
+        fn amdkfd_ioc_dbg_unregister_deprecated(mirage_schema::amdgpu::AmdkfdIocDbgUnregisterDeprecatedRequest) -> mirage_schema::amdgpu::AmdkfdIocDbgUnregisterDeprecatedResponse;
+        fn amdkfd_ioc_dbg_address_watch_deprecated(mirage_schema::amdgpu::AmdkfdIocDbgAddressWatchDeprecatedRequest) -> mirage_schema::amdgpu::AmdkfdIocDbgAddressWatchDeprecatedResponse;
+        fn amdkfd_ioc_dbg_wave_control_deprecated(mirage_schema::amdgpu::AmdkfdIocDbgWaveControlDeprecatedRequest) -> mirage_schema::amdgpu::AmdkfdIocDbgWaveControlDeprecatedResponse;
+        fn amdkfd_ioc_set_scratch_backing_va(mirage_schema::amdgpu::AmdkfdIocSetScratchBackingVaRequest) -> mirage_schema::amdgpu::AmdkfdIocSetScratchBackingVaResponse;
+        fn amdkfd_ioc_get_tile_config(mirage_schema::amdgpu::AmdkfdIocGetTileConfigRequest) -> mirage_schema::amdgpu::AmdkfdIocGetTileConfigResponse;
+        fn amdkfd_ioc_set_trap_handler(mirage_schema::amdgpu::AmdkfdIocSetTrapHandlerRequest) -> mirage_schema::amdgpu::AmdkfdIocSetTrapHandlerResponse;
+        fn amdkfd_ioc_get_process_apertures_new(mirage_schema::amdgpu::AmdkfdIocGetProcessAperturesNewRequest) -> mirage_schema::amdgpu::AmdkfdIocGetProcessAperturesNewResponse;
+        fn amdkfd_ioc_acquire_vm(mirage_schema::amdgpu::AmdkfdIocAcquireVmRequest) -> mirage_schema::amdgpu::AmdkfdIocAcquireVmResponse;
+        fn amdkfd_ioc_alloc_memory_of_gpu(mirage_schema::amdgpu::AmdkfdIocAllocMemoryOfGpuRequest) -> mirage_schema::amdgpu::AmdkfdIocAllocMemoryOfGpuResponse;
+        fn amdkfd_ioc_free_memory_of_gpu(mirage_schema::amdgpu::AmdkfdIocFreeMemoryOfGpuRequest) -> mirage_schema::amdgpu::AmdkfdIocFreeMemoryOfGpuResponse;
+        fn amdkfd_ioc_map_memory_to_gpu(mirage_schema::amdgpu::AmdkfdIocMapMemoryToGpuRequest) -> mirage_schema::amdgpu::AmdkfdIocMapMemoryToGpuResponse;
+        fn amdkfd_ioc_unmap_memory_from_gpu(mirage_schema::amdgpu::AmdkfdIocUnmapMemoryFromGpuRequest) -> mirage_schema::amdgpu::AmdkfdIocUnmapMemoryFromGpuResponse;
+        fn amdkfd_ioc_set_cu_mask(mirage_schema::amdgpu::AmdkfdIocSetCuMaskRequest) -> mirage_schema::amdgpu::AmdkfdIocSetCuMaskResponse;
+        fn amdkfd_ioc_get_queue_wave_state(mirage_schema::amdgpu::AmdkfdIocGetQueueWaveStateRequest) -> mirage_schema::amdgpu::AmdkfdIocGetQueueWaveStateResponse;
+        fn amdkfd_ioc_get_dmabuf_info(mirage_schema::amdgpu::AmdkfdIocGetDmabufInfoRequest) -> mirage_schema::amdgpu::AmdkfdIocGetDmabufInfoResponse;
+        fn amdkfd_ioc_import_dmabuf(mirage_schema::amdgpu::AmdkfdIocImportDmabufRequest) -> mirage_schema::amdgpu::AmdkfdIocImportDmabufResponse;
+        fn amdkfd_ioc_alloc_queue_gws(mirage_schema::amdgpu::AmdkfdIocAllocQueueGwsRequest) -> mirage_schema::amdgpu::AmdkfdIocAllocQueueGwsResponse;
+        fn amdkfd_ioc_smi_events(mirage_schema::amdgpu::AmdkfdIocSmiEventsRequest) -> mirage_schema::amdgpu::AmdkfdIocSmiEventsResponse;
+        fn amdkfd_ioc_svm(mirage_schema::amdgpu::AmdkfdIocSvmRequest) -> mirage_schema::amdgpu::AmdkfdIocSvmResponse;
+        fn amdkfd_ioc_set_xnack_mode(mirage_schema::amdgpu::AmdkfdIocSetXnackModeRequest) -> mirage_schema::amdgpu::AmdkfdIocSetXnackModeResponse;
+        fn amdkfd_ioc_criu_op(mirage_schema::amdgpu::AmdkfdIocCriuOpRequest) -> mirage_schema::amdgpu::AmdkfdIocCriuOpResponse;
+        fn amdkfd_ioc_available_memory(mirage_schema::amdgpu::AmdkfdIocAvailableMemoryRequest) -> mirage_schema::amdgpu::AmdkfdIocAvailableMemoryResponse;
+        fn amdkfd_ioc_export_dmabuf(mirage_schema::amdgpu::AmdkfdIocExportDmabufRequest) -> mirage_schema::amdgpu::AmdkfdIocExportDmabufResponse;
+        fn amdkfd_ioc_runtime_enable(mirage_schema::amdgpu::AmdkfdIocRuntimeEnableRequest) -> mirage_schema::amdgpu::AmdkfdIocRuntimeEnableResponse;
+        fn amdkfd_ioc_dbg_trap(mirage_schema::amdgpu::AmdkfdIocDbgTrapRequest) -> mirage_schema::amdgpu::AmdkfdIocDbgTrapResponse;
+        fn amdkfd_ioc_create_process(mirage_schema::amdgpu::AmdkfdIocCreateProcessRequest) -> mirage_schema::amdgpu::AmdkfdIocCreateProcessResponse;
+        fn amdkfd_ioc_ipc_import_handle(mirage_schema::amdgpu::AmdkfdIocIpcImportHandleRequest) -> mirage_schema::amdgpu::AmdkfdIocIpcImportHandleResponse;
+        fn amdkfd_ioc_ipc_export_handle(mirage_schema::amdgpu::AmdkfdIocIpcExportHandleRequest) -> mirage_schema::amdgpu::AmdkfdIocIpcExportHandleResponse;
+        fn amdkfd_ioc_cross_memory_copy(mirage_schema::amdgpu::AmdkfdIocCrossMemoryCopyRequest) -> mirage_schema::amdgpu::AmdkfdIocCrossMemoryCopyResponse;
+        fn amdkfd_ioc_rlc_spm(mirage_schema::amdgpu::AmdkfdIocRlcSpmRequest) -> mirage_schema::amdgpu::AmdkfdIocRlcSpmResponse;
+        fn amdkfd_ioc_pc_sample(mirage_schema::amdgpu::AmdkfdIocPcSampleRequest) -> mirage_schema::amdgpu::AmdkfdIocPcSampleResponse;
+        fn amdkfd_ioc_profiler(mirage_schema::amdgpu::AmdkfdIocProfilerRequest) -> mirage_schema::amdgpu::AmdkfdIocProfilerResponse;
+        fn amdkfd_ioc_ais_op(mirage_schema::amdgpu::AmdkfdIocAisOpRequest) -> mirage_schema::amdgpu::AmdkfdIocAisOpResponse;
+    );
 }
 
-impl ForwardDrmIoctl for RocjitsuEmulator {
-    fn forward_drm_ioctl(
-        &self,
-        _ctx: IoctlCtx,
-        _request: AnyDrmIoctlRequest,
-    ) -> AmdgpuResult<AnyDrmIoctlResponse> {
-        // TODO: dispatch to the VM once rocjitsu grows a DRM-AMDGPU
-        // ioctl surface.
-        Err(AmdgpuError::NoSys)
-    }
+impl HandleAnyKfdIoctl for RocjitsuEmulator {}
+
+impl HandleDrmIoctl for RocjitsuEmulator {
+    nosys_methods!(
+        fn drm_amdgpu_gem_create(mirage_schema::amdgpu::DrmAmdgpuGemCreateRequest) -> mirage_schema::amdgpu::DrmAmdgpuGemCreateResponse;
+        fn drm_amdgpu_gem_mmap(mirage_schema::amdgpu::DrmAmdgpuGemMmapRequest) -> mirage_schema::amdgpu::DrmAmdgpuGemMmapResponse;
+        fn drm_amdgpu_ctx(mirage_schema::amdgpu::DrmAmdgpuCtxRequest) -> mirage_schema::amdgpu::DrmAmdgpuCtxResponse;
+        fn drm_amdgpu_bo_list(mirage_schema::amdgpu::DrmAmdgpuBoListRequest) -> mirage_schema::amdgpu::DrmAmdgpuBoListResponse;
+        fn drm_amdgpu_cs(mirage_schema::amdgpu::DrmAmdgpuCsRequest) -> mirage_schema::amdgpu::DrmAmdgpuCsResponse;
+        fn drm_amdgpu_info(mirage_schema::amdgpu::DrmAmdgpuInfoRequest) -> mirage_schema::amdgpu::DrmAmdgpuInfoResponse;
+        fn drm_amdgpu_gem_metadata(mirage_schema::amdgpu::DrmAmdgpuGemMetadataRequest) -> mirage_schema::amdgpu::DrmAmdgpuGemMetadataResponse;
+        fn drm_amdgpu_gem_wait_idle(mirage_schema::amdgpu::DrmAmdgpuGemWaitIdleRequest) -> mirage_schema::amdgpu::DrmAmdgpuGemWaitIdleResponse;
+        fn drm_amdgpu_gem_va(mirage_schema::amdgpu::DrmAmdgpuGemVaRequest) -> mirage_schema::amdgpu::DrmAmdgpuGemVaResponse;
+        fn drm_amdgpu_wait_cs(mirage_schema::amdgpu::DrmAmdgpuWaitCsRequest) -> mirage_schema::amdgpu::DrmAmdgpuWaitCsResponse;
+        fn drm_amdgpu_gem_op(mirage_schema::amdgpu::DrmAmdgpuGemOpRequest) -> mirage_schema::amdgpu::DrmAmdgpuGemOpResponse;
+        fn drm_amdgpu_gem_userptr(mirage_schema::amdgpu::DrmAmdgpuGemUserptrRequest) -> mirage_schema::amdgpu::DrmAmdgpuGemUserptrResponse;
+        fn drm_amdgpu_wait_fences(mirage_schema::amdgpu::DrmAmdgpuWaitFencesRequest) -> mirage_schema::amdgpu::DrmAmdgpuWaitFencesResponse;
+        fn drm_amdgpu_vm(mirage_schema::amdgpu::DrmAmdgpuVmRequest) -> mirage_schema::amdgpu::DrmAmdgpuVmResponse;
+        fn drm_amdgpu_fence_to_handle(mirage_schema::amdgpu::DrmAmdgpuFenceToHandleRequest) -> mirage_schema::amdgpu::DrmAmdgpuFenceToHandleResponse;
+        fn drm_amdgpu_sched(mirage_schema::amdgpu::DrmAmdgpuSchedRequest) -> mirage_schema::amdgpu::DrmAmdgpuSchedResponse;
+        fn drm_amdgpu_userq(mirage_schema::amdgpu::DrmAmdgpuUserqRequest) -> mirage_schema::amdgpu::DrmAmdgpuUserqResponse;
+        fn drm_amdgpu_userq_signal(mirage_schema::amdgpu::DrmAmdgpuUserqSignalRequest) -> mirage_schema::amdgpu::DrmAmdgpuUserqSignalResponse;
+        fn drm_amdgpu_userq_wait(mirage_schema::amdgpu::DrmAmdgpuUserqWaitRequest) -> mirage_schema::amdgpu::DrmAmdgpuUserqWaitResponse;
+        fn drm_amdgpu_gem_list_handles(mirage_schema::amdgpu::DrmAmdgpuGemListHandlesRequest) -> mirage_schema::amdgpu::DrmAmdgpuGemListHandlesResponse;
+        fn drm_amdgpu_sem(mirage_schema::amdgpu::DrmAmdgpuSemRequest) -> mirage_schema::amdgpu::DrmAmdgpuSemResponse;
+        fn drm_amdgpu_gem_dgma(mirage_schema::amdgpu::DrmAmdgpuGemDgmaRequest) -> mirage_schema::amdgpu::DrmAmdgpuGemDgmaResponse;
+    );
 }
 
-impl ForwardFsSyscalls for RocjitsuEmulator {
-    fn forward_fs_syscall(
-        &self,
-        _ctx: IoctlCtx,
-        _request: AnyFsSyscallRequest,
-    ) -> AmdgpuResult<AnyFsSyscallResponse> {
-        // TODO: synthesise a virtual /sys/class/kfd view from the
-        // simulated topology.
-        Err(AmdgpuError::NoSys)
-    }
+impl HandleAnyDrmIoctl for RocjitsuEmulator {}
+
+impl HandleFsSyscalls for RocjitsuEmulator {
+    nosys_methods!(
+        fn syscall_open(mirage_schema::syscalls::SyscallOpenRequest) -> mirage_schema::syscalls::SyscallOpenResponse;
+        fn syscall_sysfs_read(mirage_schema::syscalls::SyscallSysfsReadRequest) -> mirage_schema::syscalls::SyscallSysfsReadResponse;
+        fn syscall_close(mirage_schema::syscalls::SyscallCloseRequest) -> mirage_schema::syscalls::SyscallCloseResponse;
+        fn syscall_stat_device(mirage_schema::syscalls::SyscallStatDeviceRequest) -> mirage_schema::syscalls::SyscallStatDeviceResponse;
+        fn syscall_access(mirage_schema::syscalls::SyscallAccessRequest) -> mirage_schema::syscalls::SyscallAccessResponse;
+        fn syscall_readlink_fd(mirage_schema::syscalls::SyscallReadlinkFdRequest) -> mirage_schema::syscalls::SyscallReadlinkFdResponse;
+        fn syscall_mmap(mirage_schema::syscalls::SyscallMmapRequest) -> mirage_schema::syscalls::SyscallMmapResponse;
+        fn syscall_munmap(mirage_schema::syscalls::SyscallMunmapRequest) -> mirage_schema::syscalls::SyscallMunmapResponse;
+        fn syscall_read_device(mirage_schema::syscalls::SyscallReadDeviceRequest) -> mirage_schema::syscalls::SyscallReadDeviceResponse;
+        fn syscall_dup(mirage_schema::syscalls::SyscallDupRequest) -> mirage_schema::syscalls::SyscallDupResponse;
+        fn syscall_atfork_child(mirage_schema::syscalls::SyscallAtforkChildRequest) -> mirage_schema::syscalls::SyscallAtforkChildResponse;
+    );
 }
+
+impl HandleAnyFsSyscalls for RocjitsuEmulator {}
 
 // Compile-time proof that `RocjitsuEmulator` satisfies `Emulator`.
 const _: fn() = || {
@@ -283,11 +359,13 @@ mod tests {
 
     #[test]
     fn stub_emulator_reports_nosys_for_every_surface() {
-        use mirage_schema::amdgpu::AmdkfdIocGetVersionRequest;
+        use mirage_schema::amdgpu::{
+            AmdkfdIocGetVersionRequest, AnyKfdIoctlRequest, HandleAnyKfdIoctl,
+        };
         let emu = RocjitsuEmulator::new_stub();
         let ctx = IoctlCtx { pid: 0, tid: 0 };
         assert!(matches!(
-            emu.forward_kfd_ioctl(
+            emu.handle_any_kfd_ioctl(
                 ctx,
                 AnyKfdIoctlRequest::AmdkfdIocGetVersion(AmdkfdIocGetVersionRequest {}),
             ),

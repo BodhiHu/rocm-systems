@@ -60,6 +60,12 @@ impl mirage_schema::syscalls::ForwardFsSyscalls for FixedEmulator {
     }
 }
 
+impl mirage_schema::amdgpu::HandleAnyKfdIoctl for FixedEmulator {}
+
+impl mirage_schema::amdgpu::HandleAnyDrmIoctl for FixedEmulator {}
+
+impl mirage_schema::syscalls::HandleAnyFsSyscalls for FixedEmulator {}
+
 fn unique_socket(tag: &str) -> std::path::PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

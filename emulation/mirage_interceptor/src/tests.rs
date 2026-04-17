@@ -62,6 +62,12 @@ impl mirage_schema::syscalls::ForwardFsSyscalls for VersionEmulator {
     }
 }
 
+impl mirage_schema::amdgpu::HandleAnyKfdIoctl for VersionEmulator {}
+
+impl mirage_schema::amdgpu::HandleAnyDrmIoctl for VersionEmulator {}
+
+impl mirage_schema::syscalls::HandleAnyFsSyscalls for VersionEmulator {}
+
 fn unique_socket() -> std::path::PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

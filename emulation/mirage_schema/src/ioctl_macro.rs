@@ -20,7 +20,8 @@
 /// * `pub struct $NameRequest` / `$NameResponse` — request / response payloads.
 /// * `Handle{Subsys}Ioctl` — trait with one method per ioctl (takes `&self` + `IoctlCtx`).
 /// * `Any{Subsys}IoctlRequest` / `Any{Subsys}IoctlResponse` — dispatch enums.
-/// * `HandleAny{Subsys}Ioctl` — dispatch trait, auto-implemented for `Handle{Subsys}Ioctl`.
+/// * `HandleAny{Subsys}Ioctl` — dispatch trait with a default dispatch helper for
+///   `Handle{Subsys}Ioctl` implementors.
 #[macro_export]
 macro_rules! ioctl_dsl {
     (
@@ -94,17 +95,9 @@ macro_rules! ioctl_dsl {
                     )*
                 }
 
-                // --- dispatch trait, blanket-impl for Handle{Subsys}Ioctl ---
+                // --- dispatch trait, defaulting to Handle{Subsys}Ioctl ---
 
-                pub trait [< HandleAny $subsys:camel Ioctl >] : Send + Sync {
-                    fn [< handle_any_ $subsys _ioctl >](
-                        &self,
-                        ctx: $crate::amdgpu::IoctlCtx,
-                        request: [< Any $subsys:camel IoctlRequest >],
-                    ) -> $crate::amdgpu_error::AmdgpuResult<[< Any $subsys:camel IoctlResponse >]>;
-                }
-
-                impl<T: [< Handle $subsys:camel Ioctl >]> [< HandleAny $subsys:camel Ioctl >] for T {
+                pub trait [< HandleAny $subsys:camel Ioctl >] : [< Handle $subsys:camel Ioctl >] + Send + Sync {
                     fn [< handle_any_ $subsys _ioctl >](
                         &self,
                         ctx: $crate::amdgpu::IoctlCtx,

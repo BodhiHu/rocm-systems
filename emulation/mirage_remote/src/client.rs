@@ -197,3 +197,9 @@ impl mirage_schema::syscalls::ForwardFsSyscalls for RemoteEmulator {
         }
     }
 }
+
+impl mirage_schema::amdgpu::HandleAnyKfdIoctl for RemoteEmulator {}
+
+impl mirage_schema::amdgpu::HandleAnyDrmIoctl for RemoteEmulator {}
+
+impl mirage_schema::syscalls::HandleAnyFsSyscalls for RemoteEmulator {}

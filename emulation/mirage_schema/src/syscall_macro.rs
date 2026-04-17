@@ -81,15 +81,7 @@ macro_rules! syscall_dsl {
                     )*
                 }
 
-                pub trait [< HandleAny $subsys:camel Syscalls >] : Send + Sync {
-                    fn [< handle_any_ $subsys _syscall >](
-                        &self,
-                        ctx: $crate::amdgpu::IoctlCtx,
-                        request: [< Any $subsys:camel SyscallRequest >],
-                    ) -> $crate::amdgpu_error::AmdgpuResult<[< Any $subsys:camel SyscallResponse >]>;
-                }
-
-                impl<T: [< Handle $subsys:camel Syscalls >]> [< HandleAny $subsys:camel Syscalls >] for T {
+                pub trait [< HandleAny $subsys:camel Syscalls >] : [< Handle $subsys:camel Syscalls >] + Send + Sync {
                     fn [< handle_any_ $subsys _syscall >](
                         &self,
                         ctx: $crate::amdgpu::IoctlCtx,
