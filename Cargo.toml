@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["emulation/mirage","emulation/mirage_*", "emulation/rocjitsu_sys"]
+members = ["emulation/mirage","emulation/mirage_*", "emulation/rocjitsu_sys", "projects/amdgpu_uapi"]
 
 [workspace.dependencies]
 serde = { version = "1" }
