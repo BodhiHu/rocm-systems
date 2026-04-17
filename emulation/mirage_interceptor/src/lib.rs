@@ -30,6 +30,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_long, c_ulong, c_void};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use libc::{O_CLOEXEC, size_t};
 
@@ -110,6 +111,10 @@ struct TrackedFd {
 }
 
 static FD_REGISTRY: OnceLock<Mutex<Vec<TrackedFd>>> = OnceLock::new();
+
+/// Counter for synthetic handles (USERPTR allocations handled locally).
+/// Starts at a high value to avoid collisions with daemon-assigned handles.
+static SYNTHETIC_HANDLE_COUNTER: AtomicU64 = AtomicU64::new(0xFFFF_0000_0000_0001);
 
 fn registry() -> &'static Mutex<Vec<TrackedFd>> {
     FD_REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
@@ -592,6 +597,20 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                 return errno_to_rc(libc::EINVAL);
             }
             let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_alloc_memory_of_gpu_args) };
+
+            // USERPTR allocations register container-side user memory.
+            // The daemon can't access those addresses, so handle locally.
+            const KFD_IOC_ALLOC_MEM_FLAGS_USERPTR: u32 = 0x4;
+            if (args.flags & KFD_IOC_ALLOC_MEM_FLAGS_USERPTR) != 0 {
+                let handle = SYNTHETIC_HANDLE_COUNTER.fetch_add(1, Ordering::Relaxed);
+                args.handle = handle;
+                if std::env::var("MIRAGE_INTERCEPTOR_DEBUG").is_ok() {
+                    eprintln!("[mirage_interceptor] ALLOC_MEMORY_OF_GPU USERPTR handled locally: va_addr=0x{:x} size={} handle=0x{:x}",
+                        args.va_addr, args.size, handle);
+                }
+                return 0;
+            }
+
             match remote.amdkfd_ioc_alloc_memory_of_gpu(
                 ctx,
                 amdgpu::AmdkfdIocAllocMemoryOfGpuRequest {
@@ -608,7 +627,13 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                     args.va_addr = resp.va_addr;
                     0
                 }
-                Err(err) => errno_to_rc(err.errno()),
+                Err(err) => {
+                    if std::env::var("MIRAGE_INTERCEPTOR_DEBUG").is_ok() {
+                        eprintln!("[mirage_interceptor] ALLOC_MEMORY_OF_GPU failed: va_addr=0x{:x} size={} gpu_id={} flags=0x{:x} err={:?}",
+                            args.va_addr, args.size, args.gpu_id, args.flags, err);
+                    }
+                    errno_to_rc(err.errno())
+                }
             }
         }
         x if x == (amdgpu::AMDKFD_IOC_FREE_MEMORY_OF_GPU & 0xff) => {
@@ -616,6 +641,10 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                 return errno_to_rc(libc::EINVAL);
             }
             let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_free_memory_of_gpu_args) };
+            // Synthetic handles (USERPTR) are not tracked by daemon.
+            if args.handle >= 0xFFFF_0000_0000_0000 {
+                return 0;
+            }
             match remote.amdkfd_ioc_free_memory_of_gpu(
                 ctx,
                 amdgpu::AmdkfdIocFreeMemoryOfGpuRequest { handle: args.handle },
@@ -634,6 +663,11 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             }) else {
                 return errno_to_rc(libc::EFAULT);
             };
+            // Synthetic handles (USERPTR) are not tracked by daemon.
+            if args.handle >= 0xFFFF_0000_0000_0000 {
+                args.n_success = args.n_devices;
+                return 0;
+            }
             match remote.amdkfd_ioc_map_memory_to_gpu(
                 ctx,
                 amdgpu::AmdkfdIocMapMemoryToGpuRequest {
@@ -658,6 +692,11 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             }) else {
                 return errno_to_rc(libc::EFAULT);
             };
+            // Synthetic handles (USERPTR) are not tracked by daemon.
+            if args.handle >= 0xFFFF_0000_0000_0000 {
+                args.n_success = args.n_devices;
+                return 0;
+            }
             match remote.amdkfd_ioc_unmap_memory_from_gpu(
                 ctx,
                 amdgpu::AmdkfdIocUnmapMemoryFromGpuRequest {
@@ -724,6 +763,22 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                 Err(err) => errno_to_rc(err.errno()),
             }
         }
+        x if x == (amdgpu::AMDKFD_IOC_SET_SCRATCH_BACKING_VA & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_set_scratch_backing_va_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_set_scratch_backing_va_args) };
+            match remote.amdkfd_ioc_set_scratch_backing_va(
+                ctx,
+                amdgpu::AmdkfdIocSetScratchBackingVaRequest {
+                    va_addr: args.va_addr,
+                    gpu_id: args.gpu_id,
+                },
+            ) {
+                Ok(_) => 0,
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
         x if x == (amdgpu::AMDKFD_IOC_WAIT_EVENTS & 0xff) => {
             if check_size::<kfd::kfd_ioctl_wait_events_args>(size).is_err() {
                 return errno_to_rc(libc::EINVAL);
@@ -753,6 +808,23 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                     }
                     0
                 }
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_SET_TRAP_HANDLER & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_set_trap_handler_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_set_trap_handler_args) };
+            match remote.amdkfd_ioc_set_trap_handler(
+                ctx,
+                amdgpu::AmdkfdIocSetTrapHandlerRequest {
+                    tba_addr: args.tba_addr,
+                    tma_addr: args.tma_addr,
+                    gpu_id: args.gpu_id,
+                },
+            ) {
+                Ok(_) => 0,
                 Err(err) => errno_to_rc(err.errno()),
             }
         }
@@ -1341,16 +1413,24 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
 /// `ioctl(int, unsigned long, ...)` — we match the common
 /// `(fd, cmd, void *)` shape.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ioctl(fd: c_int, cmd: libc::c_ulong, arg: *mut c_void) -> c_int {
-    if let Some(kind) = lookup_fd(fd) {
-        return dispatch_tracked_ioctl(kind, fd, cmd as u32, arg);
+pub unsafe extern "C-unwind" fn ioctl(fd: c_int, cmd: libc::c_ulong, arg: *mut c_void) -> c_int {
+    // Guard against TLS being destroyed during process exit.
+    // The HSA runtime calls ioctl from shutdown hooks after TLS is gone.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(kind) = lookup_fd(fd) {
+            return dispatch_tracked_ioctl(kind, fd, cmd as u32, arg);
+        }
+        let Some(real) = next_fn!(ioctl : fn(f: c_int, c: libc::c_ulong, a: *mut c_void) -> c_int)
+        else {
+            return errno_to_rc(libc::ENOSYS);
+        };
+        // SAFETY: forwarded to libc.
+        unsafe { real(fd, cmd, arg) }
+    }));
+    match result {
+        Ok(rc) => rc,
+        Err(_) => errno_to_rc(libc::ENOSYS),
     }
-    let Some(real) = next_fn!(ioctl : fn(f: c_int, c: libc::c_ulong, a: *mut c_void) -> c_int)
-    else {
-        return errno_to_rc(libc::ENOSYS);
-    };
-    // SAFETY: forwarded to libc.
-    unsafe { real(fd, cmd, arg) }
 }
 
 #[unsafe(no_mangle)]

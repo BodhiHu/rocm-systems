@@ -59,7 +59,7 @@ impl RemoteEmulator {
     }
 
     fn round_trip(&self, request: WireRequest) -> AmdgpuResult<WireResponse> {
-        THREAD_CONNS.with(|cell| {
+        THREAD_CONNS.try_with(|cell| {
             let mut cache = cell.borrow_mut();
             // Try up to twice: if a cached socket has gone stale (peer
             // closed, daemon restarted), drop it and reconnect once.
@@ -81,7 +81,7 @@ impl RemoteEmulator {
                 }
             }
             Err(AmdgpuError::Io)
-        })
+        }).unwrap_or(Err(AmdgpuError::Io))
     }
 }
 
