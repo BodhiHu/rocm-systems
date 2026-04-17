@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::ioctl_dsl;
 
+/// Context passed to every ioctl handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IoctlCtx {
+    pub pid: u32,
+}
+
 macro_rules! simple_enum {
     (
         $(#[$meta:meta])*
