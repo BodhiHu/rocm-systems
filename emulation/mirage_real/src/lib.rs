@@ -9,30 +9,16 @@
 //!
 //! # Scope
 //!
-//! Every variant of [`AnyKfdIoctlRequest`] and [`AnyDrmIoctlRequest`] is
-//! dispatched through a single match inside [`RealEmulator`]. Variants
-//! that are not yet wired to a raw kernel ioctl return [`AmdgpuError::NoSys`]
-//! so that unsupported paths surface cleanly rather than as memory
-//! corruption. [`AMDKFD_IOC_GET_VERSION`] is wired as a worked example.
+//! Every schema-defined KFD, DRM, and filesystem entrypoint in
+//! [`RealEmulator`] is translated into the corresponding host kernel ABI
+//! and forwarded directly with `libc::ioctl` or the matching libc syscall.
+//! Variable-length payloads are marshalled into the exact C layout expected
+//! by the driver before submission.
 //!
 //! # Availability
 //!
 //! [`RealEmulator::detect`] returns `None` on machines without a KFD
 //! device — tests use this to skip gracefully.
-
-macro_rules! nosys_methods {
-    ($(fn $method:ident($request:ty) -> $response:ty;)*) => {
-        $(
-            fn $method(
-                &self,
-                _ctx: mirage_schema::amdgpu::IoctlCtx,
-                _request: $request,
-            ) -> mirage_schema::amdgpu_error::AmdgpuResult<$response> {
-                Err(mirage_schema::amdgpu_error::AmdgpuError::NoSys)
-            }
-        )*
-    };
-}
 
 mod device;
 mod drm;

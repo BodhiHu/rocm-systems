@@ -92,4 +92,13 @@ impl RealEmulator {
             .map(|node| node.path.clone())
             .collect()
     }
+
+    pub(crate) fn primary_render_fd(&self) -> io::Result<i32> {
+        self.render_nodes
+            .lock()
+            .unwrap()
+            .first()
+            .map(|node| node.fd.as_raw_fd())
+            .ok_or_else(|| io::Error::from_raw_os_error(libc::ENODEV))
+    }
 }

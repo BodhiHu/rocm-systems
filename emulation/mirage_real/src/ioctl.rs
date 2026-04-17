@@ -3,36 +3,9 @@ use std::os::fd::AsRawFd;
 
 use mirage_schema::amdgpu::AmdkfdIocGetVersionResponse;
 use mirage_schema::amdgpu_error::{AmdgpuError, AmdgpuResult};
+use mirage_uapi::kfd;
 
 use crate::RealEmulator;
-
-/// Linux `_IO` direction bits (same layout as `<asm-generic/ioctl.h>`).
-mod ioc {
-    pub const NRBITS: u32 = 8;
-    pub const TYPEBITS: u32 = 8;
-    pub const SIZEBITS: u32 = 14;
-
-    pub const NRSHIFT: u32 = 0;
-    pub const TYPESHIFT: u32 = NRSHIFT + NRBITS;
-    pub const SIZESHIFT: u32 = TYPESHIFT + TYPEBITS;
-    pub const DIRSHIFT: u32 = SIZESHIFT + SIZEBITS;
-
-    #[allow(dead_code)]
-    pub const NONE: u32 = 0;
-    pub const WRITE: u32 = 1;
-    pub const READ: u32 = 2;
-
-    pub const fn ioc(dir: u32, ty: u32, nr: u32, size: u32) -> u32 {
-        (dir << DIRSHIFT) | (ty << TYPESHIFT) | (nr << NRSHIFT) | (size << SIZESHIFT)
-    }
-
-    pub const fn iowr(ty: u32, nr: u32, size: u32) -> u32 {
-        ioc(READ | WRITE, ty, nr, size)
-    }
-}
-
-/// KFD char device ioctl type.
-const KFDIOC_MAGIC: u32 = b'K' as u32;
 
 /// `ioctl(fd, nr, &mut arg)` — returns the kernel errno on failure.
 ///
@@ -54,25 +27,113 @@ unsafe fn raw_ioctl<T>(fd: i32, nr: u32, arg: &mut T) -> AmdgpuResult<()> {
     }
 }
 
+pub(crate) fn from_io_error(error: io::Error) -> AmdgpuError {
+    error
+        .raw_os_error()
+        .map(AmdgpuError::from_errno)
+        .unwrap_or(AmdgpuError::Io)
+}
+
+pub(crate) fn maybe_ptr<T>(slice: &[T]) -> u64 {
+    if slice.is_empty() {
+        0
+    } else {
+        slice.as_ptr() as usize as u64
+    }
+}
+
+pub(crate) fn maybe_mut_ptr<T>(slice: &mut [T]) -> u64 {
+    if slice.is_empty() {
+        0
+    } else {
+        slice.as_mut_ptr() as usize as u64
+    }
+}
+
+pub(crate) const fn kfd_ior<T>(nr: u32) -> u32 {
+    mirage_uapi::ioc::ior(
+        mirage_uapi::ioc::KFD_MAGIC,
+        nr,
+        core::mem::size_of::<T>() as u32,
+    )
+}
+
+pub(crate) const fn kfd_iow<T>(nr: u32) -> u32 {
+    mirage_uapi::ioc::iow(
+        mirage_uapi::ioc::KFD_MAGIC,
+        nr,
+        core::mem::size_of::<T>() as u32,
+    )
+}
+
+pub(crate) const fn kfd_iowr<T>(nr: u32) -> u32 {
+    mirage_uapi::ioc::iowr(
+        mirage_uapi::ioc::KFD_MAGIC,
+        nr,
+        core::mem::size_of::<T>() as u32,
+    )
+}
+
+pub(crate) const fn drm_iow<T>(nr: u32) -> u32 {
+    mirage_uapi::ioc::iow(
+        mirage_uapi::ioc::DRM_MAGIC,
+        mirage_uapi::ioc::DRM_COMMAND_BASE + nr,
+        core::mem::size_of::<T>() as u32,
+    )
+}
+
+pub(crate) const fn drm_iowr<T>(nr: u32) -> u32 {
+    mirage_uapi::ioc::iowr(
+        mirage_uapi::ioc::DRM_MAGIC,
+        mirage_uapi::ioc::DRM_COMMAND_BASE + nr,
+        core::mem::size_of::<T>() as u32,
+    )
+}
+
 #[repr(C)]
-struct KfdIocGetVersionArgs {
-    major: u32,
-    minor: u32,
+#[derive(Debug, Default, Copy, Clone)]
+pub(crate) struct DrmBoListEntry {
+    pub bo_handle: u32,
+    pub bo_priority: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub(crate) struct DrmCsChunk {
+    pub chunk_id: u32,
+    pub length_dw: u32,
+    pub chunk_data: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub(crate) struct DrmCsChunkDep {
+    pub ip_type: u32,
+    pub ip_instance: u32,
+    pub ring: u32,
+    pub ctx_id: u32,
+    pub handle: u64,
+}
+
+impl RealEmulator {
+    pub(crate) unsafe fn kfd_ioctl<T>(&self, nr: u32, arg: &mut T) -> AmdgpuResult<()> {
+        unsafe { raw_ioctl(self.kfd.as_raw_fd(), nr, arg) }
+    }
+
+    pub(crate) unsafe fn drm_ioctl<T>(&self, nr: u32, arg: &mut T) -> AmdgpuResult<()> {
+        let fd = self.primary_render_fd().map_err(from_io_error)?;
+        unsafe { raw_ioctl(fd, nr, arg) }
+    }
 }
 
 impl RealEmulator {
     pub(crate) fn kfd_get_version(&self) -> AmdgpuResult<AmdkfdIocGetVersionResponse> {
-        let nr = ioc::iowr(
-            KFDIOC_MAGIC,
-            0x01,
-            core::mem::size_of::<KfdIocGetVersionArgs>() as u32,
-        );
-        let mut args = KfdIocGetVersionArgs { major: 0, minor: 0 };
+        let mut args = kfd::kfd_ioctl_get_version_args::default();
         // SAFETY: `args` has the exact layout the kernel expects.
-        unsafe { raw_ioctl(self.kfd.as_raw_fd(), nr, &mut args)? };
+        unsafe { self.kfd_ioctl(kfd_ior::<kfd::kfd_ioctl_get_version_args>(0x01), &mut args)? };
         Ok(AmdkfdIocGetVersionResponse {
-            major_version: args.major,
-            minor_version: args.minor,
+            major_version: args.major_version,
+            minor_version: args.minor_version,
         })
     }
 }

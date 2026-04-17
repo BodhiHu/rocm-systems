@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 mirage_schema = { workspace = true }
+mirage_uapi = { workspace = true }
 libc = { workspace = true }
