@@ -26,7 +26,7 @@
 
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{CStr, CString, c_char, c_int, c_ulong, c_void};
+use std::ffi::{CStr, CString, c_char, c_int, c_long, c_ulong, c_void};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -37,7 +37,7 @@ use mirage_remote::RemoteEmulator;
 use mirage_schema::amdgpu::{self, HandleDrmIoctl, HandleKfdIoctl, IoctlCtx};
 use mirage_schema::amdgpu_error::AmdgpuError;
 use mirage_schema::syscalls::{self, DeviceClass, FakeStat, HandleFsSyscalls};
-use mirage_uapi::{drm, kfd};
+use mirage_uapi::{drm, ioc as uapi_ioc, kfd};
 
 /// Path to the KFD char device.
 pub const KFD_PATH: &str = "/dev/kfd";
@@ -100,6 +100,7 @@ impl DeviceKind {
 struct TrackedFd {
     cookie_fd: c_int,
     remote_fd: c_int,
+    host_fd: c_int,
     kind: DeviceKind,
     path: PathBuf,
     fake_stat: FakeStat,
@@ -116,6 +117,7 @@ pub fn register_fd(fd: c_int, kind: DeviceKind) {
     register_entry(TrackedFd {
         cookie_fd: fd,
         remote_fd: -1,
+        host_fd: -1,
         kind,
         path: PathBuf::from(kind.default_path()),
         fake_stat: FakeStat::default(),
@@ -149,6 +151,18 @@ fn lookup_entry(fd: c_int) -> Option<TrackedFd> {
 
 fn translate_remote_fd(fd: c_int) -> Option<c_int> {
     lookup_entry(fd).and_then(|entry| (entry.remote_fd >= 0).then_some(entry.remote_fd))
+}
+
+fn has_other_aliases(remote_fd: c_int, except_cookie_fd: c_int) -> bool {
+    registry().lock().unwrap().iter().any(|entry| {
+        entry.cookie_fd != except_cookie_fd && entry.remote_fd >= 0 && entry.remote_fd == remote_fd
+    })
+}
+
+fn has_other_host_aliases(host_fd: c_int, except_cookie_fd: c_int) -> bool {
+    registry().lock().unwrap().iter().any(|entry| {
+        entry.cookie_fd != except_cookie_fd && entry.host_fd >= 0 && entry.host_fd == host_fd
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -673,7 +687,7 @@ fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void) -> c_int {
             }
             0
         }
-        x if x == (amdgpu::DRM_AMDGPU_INFO & 0xff) => {
+        x if x == (uapi_ioc::DRM_COMMAND_BASE + drm::DRM_AMDGPU_INFO) => {
             if check_size::<drm::drm_amdgpu_info>(size).is_err() {
                 return errno_to_rc(libc::EINVAL);
             }
@@ -695,6 +709,15 @@ fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void) -> c_int {
                 },
             ) {
                 Ok(resp) => {
+                    debug_log(&format!(
+                        "drm_amdgpu_info ok query={} sub=({}, {}, {}) size={} returned={}",
+                        args.query,
+                        sub_query,
+                        sub_query2,
+                        sub_query3,
+                        args.return_size,
+                        resp.raw_data.len()
+                    ));
                     unsafe {
                         copy_u8_slice(
                             args.return_pointer as usize as *mut u8,
@@ -704,10 +727,24 @@ fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void) -> c_int {
                     }
                     0
                 }
-                Err(err) => errno_to_rc(err.errno()),
+                Err(err) => {
+                    debug_log(&format!(
+                        "drm_amdgpu_info err query={} sub=({}, {}, {}) size={} errno={}",
+                        args.query,
+                        sub_query,
+                        sub_query2,
+                        sub_query3,
+                        args.return_size,
+                        err.errno()
+                    ));
+                    errno_to_rc(err.errno())
+                }
             }
         }
-        _ => errno_to_rc(AmdgpuError::NoSys.errno()),
+        _ => {
+            debug_log(&format!("unhandled drm ioctl nr=0x{nr:02x} size={size}"));
+            errno_to_rc(AmdgpuError::NoSys.errno())
+        }
     }
 }
 
@@ -724,6 +761,16 @@ fn errno_to_rc(errno: i32) -> c_int {
         *libc::__errno_location() = errno;
     }
     -1
+}
+
+fn debug_enabled() -> bool {
+    std::env::var_os("MIRAGE_INTERCEPTOR_DEBUG").is_some()
+}
+
+fn debug_log(message: &str) {
+    if debug_enabled() {
+        eprintln!("[mirage_interceptor] {message}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -754,6 +801,13 @@ pub fn dispatch_tracked_ioctl(kind: DeviceKind, cmd: u32, arg: *mut c_void) -> c
     let Some(remote) = remote() else {
         return errno_to_rc(AmdgpuError::NoSys.errno());
     };
+    debug_log(&format!(
+        "dispatch kind={:?} ty=0x{:02x} nr=0x{:02x} size={}",
+        kind,
+        ioc::ty(cmd),
+        ioc::nr(cmd),
+        ioc::size(cmd)
+    ));
     dispatch_ioctl_with(remote, kind, cmd, arg)
 }
 
@@ -803,6 +857,22 @@ fn create_cookie_fd() -> c_int {
     fd
 }
 
+fn open_host_path(path: *const c_char, flags: c_int, mode: libc::mode_t) -> c_int {
+    let Some(real) = next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
+    else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    unsafe { real(path, flags, mode) }
+}
+
+fn openat_host_path(dirfd: c_int, path: *const c_char, flags: c_int, mode: libc::mode_t) -> c_int {
+    let Some(real) = next_fn!(openat : fn(d: c_int, p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
+    else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    unsafe { real(dirfd, path, flags, mode) }
+}
+
 fn tracked_path_request(_kind: DeviceKind, path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -830,6 +900,16 @@ unsafe fn fill_fake_stat(buf: *mut libc::stat, stat: FakeStat) {
     }
 }
 
+unsafe fn fill_fake_stat64(buf: *mut libc::stat64, stat: FakeStat) {
+    unsafe { std::ptr::write_bytes(buf, 0, 1) };
+    unsafe {
+        (*buf).st_mode = stat.mode as libc::mode_t;
+        (*buf).st_nlink = stat.nlink as libc::nlink_t;
+        (*buf).st_rdev = stat.rdev as libc::dev_t;
+        (*buf).st_size = stat.size as libc::off64_t;
+    }
+}
+
 fn tracked_fd_from_proc_path(path: &Path) -> Option<TrackedFd> {
     let s = path.to_str()?;
     let suffix = s.strip_prefix("/proc/self/fd/")?;
@@ -849,9 +929,19 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
         && let Some(kind) = DeviceKind::classify(&p)
         && let Some(remote) = remote()
     {
+        debug_log(&format!("open path={} kind={kind:?}", p.display()));
+        let host_fd = open_host_path(path, flags, mode);
+        if host_fd < 0 {
+            return host_fd;
+        }
         let fake_stat = match stat_request(remote, kind, &p) {
             Ok(stat) => stat,
-            Err(rc) => return rc,
+            Err(rc) => {
+                if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
+                    unsafe { real_close(host_fd) };
+                }
+                return rc;
+            }
         };
         let remote_fd = match remote.syscall_open(
             current_ctx(),
@@ -863,7 +953,12 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
             },
         ) {
             Ok(resp) => resp.virtual_fd,
-            Err(err) => return errno_to_rc(err.errno()),
+            Err(err) => {
+                if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
+                    unsafe { real_close(host_fd) };
+                }
+                return errno_to_rc(err.errno());
+            }
         };
         let fd = create_cookie_fd();
         if fd < 0 {
@@ -873,11 +968,15 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
                     virtual_fd: remote_fd,
                 },
             );
+            if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
+                unsafe { real_close(host_fd) };
+            }
             return fd;
         }
         register_entry(TrackedFd {
             cookie_fd: fd,
             remote_fd,
+            host_fd,
             kind,
             path: p,
             fake_stat,
@@ -904,9 +1003,19 @@ pub unsafe extern "C" fn openat(
         && let Some(kind) = DeviceKind::classify(&p)
         && let Some(remote) = remote()
     {
+        debug_log(&format!("openat path={} kind={kind:?}", p.display()));
+        let host_fd = openat_host_path(dirfd, path, flags, mode);
+        if host_fd < 0 {
+            return host_fd;
+        }
         let fake_stat = match stat_request(remote, kind, &p) {
             Ok(stat) => stat,
-            Err(rc) => return rc,
+            Err(rc) => {
+                if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
+                    unsafe { real_close(host_fd) };
+                }
+                return rc;
+            }
         };
         let remote_fd = match remote.syscall_open(
             current_ctx(),
@@ -918,7 +1027,12 @@ pub unsafe extern "C" fn openat(
             },
         ) {
             Ok(resp) => resp.virtual_fd,
-            Err(err) => return errno_to_rc(err.errno()),
+            Err(err) => {
+                if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
+                    unsafe { real_close(host_fd) };
+                }
+                return errno_to_rc(err.errno());
+            }
         };
         let fd = create_cookie_fd();
         if fd < 0 {
@@ -928,11 +1042,15 @@ pub unsafe extern "C" fn openat(
                     virtual_fd: remote_fd,
                 },
             );
+            if let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int) {
+                unsafe { real_close(host_fd) };
+            }
             return fd;
         }
         register_entry(TrackedFd {
             cookie_fd: fd,
             remote_fd,
+            host_fd,
             kind,
             path: p,
             fake_stat,
@@ -954,15 +1072,54 @@ pub unsafe extern "C" fn open64(path: *const c_char, flags: c_int, mode: libc::m
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn openat64(
+    dirfd: c_int,
+    path: *const c_char,
+    flags: c_int,
+    mode: libc::mode_t,
+) -> c_int {
+    unsafe { openat(dirfd, path, flags, mode) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __open_2(path: *const c_char, flags: c_int) -> c_int {
+    unsafe { open(path, flags, 0) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __open64_2(path: *const c_char, flags: c_int) -> c_int {
+    unsafe { open(path, flags, 0) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __openat_2(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+    unsafe { openat(dirfd, path, flags, 0) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __openat64_2(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+    unsafe { openat(dirfd, path, flags, 0) }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn close(fd: c_int) -> c_int {
     if let Some(entry) = lookup_entry(fd) {
-        if entry.remote_fd >= 0 && let Some(remote) = remote() {
+        debug_log(&format!(
+            "close cookie_fd={} remote_fd={} host_fd={} kind={:?}",
+            entry.cookie_fd, entry.remote_fd, entry.host_fd, entry.kind
+        ));
+        if entry.remote_fd >= 0 && !has_other_aliases(entry.remote_fd, fd) && let Some(remote) = remote() {
             let _ = remote.syscall_close(
                 current_ctx(),
                 syscalls::SyscallCloseRequest {
                     virtual_fd: entry.remote_fd,
                 },
             );
+        }
+        if entry.host_fd >= 0 && !has_other_host_aliases(entry.host_fd, fd)
+            && let Some(real_close) = next_fn!(close : fn(f: c_int) -> c_int)
+        {
+            unsafe { real_close(entry.host_fd) };
         }
         forget_fd(fd);
     }
@@ -989,6 +1146,150 @@ pub unsafe extern "C" fn ioctl(fd: c_int, cmd: libc::c_ulong, arg: *mut c_void) 
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn drmIoctl(fd: c_int, request: c_ulong, arg: *mut c_void) -> c_int {
+    if let Some(kind) = lookup_fd(fd) {
+        return dispatch_tracked_ioctl(kind, request as u32, arg);
+    }
+    let Some(real) = next_fn!(drmIoctl : fn(f: c_int, r: c_ulong, a: *mut c_void) -> c_int)
+    else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    unsafe { real(fd, request, arg) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn drmCommandWriteRead(
+    fd: c_int,
+    drm_command_index: c_ulong,
+    data: *mut c_void,
+    size: c_ulong,
+) -> c_int {
+    if let Some(DeviceKind::DrmRender) = lookup_fd(fd) {
+        let cmd = uapi_ioc::iowr(
+            uapi_ioc::DRM_MAGIC,
+            uapi_ioc::DRM_COMMAND_BASE + drm_command_index as u32,
+            size as u32,
+        );
+        return dispatch_tracked_ioctl(DeviceKind::DrmRender, cmd, data);
+    }
+    let Some(real) = next_fn!(drmCommandWriteRead : fn(f: c_int, i: c_ulong, d: *mut c_void, s: c_ulong) -> c_int)
+    else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    unsafe { real(fd, drm_command_index, data, size) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn drmCommandWrite(
+    fd: c_int,
+    drm_command_index: c_ulong,
+    data: *mut c_void,
+    size: c_ulong,
+) -> c_int {
+    debug_log(&format!(
+        "drmCommandWrite fd={} index={} size={} tracked={:?}",
+        fd,
+        drm_command_index,
+        size,
+        lookup_fd(fd)
+    ));
+    if let Some(DeviceKind::DrmRender) = lookup_fd(fd) {
+        let cmd = uapi_ioc::iow(
+            uapi_ioc::DRM_MAGIC,
+            uapi_ioc::DRM_COMMAND_BASE + drm_command_index as u32,
+            size as u32,
+        );
+        return dispatch_tracked_ioctl(DeviceKind::DrmRender, cmd, data);
+    }
+    let Some(real) = next_fn!(drmCommandWrite : fn(f: c_int, i: c_ulong, d: *mut c_void, s: c_ulong) -> c_int)
+    else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    unsafe { real(fd, drm_command_index, data, size) }
+}
+
+fn register_alias(new_fd: c_int, source_fd: c_int) {
+    if new_fd < 0 {
+        return;
+    }
+    let Some(mut entry) = lookup_entry(source_fd) else {
+        return;
+    };
+    debug_log(&format!(
+        "alias source_fd={} -> new_fd={} remote_fd={} kind={:?}",
+        source_fd, new_fd, entry.remote_fd, entry.kind
+    ));
+    if entry.remote_fd >= 0 && let Some(remote) = remote() {
+        let _ = remote.syscall_dup(
+            current_ctx(),
+            syscalls::SyscallDupRequest {
+                virtual_fd: entry.remote_fd,
+            },
+        );
+    }
+    entry.cookie_fd = new_fd;
+    register_entry(entry);
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dup(fd: c_int) -> c_int {
+    let Some(real) = next_fn!(dup : fn(f: c_int) -> c_int) else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    let new_fd = unsafe { real(fd) };
+    register_alias(new_fd, fd);
+    new_fd
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dup2(fd: c_int, new_fd: c_int) -> c_int {
+    let Some(real) = next_fn!(dup2 : fn(f: c_int, n: c_int) -> c_int) else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    let rc = unsafe { real(fd, new_fd) };
+    if rc >= 0 {
+        register_alias(rc, fd);
+    }
+    rc
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dup3(fd: c_int, new_fd: c_int, flags: c_int) -> c_int {
+    let Some(real) = next_fn!(dup3 : fn(f: c_int, n: c_int, fl: c_int) -> c_int) else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    let rc = unsafe { real(fd, new_fd, flags) };
+    if rc >= 0 {
+        register_alias(rc, fd);
+    }
+    rc
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, arg: c_long) -> c_int {
+    let Some(real) = next_fn!(fcntl : fn(f: c_int, c: c_int, a: c_long) -> c_int) else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    let rc = unsafe { real(fd, cmd, arg) };
+    if matches!(cmd, libc::F_DUPFD | libc::F_DUPFD_CLOEXEC) && rc >= 0 {
+        register_alias(rc, fd);
+    }
+    rc
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcntl64(fd: c_int, cmd: c_int, arg: c_long) -> c_int {
+    let Some(real) = next_fn!(fcntl64 : fn(f: c_int, c: c_int, a: c_long) -> c_int) else {
+        return unsafe { fcntl(fd, cmd, arg) };
+    };
+    let rc = unsafe { real(fd, cmd, arg) };
+    if matches!(cmd, libc::F_DUPFD | libc::F_DUPFD_CLOEXEC) && rc >= 0 {
+        register_alias(rc, fd);
+    }
+    rc
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn access(path: *const c_char, mode: c_int) -> c_int {
     if let Some(p) = cstr_to_path(path)
         && let Some(kind) = DeviceKind::classify(&p)
@@ -1011,6 +1312,90 @@ pub unsafe extern "C" fn access(path: *const c_char, mode: c_int) -> c_int {
         return errno_to_rc(libc::ENOSYS);
     };
     unsafe { real(path, mode) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: size_t) -> libc::ssize_t {
+    if let Some(entry) = lookup_entry(fd) {
+        debug_log(&format!(
+            "read fd={} remote_fd={} host_fd={} count={}",
+            fd, entry.remote_fd, entry.host_fd, count
+        ));
+        if entry.host_fd >= 0 {
+            let Some(real) = next_fn!(read : fn(f: c_int, b: *mut c_void, c: size_t) -> libc::ssize_t) else {
+                return errno_to_rc(libc::ENOSYS) as libc::ssize_t;
+            };
+            return unsafe { real(entry.host_fd, buf, count) };
+        }
+        if entry.remote_fd >= 0 && let Some(remote) = remote() {
+            match remote.syscall_read_device(
+                current_ctx(),
+                syscalls::SyscallReadDeviceRequest {
+                    virtual_fd: entry.remote_fd,
+                    count: count as u64,
+                },
+            ) {
+                Ok(resp) => {
+                    let len = resp.data.len().min(count);
+                    if len > 0 {
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                resp.data.as_ptr(),
+                                buf.cast::<u8>(),
+                                len,
+                            );
+                        }
+                    }
+                    return len as libc::ssize_t;
+                }
+                Err(err) => return errno_to_rc(err.errno()) as libc::ssize_t,
+            }
+        }
+    }
+    let Some(real) = next_fn!(read : fn(f: c_int, b: *mut c_void, c: size_t) -> libc::ssize_t) else {
+        return errno_to_rc(libc::ENOSYS) as libc::ssize_t;
+    };
+    unsafe { real(fd, buf, count) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mmap(
+    addr: *mut c_void,
+    length: size_t,
+    prot: c_int,
+    flags: c_int,
+    fd: c_int,
+    offset: libc::off_t,
+) -> *mut c_void {
+    if let Some(entry) = lookup_entry(fd) {
+        debug_log(&format!(
+            "mmap fd={} remote_fd={} host_fd={} len={} prot=0x{:x} flags=0x{:x} off={}",
+            fd, entry.remote_fd, entry.host_fd, length, prot, flags, offset
+        ));
+        if entry.host_fd >= 0 {
+            let Some(real) = next_fn!(mmap : fn(a: *mut c_void, l: size_t, p: c_int, f: c_int, d: c_int, o: libc::off_t) -> *mut c_void)
+            else {
+                errno_to_rc(libc::ENOSYS);
+                return libc::MAP_FAILED;
+            };
+            return unsafe { real(addr, length, prot, flags, entry.host_fd, offset) };
+        }
+    }
+    let Some(real) = next_fn!(mmap : fn(a: *mut c_void, l: size_t, p: c_int, f: c_int, d: c_int, o: libc::off_t) -> *mut c_void)
+    else {
+        errno_to_rc(libc::ENOSYS);
+        return libc::MAP_FAILED;
+    };
+    unsafe { real(addr, length, prot, flags, fd, offset) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn munmap(addr: *mut c_void, length: size_t) -> c_int {
+    debug_log(&format!("munmap addr={:?} len={}", addr, length));
+    let Some(real) = next_fn!(munmap : fn(a: *mut c_void, l: size_t) -> c_int) else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    unsafe { real(addr, length) }
 }
 
 #[unsafe(no_mangle)]
@@ -1048,6 +1433,34 @@ pub unsafe extern "C" fn fstat(fd: c_int, statbuf: *mut libc::stat) -> c_int {
         return errno_to_rc(libc::ENOSYS);
     };
     unsafe { real(fd, statbuf) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fstat64(fd: c_int, statbuf: *mut libc::stat64) -> c_int {
+    if let Some(entry) = lookup_entry(fd) {
+        unsafe { fill_fake_stat64(statbuf, entry.fake_stat) };
+        return 0;
+    }
+    let Some(real) = next_fn!(fstat64 : fn(f: c_int, s: *mut libc::stat64) -> c_int) else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    unsafe { real(fd, statbuf) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __fxstat(version: c_int, fd: c_int, statbuf: *mut libc::stat) -> c_int {
+    let _ = version;
+    unsafe { fstat(fd, statbuf) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __fxstat64(
+    version: c_int,
+    fd: c_int,
+    statbuf: *mut libc::stat64,
+) -> c_int {
+    let _ = version;
+    unsafe { fstat64(fd, statbuf) }
 }
 
 #[unsafe(no_mangle)]
