@@ -513,9 +513,10 @@ impl MirageDaemonSessions for InMemoryMirageDaemon {
             SessionRecord {
                 session,
                 detail,
-                container_handle: None,
+                container_handles: vec![],
                 emulator_socket_container: None,
                 interceptor_path_container: None,
+                network_name: None,
             },
         );
 
@@ -677,7 +678,10 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                     if let Some(ref topo) = topology {
                         if let Ok(topo_dir) = create_synthetic_topology(&session.name, topo) {
                             base_mounts.push(BindMount {
-                                host_path: topo_dir.join("sys/class/kfd").to_string_lossy().to_string(),
+                                host_path: topo_dir
+                                    .join("sys/class/kfd")
+                                    .to_string_lossy()
+                                    .to_string(),
                                 container_path: "/sys/class/kfd".to_string(),
                                 readonly: true,
                             });
@@ -1374,12 +1378,16 @@ mod tests {
         // Verify env vars on head node (node0).
         let head_env = &starts[0].container.entrypoint.env;
         let find_env = |envs: &[SetEnv], key: &str| -> Option<String> {
-            envs.iter()
-                .find(|e| e.key == key)
-                .map(|e| e.value.clone())
+            envs.iter().find(|e| e.key == key).map(|e| e.value.clone())
         };
-        assert_eq!(find_env(head_env, "MIRAGE_NUM_NODES"), Some("2".to_string()));
-        assert_eq!(find_env(head_env, "MIRAGE_NODE_RANK"), Some("0".to_string()));
+        assert_eq!(
+            find_env(head_env, "MIRAGE_NUM_NODES"),
+            Some("2".to_string())
+        );
+        assert_eq!(
+            find_env(head_env, "MIRAGE_NODE_RANK"),
+            Some("0".to_string())
+        );
         assert_eq!(
             find_env(head_env, "MIRAGE_HEAD_ADDR"),
             Some("mirage-multi-test-node0".to_string())
