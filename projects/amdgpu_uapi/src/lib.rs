@@ -4,5 +4,6 @@ pub trait DecodeIoctl {
 }
 
 pub trait EncodeIoctl {
+    /// make an ioctl number and a byte slice of the arguments 
     fn encode_ioctl(&self) -> (u32, &[u8]);
 }
