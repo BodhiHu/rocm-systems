@@ -8,16 +8,21 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use mirage_schema::common::{ExecArgs, HealthStatus, ProfileDef, SessionDef, SimulatorMode, Time};
+use mirage_schema::common::{
+    CleanupPolicy, ExecArgs, HealthStatus, ProfileDef, SessionDef, SimulatorMode, Time,
+    WorkloadDef,
+};
 use mirage_schema::daemon::{MirageDaemon, MirageDaemonClient, MirageDaemonError};
 use mirage_schema::paths;
 use mirage_schema::socket::{
     BootSessionReply, BootSessionRequest, CreateProfileReply, CreateProfileRequest,
-    DashboardCreateSessionReply, DashboardCreateSessionRequest, DashboardDeleteSessionReply,
-    DashboardDeleteSessionRequest, DeleteProfileReply, DeleteProfileRequest, ExecInSessionRequest,
-    GetOverviewRequest, GetSessionDetailRequest, GetSimulatorRequest, HealthRequest,
-    ListProfilesRequest, ListSessionsRequest, ListSimulatorsRequest, ShutdownSessionReply,
-    ShutdownSessionRequest, TimeRequest,
+    CreateWorkloadReply, CreateWorkloadRequest, DashboardCreateSessionReply,
+    DashboardCreateSessionRequest, DashboardDeleteSessionReply, DashboardDeleteSessionRequest,
+    DeleteProfileReply, DeleteProfileRequest, DeleteWorkloadReply, DeleteWorkloadRequest,
+    ExecInSessionRequest, GetOverviewRequest, GetSessionDetailRequest, GetSimulatorRequest,
+    GetWorkloadRequest, HealthRequest, ListProfilesRequest, ListSessionsRequest,
+    ListSimulatorsRequest, ListWorkloadsRequest, ShutdownSessionReply, ShutdownSessionRequest,
+    TimeRequest,
 };
 
 #[derive(Debug)]
@@ -114,6 +119,13 @@ enum Command {
     Exec(ExecCommandArgs),
     /// Shut down a booted session and release its resources.
     Shutdown(ShutdownArgs),
+    /// Manage workload definitions.
+    Workload {
+        #[command(subcommand)]
+        command: WorkloadCommand,
+    },
+    /// Run a workload definition to completion.
+    Run(RunArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -223,6 +235,74 @@ struct ExecCommandArgs {
 struct ShutdownArgs {
     #[arg(long)]
     name: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliCleanupPolicy {
+    Always,
+    Never,
+    OnSuccess,
+}
+
+impl From<CliCleanupPolicy> for CleanupPolicy {
+    fn from(value: CliCleanupPolicy) -> Self {
+        match value {
+            CliCleanupPolicy::Always => CleanupPolicy::Always,
+            CliCleanupPolicy::Never => CleanupPolicy::Never,
+            CliCleanupPolicy::OnSuccess => CleanupPolicy::OnSuccess,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkloadCommand {
+    Create(WorkloadCreateArgs),
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Delete {
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+struct WorkloadCreateArgs {
+    #[arg(long)]
+    name: String,
+    #[arg(long)]
+    profile: String,
+    #[arg(long)]
+    image: String,
+    /// Optional startup command (comma-separated: command,arg1,arg2,...).
+    #[arg(long)]
+    startup: Option<String>,
+    /// Exec steps as repeated --exec flags (each: command,arg1,arg2,...).
+    #[arg(long = "exec", required = true)]
+    execs: Vec<String>,
+    #[arg(long, value_enum, default_value_t = CliCleanupPolicy::Always)]
+    cleanup: CliCleanupPolicy,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct RunArgs {
+    /// Run a previously saved workload by name.
+    #[arg(long, group = "source")]
+    workload: Option<String>,
+    /// Run a workload defined inline (profile,image,cmd1,cmd2,...).
+    #[arg(long, group = "source")]
+    file: Option<String>,
     #[arg(long)]
     json: bool,
 }
@@ -516,6 +596,115 @@ async fn run_command(daemon: &dyn MirageDaemon, command: Command) -> CliResult {
                 &format!("session '{}' shut down", args.name),
             )?;
         }
+        Command::Workload { command } => match command {
+            WorkloadCommand::Create(args) => {
+                let startup = args.startup.map(|s| parse_csv_exec(&s));
+                let execs: Vec<ExecArgs> = args.execs.iter().map(|e| parse_csv_exec(e)).collect();
+                let reply = daemon
+                    .create_workload(CreateWorkloadRequest {
+                        workload: WorkloadDef {
+                            name: args.name.clone(),
+                            profile: args.profile,
+                            image: args.image,
+                            startup,
+                            execs,
+                            cleanup: args.cleanup.into(),
+                        },
+                    })
+                    .await?;
+                handle_create_workload_reply(
+                    reply,
+                    args.json,
+                    &format!("workload '{}' created", args.name),
+                )?;
+            }
+            WorkloadCommand::List { json } => {
+                let reply = daemon
+                    .list_workloads(ListWorkloadsRequest::default())
+                    .await?;
+                if json {
+                    print_json(&reply.workloads)?;
+                } else if reply.workloads.is_empty() {
+                    println!("no workloads found");
+                } else {
+                    for w in reply.workloads {
+                        println!(
+                            "{} | profile: {} | image: {} | startup: {} | execs: {} | cleanup: {}",
+                            w.name,
+                            w.profile,
+                            w.image,
+                            if w.has_startup { "yes" } else { "no" },
+                            w.exec_count,
+                            cleanup_name(w.cleanup),
+                        );
+                    }
+                }
+            }
+            WorkloadCommand::Show { name, json } => {
+                let reply = daemon
+                    .get_workload(GetWorkloadRequest { name: name.clone() })
+                    .await?;
+                let workload = reply
+                    .workload
+                    .ok_or_else(|| CliError::new(format!("workload '{}' not found", name)))?;
+                if json {
+                    print_json(&workload)?;
+                } else {
+                    println!("name: {}", workload.name);
+                    println!("profile: {}", workload.profile);
+                    println!("image: {}", workload.image);
+                    if let Some(ref startup) = workload.startup {
+                        println!("startup: {} {}", startup.command, startup.args.join(" "));
+                    }
+                    println!("cleanup: {}", cleanup_name(workload.cleanup));
+                    for (i, exec) in workload.execs.iter().enumerate() {
+                        println!("exec[{}]: {} {}", i, exec.command, exec.args.join(" "));
+                    }
+                }
+            }
+            WorkloadCommand::Delete { name, json } => {
+                let reply = daemon
+                    .delete_workload(DeleteWorkloadRequest { name: name.clone() })
+                    .await?;
+                handle_delete_workload_reply(
+                    reply,
+                    json,
+                    &format!("workload '{}' deleted", name),
+                )?;
+            }
+        },
+        Command::Run(args) => {
+            if args.workload.is_none() && args.file.is_none() {
+                return Err(CliError::new(
+                    "exactly one of --workload or --file must be provided",
+                ));
+            }
+            if let Some(name) = args.workload {
+                let reply = daemon
+                    .get_workload(GetWorkloadRequest { name: name.clone() })
+                    .await?;
+                let workload = reply
+                    .workload
+                    .ok_or_else(|| CliError::new(format!("workload '{}' not found", name)))?;
+                if args.json {
+                    print_json(&workload)?;
+                } else {
+                    println!("running workload '{}'", workload.name);
+                    println!(
+                        "note: workload execution is not yet implemented in the daemon; \
+                         the workload definition was resolved successfully"
+                    );
+                }
+            } else if let Some(ref path) = args.file {
+                if args.json {
+                    print_json(&serde_json::json!({ "file": path, "status": "not_implemented" }))?;
+                } else {
+                    println!(
+                        "note: inline workload execution from file is not yet implemented"
+                    );
+                }
+            }
+        }
     }
 
     Ok(())
@@ -571,6 +760,22 @@ fn handle_boot_reply(reply: BootSessionReply, json: bool, name: &str) -> CliResu
 }
 
 fn handle_shutdown_reply(reply: ShutdownSessionReply, json: bool, message: &str) -> CliResult {
+    handle_ok_reply(reply.ok, reply.error, json, message)
+}
+
+fn handle_create_workload_reply(
+    reply: CreateWorkloadReply,
+    json: bool,
+    message: &str,
+) -> CliResult {
+    handle_ok_reply(reply.ok, reply.error, json, message)
+}
+
+fn handle_delete_workload_reply(
+    reply: DeleteWorkloadReply,
+    json: bool,
+    message: &str,
+) -> CliResult {
     handle_ok_reply(reply.ok, reply.error, json, message)
 }
 
@@ -631,6 +836,26 @@ fn health_name(status: HealthStatus) -> &'static str {
         HealthStatus::Unknown => "unknown",
         HealthStatus::Healthy => "healthy",
         HealthStatus::Unhealthy => "unhealthy",
+    }
+}
+
+fn cleanup_name(policy: CleanupPolicy) -> &'static str {
+    match policy {
+        CleanupPolicy::Always => "always",
+        CleanupPolicy::Never => "never",
+        CleanupPolicy::OnSuccess => "on-success",
+    }
+}
+
+/// Parse a comma-separated string into an [`ExecArgs`].
+///
+/// The first element is the command and the rest are arguments.
+fn parse_csv_exec(s: &str) -> ExecArgs {
+    let parts: Vec<&str> = s.split(',').collect();
+    ExecArgs {
+        command: parts.first().copied().unwrap_or_default().to_string(),
+        args: parts[1..].iter().map(|a| a.to_string()).collect(),
+        env: vec![],
     }
 }
 

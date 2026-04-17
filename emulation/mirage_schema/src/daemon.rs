@@ -13,12 +13,14 @@ use tokio::net::{UnixListener, UnixStream};
 use crate::paths;
 use crate::socket::{
     AttachReply, AttachRequest, BootSessionReply, BootSessionRequest, CreateProfileReply,
-    CreateProfileRequest, DashboardCreateSessionReply, DashboardCreateSessionRequest,
-    DashboardDeleteSessionReply, DashboardDeleteSessionRequest, DeleteProfileReply,
-    DeleteProfileRequest, ExecInSessionReply, ExecInSessionRequest, GetOverviewReply,
+    CreateProfileRequest, CreateWorkloadReply, CreateWorkloadRequest,
+    DashboardCreateSessionReply, DashboardCreateSessionRequest, DashboardDeleteSessionReply,
+    DashboardDeleteSessionRequest, DeleteProfileReply, DeleteProfileRequest, DeleteWorkloadReply,
+    DeleteWorkloadRequest, ExecInSessionReply, ExecInSessionRequest, GetOverviewReply,
     GetOverviewRequest, GetSessionDetailReply, GetSessionDetailRequest, GetSimulatorReply,
-    GetSimulatorRequest, HealthReply, HealthRequest, ListProfilesReply, ListProfilesRequest,
-    ListSessionsReply, ListSessionsRequest, ListSimulatorsReply, ListSimulatorsRequest,
+    GetSimulatorRequest, GetWorkloadReply, GetWorkloadRequest, HealthReply, HealthRequest,
+    ListProfilesReply, ListProfilesRequest, ListSessionsReply, ListSessionsRequest,
+    ListSimulatorsReply, ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest,
     RegisterSimReply, RegisterSimRequest, ShutdownSessionReply, ShutdownSessionRequest, TimeReply,
     TimeRequest,
 };
@@ -245,6 +247,12 @@ mirage_daemon_rpcs! {
     }
     MirageDaemonShutdown {
         shutdown_session(ShutdownSessionRequest) -> ShutdownSessionReply => ShutdownSession;
+    }
+    MirageDaemonWorkloads {
+        create_workload(CreateWorkloadRequest) -> CreateWorkloadReply => CreateWorkload;
+        list_workloads(ListWorkloadsRequest) -> ListWorkloadsReply => ListWorkloads;
+        get_workload(GetWorkloadRequest) -> GetWorkloadReply => GetWorkload;
+        delete_workload(DeleteWorkloadRequest) -> DeleteWorkloadReply => DeleteWorkload;
     }
 }
 
@@ -639,6 +647,43 @@ mod tests {
             _request: ShutdownSessionRequest,
         ) -> MirageDaemonResult<ShutdownSessionReply> {
             Ok(ShutdownSessionReply {
+                ok: true,
+                error: None,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl MirageDaemonWorkloads for FixedDaemon {
+        async fn create_workload(
+            &self,
+            _request: CreateWorkloadRequest,
+        ) -> MirageDaemonResult<CreateWorkloadReply> {
+            Ok(CreateWorkloadReply {
+                ok: true,
+                error: None,
+            })
+        }
+
+        async fn list_workloads(
+            &self,
+            _request: ListWorkloadsRequest,
+        ) -> MirageDaemonResult<ListWorkloadsReply> {
+            Ok(ListWorkloadsReply { workloads: vec![] })
+        }
+
+        async fn get_workload(
+            &self,
+            _request: GetWorkloadRequest,
+        ) -> MirageDaemonResult<GetWorkloadReply> {
+            Ok(GetWorkloadReply { workload: None })
+        }
+
+        async fn delete_workload(
+            &self,
+            _request: DeleteWorkloadRequest,
+        ) -> MirageDaemonResult<DeleteWorkloadReply> {
+            Ok(DeleteWorkloadReply {
                 ok: true,
                 error: None,
             })

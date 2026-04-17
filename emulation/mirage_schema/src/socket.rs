@@ -23,12 +23,16 @@
 //! | `CreateSession` (dash)     | [`DashboardCreateSessionRequest`]  | [`DashboardCreateSessionReply`]     |
 //! | `DeleteSession` (dash)     | [`DashboardDeleteSessionRequest`]  | [`DashboardDeleteSessionReply`]     |
 //! | `GetSessionDetail`         | [`GetSessionDetailRequest`]        | [`GetSessionDetailReply`]           |
+//! | `CreateWorkload`           | [`CreateWorkloadRequest`]          | [`CreateWorkloadReply`]             |
+//! | `ListWorkloads`            | [`ListWorkloadsRequest`]           | [`ListWorkloadsReply`]              |
+//! | `GetWorkload`              | [`GetWorkloadRequest`]             | [`GetWorkloadReply`]                |
+//! | `DeleteWorkload`           | [`DeleteWorkloadRequest`]          | [`DeleteWorkloadReply`]             |
 
 use serde::{Deserialize, Serialize};
 
 use crate::common::{
-    ExecArgs, GpuDef, HealthStatus, ProfileDef, RunExit, SessionDef, SimulatorMode, StreamData,
-    Time,
+    CleanupPolicy, ExecArgs, GpuDef, HealthStatus, ProfileDef, RunExit, SessionDef, SimulatorMode,
+    StreamData, Time, WorkloadDef,
 };
 use crate::simulator::SimulatorInfo;
 
@@ -517,4 +521,98 @@ pub struct GetSessionDetailReply {
     /// Number of active simulated contexts.
     #[serde(default)]
     pub active_contexts: u32,
+}
+
+// ===========================================================================
+//  Dashboard RPCs — workloads
+// ===========================================================================
+
+/// Request to create a new workload definition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateWorkloadRequest {
+    /// The workload definition to persist.
+    pub workload: WorkloadDef,
+}
+
+/// Response to [`CreateWorkloadRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateWorkloadReply {
+    /// Whether the workload was created successfully.
+    #[serde(default)]
+    pub ok: bool,
+
+    /// If `ok` is `false`, a human-readable error message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Request the list of saved workload definitions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListWorkloadsRequest {}
+
+/// Compact workload info for list views.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkloadSummary {
+    /// Workload name.
+    pub name: String,
+
+    /// Profile used for the temporary session.
+    pub profile: String,
+
+    /// Container image for the session.
+    pub image: String,
+
+    /// Whether a startup program is configured.
+    #[serde(default)]
+    pub has_startup: bool,
+
+    /// Number of exec steps in the workload.
+    #[serde(default)]
+    pub exec_count: u32,
+
+    /// Cleanup policy for the temporary session.
+    #[serde(default)]
+    pub cleanup: CleanupPolicy,
+}
+
+/// Response to [`ListWorkloadsRequest`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListWorkloadsReply {
+    /// All saved workload definitions.
+    #[serde(default)]
+    pub workloads: Vec<WorkloadSummary>,
+}
+
+/// Request full details for a specific workload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetWorkloadRequest {
+    /// Name of the workload.
+    pub name: String,
+}
+
+/// Response to [`GetWorkloadRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetWorkloadReply {
+    /// The requested workload definition, or `None` if not found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload: Option<WorkloadDef>,
+}
+
+/// Request to delete a saved workload definition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteWorkloadRequest {
+    /// Name of the workload to delete.
+    pub name: String,
+}
+
+/// Response to [`DeleteWorkloadRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteWorkloadReply {
+    /// Whether the workload was deleted successfully.
+    #[serde(default)]
+    pub ok: bool,
+
+    /// If `ok` is `false`, a human-readable error message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }

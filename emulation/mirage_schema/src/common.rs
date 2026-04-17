@@ -149,6 +149,90 @@ fn one_u32() -> u32 {
 }
 
 // ---------------------------------------------------------------------------
+//  Cleanup policy
+// ---------------------------------------------------------------------------
+
+/// Controls whether a workload's temporary session is cleaned up after
+/// the workload finishes.
+///
+/// # Variants
+///
+/// | Variant     | Description                                              |
+/// |-------------|----------------------------------------------------------|
+/// | `Always`    | Clean up on both success and failure (default).          |
+/// | `Never`     | Leave the session running after the workload completes.  |
+/// | `OnSuccess` | Clean up only on success; preserve on failure.           |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupPolicy {
+    /// Automatically shut down the temporary session and clean up
+    /// resources when the workload finishes or fails.
+    #[default]
+    Always,
+    /// Never clean up — the session is left running.
+    Never,
+    /// Only clean up on successful completion; preserve on failure.
+    OnSuccess,
+}
+
+// ---------------------------------------------------------------------------
+//  Workload definition
+// ---------------------------------------------------------------------------
+
+/// A self-contained execution plan combining session configuration with
+/// an ordered chain of exec steps.
+///
+/// A workload boots a temporary session from a [`profile`](Self::profile)
+/// and [`image`](Self::image), optionally runs a [`startup`](Self::startup)
+/// program, then executes an ordered list of [`execs`](Self::execs).
+/// When the workload completes, the temporary session is cleaned up
+/// according to the [`cleanup`](Self::cleanup) policy.
+///
+/// # Examples
+///
+/// ```
+/// # use mirage_schema::common::{WorkloadDef, ExecArgs, CleanupPolicy};
+/// let workload = WorkloadDef {
+///     name: "torch-smoke".into(),
+///     profile: "mi300x-func-2x8".into(),
+///     image: "ghcr.io/therock/mirage-runtime:rocm6.4".into(),
+///     startup: None,
+///     execs: vec![
+///         ExecArgs {
+///             command: "python".into(),
+///             args: vec!["-c".into(), "import torch; print(torch.cuda.is_available())".into()],
+///             env: vec![],
+///         },
+///     ],
+///     cleanup: CleanupPolicy::Always,
+/// };
+/// assert_eq!(workload.execs.len(), 1);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkloadDef {
+    /// Unique name for this workload.
+    pub name: String,
+
+    /// The profile used to boot the temporary session
+    /// (matches [`ProfileDef::name`]).
+    pub profile: String,
+
+    /// The container image used for the temporary session.
+    pub image: String,
+
+    /// Optional startup program to run before the ordered exec chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup: Option<ExecArgs>,
+
+    /// Ordered list of exec steps.  Must contain at least one entry.
+    pub execs: Vec<ExecArgs>,
+
+    /// Cleanup policy for the temporary session.
+    #[serde(default)]
+    pub cleanup: CleanupPolicy,
+}
+
+// ---------------------------------------------------------------------------
 //  Environment variable pair
 // ---------------------------------------------------------------------------
 
@@ -355,4 +439,72 @@ pub struct Time {
     /// Must be in the range `0..1_000_000_000_000` (< 1 second).
     #[serde(default)]
     pub picoseconds: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workload_def_serde_round_trip() {
+        let workload = WorkloadDef {
+            name: "torch-smoke".into(),
+            profile: "mi300x-func-2x8".into(),
+            image: "ghcr.io/therock/mirage-runtime:rocm6.4".into(),
+            startup: Some(ExecArgs {
+                command: "init.sh".into(),
+                args: vec!["--verbose".into()],
+                env: vec![],
+            }),
+            execs: vec![
+                ExecArgs {
+                    command: "python".into(),
+                    args: vec!["-c".into(), "import torch".into()],
+                    env: vec![],
+                },
+                ExecArgs {
+                    command: "rocminfo".into(),
+                    args: vec![],
+                    env: vec![],
+                },
+            ],
+            cleanup: CleanupPolicy::OnSuccess,
+        };
+
+        let json = serde_json::to_string(&workload).unwrap();
+        let deserialized: WorkloadDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(workload, deserialized);
+    }
+
+    #[test]
+    fn workload_def_defaults() {
+        let json = r#"{
+            "name": "minimal",
+            "profile": "p",
+            "image": "img:latest",
+            "execs": [{"command": "echo", "args": ["hello"]}]
+        }"#;
+        let workload: WorkloadDef = serde_json::from_str(json).unwrap();
+        assert_eq!(workload.cleanup, CleanupPolicy::Always);
+        assert!(workload.startup.is_none());
+    }
+
+    #[test]
+    fn cleanup_policy_serde() {
+        assert_eq!(
+            serde_json::to_string(&CleanupPolicy::Always).unwrap(),
+            r#""always""#
+        );
+        assert_eq!(
+            serde_json::to_string(&CleanupPolicy::Never).unwrap(),
+            r#""never""#
+        );
+        assert_eq!(
+            serde_json::to_string(&CleanupPolicy::OnSuccess).unwrap(),
+            r#""on_success""#
+        );
+
+        let roundtrip: CleanupPolicy = serde_json::from_str(r#""on_success""#).unwrap();
+        assert_eq!(roundtrip, CleanupPolicy::OnSuccess);
+    }
 }

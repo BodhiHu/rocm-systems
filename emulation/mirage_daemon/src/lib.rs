@@ -12,6 +12,7 @@ use mirage_container::{
 };
 use mirage_schema::common::{
     ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SessionDef, SetEnv, SimulatorMode, Time,
+    WorkloadDef,
 };
 use mirage_schema::config::DaemonDef;
 use mirage_schema::container::{BindMount, ContainerDef};
@@ -19,18 +20,21 @@ use mirage_schema::daemon::{
     MirageDaemonAttach, MirageDaemonBoot, MirageDaemonExec, MirageDaemonHealth,
     MirageDaemonOverview, MirageDaemonProfiles, MirageDaemonRegistration, MirageDaemonResult,
     MirageDaemonSessions, MirageDaemonShutdown, MirageDaemonSimulators, MirageDaemonTime,
+    MirageDaemonWorkloads,
 };
 use mirage_schema::simulator::SimulatorInfo;
 use mirage_schema::socket::{
     AttachReply, AttachRequest, BootSessionReply, BootSessionRequest, CreateProfileReply,
-    CreateProfileRequest, DashboardCreateSessionReply, DashboardCreateSessionRequest,
-    DashboardDeleteSessionReply, DashboardDeleteSessionRequest, DeleteProfileReply,
-    DeleteProfileRequest, ExecInSessionReply, ExecInSessionRequest, GetOverviewReply,
+    CreateProfileRequest, CreateWorkloadReply, CreateWorkloadRequest,
+    DashboardCreateSessionReply, DashboardCreateSessionRequest, DashboardDeleteSessionReply,
+    DashboardDeleteSessionRequest, DeleteProfileReply, DeleteProfileRequest, DeleteWorkloadReply,
+    DeleteWorkloadRequest, ExecInSessionReply, ExecInSessionRequest, GetOverviewReply,
     GetOverviewRequest, GetSessionDetailReply, GetSessionDetailRequest, GetSimulatorReply,
-    GetSimulatorRequest, HealthReply, HealthRequest, ListProfilesReply, ListProfilesRequest,
-    ListSessionsReply, ListSessionsRequest, ListSimulatorsReply, ListSimulatorsRequest,
+    GetSimulatorRequest, GetWorkloadReply, GetWorkloadRequest, HealthReply, HealthRequest,
+    ListProfilesReply, ListProfilesRequest, ListSessionsReply, ListSessionsRequest,
+    ListSimulatorsReply, ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest,
     RegisterSimReply, RegisterSimRequest, SessionSummary, ShutdownSessionReply,
-    ShutdownSessionRequest, SimulatorSummary, TimeReply, TimeRequest,
+    ShutdownSessionRequest, SimulatorSummary, TimeReply, TimeRequest, WorkloadSummary,
 };
 
 pub struct InMemoryMirageDaemon {
@@ -55,6 +59,7 @@ struct State {
     simulators: BTreeMap<String, SimulatorInfo>,
     profiles: BTreeMap<String, ProfileDef>,
     sessions: BTreeMap<String, SessionRecord>,
+    workloads: BTreeMap<String, WorkloadDef>,
 }
 
 #[derive(Debug, Clone)]
@@ -961,6 +966,100 @@ impl MirageDaemonShutdown for InMemoryMirageDaemon {
     }
 }
 
+#[async_trait]
+impl MirageDaemonWorkloads for InMemoryMirageDaemon {
+    async fn create_workload(
+        &self,
+        request: CreateWorkloadRequest,
+    ) -> MirageDaemonResult<CreateWorkloadReply> {
+        let workload = request.workload;
+
+        if workload.name.trim().is_empty() {
+            return Ok(CreateWorkloadReply {
+                ok: false,
+                error: Some("workload name must not be empty".to_string()),
+            });
+        }
+
+        if workload.execs.is_empty() {
+            return Ok(CreateWorkloadReply {
+                ok: false,
+                error: Some("workload must contain at least one exec step".to_string()),
+            });
+        }
+
+        let mut state = self.state.write().await;
+
+        if state.workloads.contains_key(&workload.name) {
+            return Ok(CreateWorkloadReply {
+                ok: false,
+                error: Some(format!("workload '{}' already exists", workload.name)),
+            });
+        }
+
+        // Validate the referenced profile exists.
+        if !state.profiles.contains_key(&workload.profile) {
+            return Ok(CreateWorkloadReply {
+                ok: false,
+                error: Some(format!("profile '{}' does not exist", workload.profile)),
+            });
+        }
+
+        state.workloads.insert(workload.name.clone(), workload);
+        Ok(CreateWorkloadReply {
+            ok: true,
+            error: None,
+        })
+    }
+
+    async fn list_workloads(
+        &self,
+        _request: ListWorkloadsRequest,
+    ) -> MirageDaemonResult<ListWorkloadsReply> {
+        let state = self.state.read().await;
+        let workloads = state
+            .workloads
+            .values()
+            .map(|w| WorkloadSummary {
+                name: w.name.clone(),
+                profile: w.profile.clone(),
+                image: w.image.clone(),
+                has_startup: w.startup.is_some(),
+                exec_count: w.execs.len() as u32,
+                cleanup: w.cleanup,
+            })
+            .collect();
+        Ok(ListWorkloadsReply { workloads })
+    }
+
+    async fn get_workload(
+        &self,
+        request: GetWorkloadRequest,
+    ) -> MirageDaemonResult<GetWorkloadReply> {
+        let state = self.state.read().await;
+        let workload = state.workloads.get(&request.name).cloned();
+        Ok(GetWorkloadReply { workload })
+    }
+
+    async fn delete_workload(
+        &self,
+        request: DeleteWorkloadRequest,
+    ) -> MirageDaemonResult<DeleteWorkloadReply> {
+        let mut state = self.state.write().await;
+        if state.workloads.remove(&request.name).is_none() {
+            return Ok(DeleteWorkloadReply {
+                ok: false,
+                error: Some(format!("workload '{}' does not exist", request.name)),
+            });
+        }
+
+        Ok(DeleteWorkloadReply {
+            ok: true,
+            error: None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1451,6 +1550,273 @@ mod tests {
         // Network should have been removed.
         let networks = mock.networks().await;
         assert!(networks.is_empty(), "network should be removed on shutdown");
+    }
+
+    async fn daemon_with_profile() -> InMemoryMirageDaemon {
+        let daemon = InMemoryMirageDaemon::new();
+        daemon
+            .create_profile(CreateProfileRequest {
+                profile: ProfileDef {
+                    name: "mi300x".to_string(),
+                    simulator: "rocjitsu".to_string(),
+                    mode: SimulatorMode::Functional,
+                    gpu: "MI300X".to_string(),
+                    num_gpus: 1,
+                    num_nodes: 1,
+                },
+            })
+            .await
+            .unwrap();
+        daemon
+    }
+
+    fn sample_exec(cmd: &str) -> ExecArgs {
+        ExecArgs {
+            command: cmd.to_string(),
+            args: vec![],
+            env: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn workload_create_and_list() {
+        let daemon = daemon_with_profile().await;
+
+        let reply = daemon
+            .create_workload(CreateWorkloadRequest {
+                workload: WorkloadDef {
+                    name: "torch-smoke".to_string(),
+                    profile: "mi300x".to_string(),
+                    image: "ghcr.io/example/img:latest".to_string(),
+                    startup: None,
+                    execs: vec![sample_exec("rocminfo")],
+                    cleanup: mirage_schema::common::CleanupPolicy::Always,
+                },
+            })
+            .await
+            .unwrap();
+        assert!(reply.ok, "create should succeed: {:?}", reply.error);
+
+        let list = daemon
+            .list_workloads(ListWorkloadsRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(list.workloads.len(), 1);
+        assert_eq!(list.workloads[0].name, "torch-smoke");
+        assert_eq!(list.workloads[0].exec_count, 1);
+        assert!(!list.workloads[0].has_startup);
+    }
+
+    #[tokio::test]
+    async fn workload_create_with_startup() {
+        let daemon = daemon_with_profile().await;
+
+        let reply = daemon
+            .create_workload(CreateWorkloadRequest {
+                workload: WorkloadDef {
+                    name: "with-startup".to_string(),
+                    profile: "mi300x".to_string(),
+                    image: "img:latest".to_string(),
+                    startup: Some(sample_exec("init.sh")),
+                    execs: vec![sample_exec("step1"), sample_exec("step2")],
+                    cleanup: mirage_schema::common::CleanupPolicy::OnSuccess,
+                },
+            })
+            .await
+            .unwrap();
+        assert!(reply.ok);
+
+        let list = daemon
+            .list_workloads(ListWorkloadsRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(list.workloads[0].has_startup, true);
+        assert_eq!(list.workloads[0].exec_count, 2);
+        assert_eq!(
+            list.workloads[0].cleanup,
+            mirage_schema::common::CleanupPolicy::OnSuccess
+        );
+    }
+
+    #[tokio::test]
+    async fn workload_create_rejects_empty_name() {
+        let daemon = daemon_with_profile().await;
+
+        let reply = daemon
+            .create_workload(CreateWorkloadRequest {
+                workload: WorkloadDef {
+                    name: "".to_string(),
+                    profile: "mi300x".to_string(),
+                    image: "img:latest".to_string(),
+                    startup: None,
+                    execs: vec![sample_exec("rocminfo")],
+                    cleanup: mirage_schema::common::CleanupPolicy::Always,
+                },
+            })
+            .await
+            .unwrap();
+        assert!(!reply.ok);
+        assert!(reply.error.unwrap().contains("must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn workload_create_rejects_empty_execs() {
+        let daemon = daemon_with_profile().await;
+
+        let reply = daemon
+            .create_workload(CreateWorkloadRequest {
+                workload: WorkloadDef {
+                    name: "no-execs".to_string(),
+                    profile: "mi300x".to_string(),
+                    image: "img:latest".to_string(),
+                    startup: None,
+                    execs: vec![],
+                    cleanup: mirage_schema::common::CleanupPolicy::Always,
+                },
+            })
+            .await
+            .unwrap();
+        assert!(!reply.ok);
+        assert!(reply.error.unwrap().contains("at least one exec"));
+    }
+
+    #[tokio::test]
+    async fn workload_create_rejects_missing_profile() {
+        let daemon = InMemoryMirageDaemon::new();
+
+        let reply = daemon
+            .create_workload(CreateWorkloadRequest {
+                workload: WorkloadDef {
+                    name: "bad-profile".to_string(),
+                    profile: "nonexistent".to_string(),
+                    image: "img:latest".to_string(),
+                    startup: None,
+                    execs: vec![sample_exec("rocminfo")],
+                    cleanup: mirage_schema::common::CleanupPolicy::Always,
+                },
+            })
+            .await
+            .unwrap();
+        assert!(!reply.ok);
+        assert!(reply.error.unwrap().contains("does not exist"));
+    }
+
+    #[tokio::test]
+    async fn workload_create_rejects_duplicate_name() {
+        let daemon = daemon_with_profile().await;
+
+        let workload = WorkloadDef {
+            name: "dup".to_string(),
+            profile: "mi300x".to_string(),
+            image: "img:latest".to_string(),
+            startup: None,
+            execs: vec![sample_exec("rocminfo")],
+            cleanup: mirage_schema::common::CleanupPolicy::Always,
+        };
+
+        let r1 = daemon
+            .create_workload(CreateWorkloadRequest {
+                workload: workload.clone(),
+            })
+            .await
+            .unwrap();
+        assert!(r1.ok);
+
+        let r2 = daemon
+            .create_workload(CreateWorkloadRequest { workload })
+            .await
+            .unwrap();
+        assert!(!r2.ok);
+        assert!(r2.error.unwrap().contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn workload_get_and_show() {
+        let daemon = daemon_with_profile().await;
+
+        daemon
+            .create_workload(CreateWorkloadRequest {
+                workload: WorkloadDef {
+                    name: "showme".to_string(),
+                    profile: "mi300x".to_string(),
+                    image: "img:latest".to_string(),
+                    startup: Some(sample_exec("setup")),
+                    execs: vec![sample_exec("run")],
+                    cleanup: mirage_schema::common::CleanupPolicy::Never,
+                },
+            })
+            .await
+            .unwrap();
+
+        let reply = daemon
+            .get_workload(GetWorkloadRequest {
+                name: "showme".to_string(),
+            })
+            .await
+            .unwrap();
+        let w = reply.workload.expect("workload should exist");
+        assert_eq!(w.name, "showme");
+        assert_eq!(w.profile, "mi300x");
+        assert!(w.startup.is_some());
+        assert_eq!(w.execs.len(), 1);
+        assert_eq!(w.cleanup, mirage_schema::common::CleanupPolicy::Never);
+
+        // Non-existent workload returns None.
+        let reply = daemon
+            .get_workload(GetWorkloadRequest {
+                name: "nope".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(reply.workload.is_none());
+    }
+
+    #[tokio::test]
+    async fn workload_delete() {
+        let daemon = daemon_with_profile().await;
+
+        daemon
+            .create_workload(CreateWorkloadRequest {
+                workload: WorkloadDef {
+                    name: "deleteme".to_string(),
+                    profile: "mi300x".to_string(),
+                    image: "img:latest".to_string(),
+                    startup: None,
+                    execs: vec![sample_exec("run")],
+                    cleanup: mirage_schema::common::CleanupPolicy::Always,
+                },
+            })
+            .await
+            .unwrap();
+
+        let reply = daemon
+            .delete_workload(DeleteWorkloadRequest {
+                name: "deleteme".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(reply.ok);
+
+        // Should be gone.
+        let list = daemon
+            .list_workloads(ListWorkloadsRequest::default())
+            .await
+            .unwrap();
+        assert!(list.workloads.is_empty());
+    }
+
+    #[tokio::test]
+    async fn workload_delete_nonexistent_fails() {
+        let daemon = InMemoryMirageDaemon::new();
+
+        let reply = daemon
+            .delete_workload(DeleteWorkloadRequest {
+                name: "nope".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(!reply.ok);
+        assert!(reply.error.unwrap().contains("does not exist"));
     }
 }
 
