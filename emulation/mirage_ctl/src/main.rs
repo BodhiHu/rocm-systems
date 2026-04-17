@@ -1,3 +1,6 @@
+// mod format;
+// pub(crate) mod traits;
+
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
@@ -237,7 +240,6 @@ async fn main() -> ExitCode {
         }
     }
 }
-include!("health.rs");
 async fn run_command(daemon: &dyn MirageDaemon, command: Command) -> CliResult {
     match command {
         Command::Overview { json } => {

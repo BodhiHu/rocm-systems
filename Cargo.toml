@@ -8,10 +8,12 @@ serde_json = { version = "1" }
 serde_bare = { version = "0.5" }
 async-trait = { version = "0.1.89" }
 paste = { version = "1" }
+thiserror = { version = "2" }
 libc = { version = "0.2" }
 bytes = { version = "1" }
 clap = { version = "4.0", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "io-util", "sync", "fs"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 amdgpu_protocol = { path = "emulation/amdgpu_protocol" }
 mirage_schema = { path = "emulation/mirage_schema" }

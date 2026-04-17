@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 clap = { workspace = true }
+comfy-table = "7.2.2"
 mirage_schema = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
