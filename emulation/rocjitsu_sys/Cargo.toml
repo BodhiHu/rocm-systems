@@ -2,5 +2,17 @@
 name = "rocjitsu_sys"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
+links = "rocjitsu_kmd"
+description = "Raw FFI bindings to the rocjitsu C API, generated at build time with bindgen."
+
+[lib]
+doctest = false
 
 [dependencies]
+libc = { workspace = true }
+
+[build-dependencies]
+bindgen = "0.71"
+cc = "1"
+cmake = "0.1"
