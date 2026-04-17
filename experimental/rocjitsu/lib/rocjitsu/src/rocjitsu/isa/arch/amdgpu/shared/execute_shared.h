@@ -8161,7 +8161,7 @@ inline void execute_v_div_fmas_f32_vop3([[maybe_unused]] Inst &inst,
       s2 = -s2;
     float result = std::fma(s0, s1, s2);
     if (vcc & (1ULL << lane)) {
-      result = std::ldexp(result, 128);
+      result = std::ldexp(result, 32);
     }
     inst.vdst.write_lane(wf, lane, std::bit_cast<uint32_t>(result));
   }
@@ -8192,7 +8192,7 @@ inline void execute_v_div_fmas_f64_vop3([[maybe_unused]] Inst &inst,
       s2 = -s2;
     double result = std::fma(s0, s1, s2);
     if (vcc & (1ULL << lane)) {
-      result = std::ldexp(result, 1024);
+      result = std::ldexp(result, 64);
     }
     inst.vdst.write_lane64(wf, lane, std::bit_cast<uint64_t>(result));
   }

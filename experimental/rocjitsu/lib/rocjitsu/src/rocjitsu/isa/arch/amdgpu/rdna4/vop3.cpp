@@ -5137,7 +5137,7 @@ void VDivFmasF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
       s2 = -s2;
     float result = std::fma(s0, s1, s2);
     if (vcc & (1ULL << lane)) {
-      result = std::ldexp(result, 128);
+      result = std::ldexp(result, 32);
     }
     vdst.write_lane(wf, lane, std::bit_cast<uint32_t>(result));
   }
@@ -5181,7 +5181,7 @@ void VDivFmasF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
       s2 = -s2;
     double result = std::fma(s0, s1, s2);
     if (vcc & (1ULL << lane)) {
-      result = std::ldexp(result, 1024);
+      result = std::ldexp(result, 64);
     }
     vdst.write_lane64(wf, lane, std::bit_cast<uint64_t>(result));
   }

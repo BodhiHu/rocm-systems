@@ -1550,7 +1550,7 @@ class CodeGenerator:
                 L.extend(self._vop3_src_mod('s2', 2))
             L.append('    double result = std::fma(s0, s1, s2);')
             L.append('    if (vcc & (1ULL << lane)) {')
-            L.append('      result = std::ldexp(result, 1024);')
+            L.append('      result = std::ldexp(result, 64);')
             L.append('    }')
             L.append(f'    {dst[0]}.write_lane64(wf, lane, std::bit_cast<uint64_t>(result));')
         else:
@@ -1563,7 +1563,7 @@ class CodeGenerator:
                 L.extend(self._vop3_src_mod('s2', 2))
             L.append('    float result = std::fma(s0, s1, s2);')
             L.append('    if (vcc & (1ULL << lane)) {')
-            L.append('      result = std::ldexp(result, 128);')
+            L.append('      result = std::ldexp(result, 32);')
             L.append('    }')
             L.append(f'    {dst[0]}.write_lane(wf, lane, std::bit_cast<uint32_t>(result));')
         L.append('  }')
