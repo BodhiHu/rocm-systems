@@ -49,6 +49,7 @@ VCndmaskB32Vop2::VCndmaskB32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -108,6 +109,7 @@ VDot2cF32F16Vop2::VDot2cF32F16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -174,6 +176,7 @@ VAddF32Vop2::VAddF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -232,6 +235,7 @@ VSubF32Vop2::VSubF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -290,6 +294,7 @@ VSubrevF32Vop2::VSubrevF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -349,6 +354,7 @@ VMacLegacyF32Vop2::VMacLegacyF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -409,6 +415,7 @@ VMulLegacyF32Vop2::VMulLegacyF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -460,6 +467,7 @@ VMulF32Vop2::VMulF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -518,6 +526,7 @@ VMulI32I24Vop2::VMulI32I24Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -576,6 +585,7 @@ VMulHiI32I24Vop2::VMulHiI32I24Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -634,6 +644,7 @@ VMulU32U24Vop2::VMulU32U24Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -692,6 +703,7 @@ VMulHiU32U24Vop2::VMulHiU32U24Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -751,6 +763,7 @@ VDot4cI32I8Vop2::VDot4cI32I8Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -815,6 +828,7 @@ VMinF32Vop2::VMinF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -873,6 +887,7 @@ VMaxF32Vop2::VMaxF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -931,6 +946,7 @@ VMinI32Vop2::VMinI32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -989,6 +1005,7 @@ VMaxI32Vop2::VMaxI32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1047,6 +1064,7 @@ VMinU32Vop2::VMinU32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1105,6 +1123,7 @@ VMaxU32Vop2::VMaxU32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1163,6 +1182,7 @@ VLshrrevB32Vop2::VLshrrevB32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1221,6 +1241,7 @@ VAshrrevI32Vop2::VAshrrevI32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1279,6 +1300,7 @@ VLshlrevB32Vop2::VLshlrevB32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1337,6 +1359,7 @@ VAndB32Vop2::VAndB32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1394,6 +1417,7 @@ VOrB32Vop2::VOrB32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1452,6 +1476,7 @@ VXorB32Vop2::VXorB32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1510,6 +1535,7 @@ VXnorB32Vop2::VXnorB32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1569,6 +1595,7 @@ VMacF32Vop2::VMacF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1630,6 +1657,7 @@ VMadmkF32Vop2::VMadmkF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
   simm32_ = reinterpret_cast<const Vop2InstLiteralMachineInst *>(inst)->simm32;
 }
@@ -1691,6 +1719,7 @@ VMadakF32Vop2::VMadakF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
   simm32_ = reinterpret_cast<const Vop2InstLiteralMachineInst *>(inst)->simm32;
 }
@@ -1751,6 +1780,7 @@ VAddNcU32Vop2::VAddNcU32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1809,6 +1839,7 @@ VSubNcU32Vop2::VSubNcU32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1867,6 +1898,7 @@ VSubrevNcU32Vop2::VSubrevNcU32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1925,6 +1957,7 @@ VAddCoCiU32Vop2::VAddCoCiU32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -1992,6 +2025,7 @@ VSubCoCiU32Vop2::VSubCoCiU32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2060,6 +2094,7 @@ VSubrevCoCiU32Vop2::VSubrevCoCiU32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2129,6 +2164,7 @@ VFmacF32Vop2::VFmacF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2190,6 +2226,7 @@ VFmamkF32Vop2::VFmamkF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
   simm32_ = reinterpret_cast<const Vop2InstLiteralMachineInst *>(inst)->simm32;
 }
@@ -2243,6 +2280,7 @@ VFmaakF32Vop2::VFmaakF32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
   simm32_ = reinterpret_cast<const Vop2InstLiteralMachineInst *>(inst)->simm32;
 }
@@ -2295,6 +2333,7 @@ VCvtPkrtzF16F32Vop2::VCvtPkrtzF16F32Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2346,6 +2385,7 @@ VAddF16Vop2::VAddF16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2404,6 +2444,7 @@ VSubF16Vop2::VSubF16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2462,6 +2503,7 @@ VSubrevF16Vop2::VSubrevF16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2520,6 +2562,7 @@ VMulF16Vop2::VMulF16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2579,6 +2622,7 @@ VFmacF16Vop2::VFmacF16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2641,6 +2685,7 @@ VFmamkF16Vop2::VFmamkF16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
   simm32_ = reinterpret_cast<const Vop2InstLiteralMachineInst *>(inst)->simm32;
 }
@@ -2694,6 +2739,7 @@ VFmaakF16Vop2::VFmaakF16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
   simm32_ = reinterpret_cast<const Vop2InstLiteralMachineInst *>(inst)->simm32;
 }
@@ -2746,6 +2792,7 @@ VMaxF16Vop2::VMaxF16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2804,6 +2851,7 @@ VMinF16Vop2::VMinF16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2862,6 +2910,7 @@ VLdexpF16Vop2::VLdexpF16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 
@@ -2922,6 +2971,7 @@ VPkFmacF16Vop2::VPkFmacF16Vop2(const MachineInst *inst)
     sdwa_src0_sext_ = sw->src0_sext;
     sdwa_dst_sel_ = sw->dst_sel;
     sdwa_dst_unused_ = sw->dst_unused;
+    sdwa_clamp_ = sw->clamp;
   }
 }
 

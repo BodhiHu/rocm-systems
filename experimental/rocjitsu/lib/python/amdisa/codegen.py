@@ -575,6 +575,7 @@ class CodeGenerator:
                 class_members.append(cgen.Statement('bool sdwa_src0_sext_ = false'))
                 class_members.append(cgen.Statement('uint32_t sdwa_dst_sel_ = 6'))   # DWORD
                 class_members.append(cgen.Statement('uint32_t sdwa_dst_unused_ = 0'))
+                class_members.append(cgen.Statement('bool sdwa_clamp_ = false'))
             s = cgen.Struct(
                 f'{inst_enc.fmt_enc_name} : public IsaInstruction<Isa>',
                 [x for x in class_members],
@@ -4801,6 +4802,7 @@ class CodeGenerator:
                                         f' sdwa_src0_sext_ = sw->src0_sext;'
                                         f' sdwa_dst_sel_ = sw->dst_sel;'
                                         f' sdwa_dst_unused_ = sw->dst_unused;'
+                                        f' sdwa_clamp_ = sw->clamp;'
                                         f'}}'
                                     )
 

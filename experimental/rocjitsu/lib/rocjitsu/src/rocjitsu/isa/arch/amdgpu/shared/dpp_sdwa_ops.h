@@ -19,6 +19,8 @@
 #include "rocjitsu/vm/amdgpu/compute_unit.h"
 #include "rocjitsu/vm/amdgpu/wavefront.h"
 
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 
@@ -317,6 +319,17 @@ inline uint32_t sdwa_dst_merge(uint32_t result, uint32_t old_dst, uint32_t dst_s
   else
     fill = 0;
   return fill | merged;
+}
+
+/// @brief Apply SDWA clamp to an ALU result.
+///
+/// For floating-point operations, clamps the result to [0.0, 1.0].
+/// The caller determines whether the operation is float or integer
+/// based on the instruction's semantic type.
+inline uint32_t sdwa_clamp_f32(uint32_t result) {
+  float f = std::bit_cast<float>(result);
+  f = std::fmin(std::fmax(f, 0.0f), 1.0f);
+  return std::bit_cast<uint32_t>(f);
 }
 
 } // namespace sdwa
