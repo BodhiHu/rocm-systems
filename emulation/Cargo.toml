@@ -5,6 +5,7 @@ members = [".", "mirage_*", "rocjitsu_sys"]
 [workspace.dependencies]
 serde = { version = "1" }
 serde_json = { version = "1" }
+serde_bare = { version = "0.5" }
 async-trait = { version = "0.1.89" }
 paste = { version = "1" }
 libc = { version = "0.2" }
@@ -15,4 +16,6 @@ amdgpu_protocol = { path = "amdgpu_protocol" }
 mirage_schema = { path = "mirage_schema" }
 mirage_ctl = { path = "mirage_ctl" }
 mirage_daemon = { path = "mirage_daemon" }
+mirage_real = { path = "mirage_real" }
+mirage_remote = { path = "mirage_remote" }
 rocjitsu_sys = { path = "rocjitsu_sys" }

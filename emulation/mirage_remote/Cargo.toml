@@ -1,16 +1,12 @@
 [package]
-name = "mirage_interceptor"
+name = "mirage_remote"
 version = "0.1.0"
 edition = "2024"
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [dependencies]
 mirage_schema = { workspace = true }
-mirage_remote = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_bare = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
-mirage_real = { workspace = true }
-

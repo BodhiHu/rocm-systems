@@ -81,7 +81,6 @@ macro_rules! ioctl_dsl {
                 // --- dispatch enums ---
 
                 #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
-                #[serde(tag = "ioctl")]
                 pub enum [< Any $subsys:camel IoctlRequest >] {
                     $(
                         [< $name:camel >]([< $name:camel Request >]),
@@ -89,7 +88,6 @@ macro_rules! ioctl_dsl {
                 }
 
                 #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
-                #[serde(tag = "ioctl")]
                 pub enum [< Any $subsys:camel IoctlResponse >] {
                     $(
                         [< $name:camel >]([< $name:camel Response >]),
@@ -120,6 +118,36 @@ macro_rules! ioctl_dsl {
                             )*
                         }
                     }
+                }
+
+                // --- forwarding trait: implementers only need one method
+                // (`forward_*_ioctl`) and automatically gain a full
+                // `Handle{Subsys}Ioctl` impl. This is how `RemoteEmulator`
+                // ships every request down a single wire without having to
+                // hand-write per-ioctl methods.
+
+                pub trait [< Forward $subsys:camel Ioctl >] : Send + Sync {
+                    fn [< forward_ $subsys _ioctl >](
+                        &self,
+                        ctx: $crate::amdgpu::IoctlCtx,
+                        request: [< Any $subsys:camel IoctlRequest >],
+                    ) -> $crate::amdgpu_error::AmdgpuResult<[< Any $subsys:camel IoctlResponse >]>;
+                }
+
+                impl<T: [< Forward $subsys:camel Ioctl >]> [< Handle $subsys:camel Ioctl >] for T {
+                    $(
+                        fn [< $name:lower >](
+                            &self,
+                            ctx: $crate::amdgpu::IoctlCtx,
+                            request: [< $name:camel Request >],
+                        ) -> $crate::amdgpu_error::AmdgpuResult<[< $name:camel Response >]> {
+                            let req = [< Any $subsys:camel IoctlRequest >]::[< $name:camel >](request);
+                            match self.[< forward_ $subsys _ioctl >](ctx, req)? {
+                                [< Any $subsys:camel IoctlResponse >]::[< $name:camel >](r) => Ok(r),
+                                _ => Err($crate::amdgpu_error::AmdgpuError::Invalid),
+                            }
+                        }
+                    )*
                 }
             }
         )*

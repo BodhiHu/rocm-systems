@@ -202,7 +202,28 @@ dependencies = [
 name = "mirage_interceptor"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "mirage_real",
+ "mirage_remote",
  "mirage_schema",
+]
+
+[[package]]
+name = "mirage_real"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mirage_schema",
+]
+
+[[package]]
+name = "mirage_remote"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mirage_schema",
+ "serde",
+ "serde_bare",
 ]
 
 [[package]]
@@ -265,6 +286,15 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde_bare"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51c55386eed0f1ae957b091dc2ca8122f287b60c79c774cbe3d5f2b69fded660"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

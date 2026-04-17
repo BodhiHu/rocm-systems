@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::ioctl_dsl;
 
 /// Context passed to every ioctl handler.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IoctlCtx {
     pub pid: u32,
     pub tid: u32,
@@ -322,19 +322,12 @@ pub struct CsChunkCpGfxShadow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CsChunk {
     pub chunk_id: ChunkId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ib: Option<CsChunkIb>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fence: Option<CsChunkFence>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<CsChunkDep>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub syncobjs: Vec<CsChunkSyncobj>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bo_handles: Vec<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cp_gfx_shadow: Option<CsChunkCpGfxShadow>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub raw_data: Vec<u8>,
 }
 

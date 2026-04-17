@@ -1,0 +1,8 @@
+[package]
+name = "mirage_real"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mirage_schema = { workspace = true }
+libc = { workspace = true }

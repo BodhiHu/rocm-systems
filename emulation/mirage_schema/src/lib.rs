@@ -50,3 +50,4 @@ mod ioctl_macro;
 
 pub mod amdgpu;
 pub mod amdgpu_error;
+pub mod emulator;

@@ -1,0 +1,50 @@
+//! Wire protocol used to tunnel AMD KFD / DRM ioctl requests between the
+//! `mirage_interceptor` (or any other [`RemoteEmulator`] user) and a
+//! daemon hosting an [`Emulator`] implementation.
+//!
+//! Frames are length-prefixed with a big-endian [`u32`] and carry a
+//! [`serde_bare`]-encoded [`WireRequest`] / [`WireResponse`]. BARE is a
+//! compact, canonical, schema-driven binary format that is cheap to
+//! decode in the hot path of every ioctl.
+//!
+//! [`Emulator`]: mirage_schema::emulator::Emulator
+
+use serde::{Deserialize, Serialize};
+
+use mirage_schema::amdgpu::{
+    AnyDrmIoctlRequest, AnyDrmIoctlResponse, AnyKfdIoctlRequest, AnyKfdIoctlResponse, IoctlCtx,
+};
+use mirage_schema::amdgpu_error::AmdgpuError;
+
+/// Wire-level result so a remote error round-trips as data rather than
+/// causing a transport-level failure.
+pub type WireResult<T> = Result<T, AmdgpuError>;
+
+/// Request sent from the client to the daemon.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum WireRequest {
+    /// A KFD ioctl targeting `/dev/kfd`.
+    Kfd {
+        ctx: IoctlCtx,
+        request: AnyKfdIoctlRequest,
+    },
+    /// A DRM-AMDGPU ioctl targeting `/dev/dri/renderD*`.
+    Drm {
+        ctx: IoctlCtx,
+        request: AnyDrmIoctlRequest,
+    },
+    /// Simple liveness probe — server echoes a [`WireResponse::Pong`].
+    Ping,
+}
+
+/// Response returned by the daemon.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum WireResponse {
+    Kfd(WireResult<AnyKfdIoctlResponse>),
+    Drm(WireResult<AnyDrmIoctlResponse>),
+    Pong,
+}
+
+/// Maximum accepted frame payload in bytes. A KFD/DRM ioctl request is
+/// always comfortably smaller than this.
+pub const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
