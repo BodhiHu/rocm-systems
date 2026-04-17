@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::thread;
 
 use async_trait::async_trait;
 use tokio::sync::RwLock;
@@ -12,7 +14,7 @@ use mirage_schema::common::{
     ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SessionDef, SetEnv, SimulatorMode, Time,
 };
 use mirage_schema::config::DaemonDef;
-use mirage_schema::container::ContainerDef;
+use mirage_schema::container::{BindMount, ContainerDef};
 use mirage_schema::daemon::{
     MirageDaemonAttach, MirageDaemonBoot, MirageDaemonExec, MirageDaemonHealth,
     MirageDaemonOverview, MirageDaemonProfiles, MirageDaemonRegistration, MirageDaemonResult,
@@ -60,6 +62,10 @@ struct SessionRecord {
     session: SessionDef,
     detail: GetSessionDetailReply,
     container_handle: Option<ContainerHandle>,
+    /// Path to the emulator socket inside the container.
+    emulator_socket_container: Option<String>,
+    /// Path to the interceptor library inside the container.
+    interceptor_path_container: Option<String>,
 }
 
 /// Returns the set of simulators that are always available in the daemon.
@@ -503,7 +509,7 @@ impl MirageDaemonSessions for InMemoryMirageDaemon {
 
         state
             .sessions
-            .insert(session.name.clone(), SessionRecord { session, detail, container_handle: None });
+            .insert(session.name.clone(), SessionRecord { session, detail, container_handle: None, emulator_socket_container: None, interceptor_path_container: None });
 
         Ok(DashboardCreateSessionReply {
             ok: true,
@@ -599,21 +605,88 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
             });
         };
 
+        // --- Emulator + interceptor setup ---
+        // Locate the interceptor shared library next to the daemon binary.
+        let interceptor_so = find_interceptor_so();
+        let mut mounts = Vec::new();
+        let mut extra_env = vec![SetEnv {
+            key: "MIRAGE_SESSION".to_string(),
+            value: session.name.clone(),
+        }];
+        let devices = Vec::new();
+        let mut emu_socket_container: Option<String> = None;
+        let mut interceptor_container: Option<String> = None;
+
+        if let Some(ref so_path) = interceptor_so {
+            // Try to start a real-hardware-backed emulator server.
+            if mirage_real::RealEmulator::hardware_available() {
+                if let Ok(Some(real)) = mirage_real::RealEmulator::detect() {
+                    let socket_path = unique_emulator_socket(&session.name);
+                    let server = mirage_remote::EmulatorServer::new(
+                        socket_path.clone(),
+                        real,
+                    );
+                    let listener = match server.bind() {
+                        Ok(l) => l,
+                        Err(e) => {
+                            return Ok(BootSessionReply {
+                                ok: false,
+                                error: Some(format!("failed to bind emulator socket: {e}")),
+                                container_id: None,
+                            });
+                        }
+                    };
+                    // Spawn a background thread to serve emulator requests.
+                    thread::spawn(move || {
+                        let _ = server.serve_on(listener);
+                    });
+
+                    let container_so = "/opt/mirage/libmirage_interceptor.so".to_string();
+                    let container_sock = "/opt/mirage/emulator.sock".to_string();
+
+                    // Bind-mount the interceptor library.
+                    mounts.push(BindMount {
+                        host_path: so_path.to_string_lossy().to_string(),
+                        container_path: container_so.clone(),
+                        readonly: true,
+                    });
+                    // Bind-mount the emulator socket.
+                    mounts.push(BindMount {
+                        host_path: socket_path.to_string_lossy().to_string(),
+                        container_path: container_sock.clone(),
+                        readonly: false,
+                    });
+
+                    // Force GPU access through the interceptor — do NOT
+                    // pass real device nodes into the container.
+                    extra_env.push(SetEnv {
+                        key: "LD_PRELOAD".to_string(),
+                        value: container_so.clone(),
+                    });
+                    extra_env.push(SetEnv {
+                        key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
+                        value: container_sock.clone(),
+                    });
+
+                    emu_socket_container = Some(container_sock);
+                    interceptor_container = Some(container_so);
+                }
+            }
+        }
+
         // Build a ContainerDef that keeps the container alive for exec calls.
         let container_def = ContainerDef {
             image: session.image.clone(),
-            mounts: vec![],
+            mounts,
             injected_files: vec![],
             entrypoint: ExecArgs {
                 command: "sleep".to_string(),
                 args: vec!["infinity".to_string()],
-                env: vec![SetEnv {
-                    key: "MIRAGE_SESSION".to_string(),
-                    value: session.name.clone(),
-                }],
+                env: extra_env,
             },
             working_dir: None,
             ports: vec![],
+            devices,
             privileged: false,
             resource_limits_json: None,
         };
@@ -666,6 +739,8 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                 session,
                 detail,
                 container_handle: Some(handle),
+                emulator_socket_container: emu_socket_container,
+                interceptor_path_container: interceptor_container,
             },
         );
 
@@ -706,7 +781,23 @@ impl MirageDaemonExec for InMemoryMirageDaemon {
 
         let exec_request = ExecRequest {
             container: handle.clone(),
-            exec: request.exec,
+            exec: {
+                let mut exec = request.exec;
+                // Force GPU access through the interceptor.
+                if let Some(ref so_path) = record.interceptor_path_container {
+                    exec.env.push(SetEnv {
+                        key: "LD_PRELOAD".to_string(),
+                        value: so_path.clone(),
+                    });
+                }
+                if let Some(ref sock_path) = record.emulator_socket_container {
+                    exec.env.push(SetEnv {
+                        key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
+                        value: sock_path.clone(),
+                    });
+                }
+                exec
+            },
             working_dir: None,
         };
 
@@ -1096,4 +1187,31 @@ mod tests {
             .unwrap();
         assert!(sessions.sessions.is_empty());
     }
+}
+
+/// Find the interceptor shared library, trying the binary's directory and
+/// common build output paths.
+fn find_interceptor_so() -> Option<PathBuf> {
+    let candidates = [
+        // Next to the running binary.
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("libmirage_interceptor.so"))),
+        // Fallback: cargo target/debug.
+        Some(PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../target/debug/libmirage_interceptor.so"
+        ))),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|p| p.exists())
+}
+
+/// Return a unique socket path for an emulator instance.
+fn unique_emulator_socket(session_name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join("mirage");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(format!("emu-{session_name}.sock"))
 }

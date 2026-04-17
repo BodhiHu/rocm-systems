@@ -189,6 +189,10 @@ pub struct ContainerDef {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<PortMapping>,
 
+    /// Host device nodes to pass through (e.g. `/dev/kfd`, `/dev/dri/renderD128`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<String>,
+
     /// Whether the container needs `--privileged` or elevated caps.
     ///
     /// Simulators should avoid requiring this whenever possible.

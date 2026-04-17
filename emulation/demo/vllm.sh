@@ -130,10 +130,56 @@ report = {
     'rocm_build': torch.version.hip is not None,
     'hip_version': torch.version.hip,
     'cuda_available': torch.cuda.is_available(),
-    'gpu_emulated': 'MI300X',
+    'gpu_count': torch.cuda.device_count(),
+    'gpu_name': torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A',
+    'mirage_interceptor': __import__('os').path.exists('/opt/mirage/libmirage_interceptor.so'),
     'status': 'ready',
 }
 print(json.dumps(report, indent=2))
+"
+
+# -- Qwen benchmark ---------------------------------------------------------
+
+step "Exec: Qwen/Qwen2.5-0.5B inference benchmark"
+echo "(downloading model weights on first run)"
+ctl exec --name "$SESSION_NAME" -- \
+    python -c "
+from vllm import LLM, SamplingParams
+import time, json
+
+model = 'Qwen/Qwen2.5-0.5B'
+print(f'Loading {model}...')
+t0 = time.time()
+llm = LLM(model=model, tensor_parallel_size=1, gpu_memory_utilization=0.8)
+load_s = time.time() - t0
+print(f'Model loaded in {load_s:.1f}s')
+
+prompts = [
+    'What is the capital of France?',
+    'Explain quantum computing in simple terms.',
+    'Write a haiku about the ocean.',
+    'What are the benefits of exercise?',
+]
+params = SamplingParams(temperature=0.7, max_tokens=128)
+
+t0 = time.time()
+outputs = llm.generate(prompts, params)
+gen_s = time.time() - t0
+tok = sum(len(o.outputs[0].token_ids) for o in outputs)
+
+result = {
+    'model': model,
+    'prompts': len(prompts),
+    'total_output_tokens': tok,
+    'generation_time_s': round(gen_s, 2),
+    'throughput_tok_s': round(tok / gen_s, 1),
+}
+print(json.dumps(result, indent=2))
+
+for i, o in enumerate(outputs):
+    print(f'\n[Prompt {i+1}] {o.prompt}')
+    print(f'[Reply]  {o.outputs[0].text[:200]}')
+print('\nBenchmark passed.')
 "
 
 # -- shutdown ---------------------------------------------------------------

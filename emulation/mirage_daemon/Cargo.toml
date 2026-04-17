@@ -7,5 +7,7 @@ edition = "2024"
 async-trait = { workspace = true }
 clap = { workspace = true }
 mirage_container = { path = "../mirage_container" }
+mirage_real = { path = "../mirage_real" }
+mirage_remote = { path = "../mirage_remote" }
 mirage_schema = { workspace = true }
 tokio = { workspace = true }

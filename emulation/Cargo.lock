@@ -344,6 +344,8 @@ dependencies = [
  "async-trait",
  "clap",
  "mirage_container",
+ "mirage_real",
+ "mirage_remote",
  "mirage_schema",
  "tokio",
 ]

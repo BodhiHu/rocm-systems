@@ -391,6 +391,12 @@ where
         if request.container.privileged {
             args.push("--privileged".to_string());
         }
+
+        for device in &request.container.devices {
+            args.push("--device".to_string());
+            args.push(device.clone());
+        }
+
         if let Some(working_dir) = &request.container.working_dir {
             validate_container_path(working_dir)?;
             args.push("--workdir".to_string());
@@ -978,6 +984,7 @@ mod tests {
                     },
                 ],
                 privileged: true,
+                devices: vec![],
                 resource_limits_json: Some("{\"cpu\":\"4\",\"memory\":\"16Gi\"}".to_string()),
             },
         }

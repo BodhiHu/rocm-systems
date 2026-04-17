@@ -143,6 +143,7 @@ fn ioctl_get_version_dispatch_via_remote() {
         DeviceKind::Kfd,
         cmd,
         &mut args as *mut _ as *mut c_void,
+        -1,
     );
     assert_eq!(rc, 0, "dispatch should succeed (errno={})", unsafe {
         *libc::__errno_location()
@@ -163,6 +164,7 @@ fn unknown_ioctl_returns_enosys() {
         DeviceKind::Kfd,
         cmd,
         buf.as_mut_ptr() as *mut c_void,
+        -1,
     );
     assert_eq!(rc, -1);
     let errno = unsafe { *libc::__errno_location() };
@@ -180,6 +182,7 @@ fn wrong_subsystem_returns_enotty() {
         DeviceKind::Kfd,
         cmd,
         buf.as_mut_ptr() as *mut c_void,
+        -1,
     );
     assert_eq!(rc, -1);
     assert_eq!(unsafe { *libc::__errno_location() }, libc::ENOTTY);

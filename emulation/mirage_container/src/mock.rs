@@ -433,6 +433,7 @@ mod tests {
                     },
                 ],
                 privileged: false,
+                devices: vec![],
                 resource_limits_json: None,
             },
         }

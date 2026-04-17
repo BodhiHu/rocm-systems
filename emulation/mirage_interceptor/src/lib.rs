@@ -101,6 +101,9 @@ struct TrackedFd {
     cookie_fd: c_int,
     remote_fd: c_int,
     host_fd: c_int,
+    /// `true` when `host_fd` is a memfd placeholder (no real device present).
+    /// Passthrough ioctls and device-backed mmap must not use a synthetic fd.
+    synthetic_host: bool,
     kind: DeviceKind,
     path: PathBuf,
     fake_stat: FakeStat,
@@ -118,6 +121,7 @@ pub fn register_fd(fd: c_int, kind: DeviceKind) {
         cookie_fd: fd,
         remote_fd: -1,
         host_fd: -1,
+        synthetic_host: true,
         kind,
         path: PathBuf::from(kind.default_path()),
         fake_stat: FakeStat::default(),
@@ -335,7 +339,7 @@ fn event_type_from_raw(value: u32) -> Option<amdgpu::KfdEventType> {
     }
 }
 
-fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void) -> c_int {
+fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_int) -> c_int {
     let ctx = current_ctx();
     let nr = ioc::nr(cmd);
     let size = ioc::size(cmd) as usize;
@@ -610,11 +614,14 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void) -> c_int {
                 Err(err) => errno_to_rc(err.errno()),
             }
         }
-        _ => errno_to_rc(AmdgpuError::NoSys.errno()),
+        _ => {
+            debug_log(&format!("passthrough kfd ioctl nr=0x{nr:02x} size={size} -> host_fd={host_fd}"));
+            passthrough_ioctl(host_fd, cmd, arg)
+        }
     }
 }
 
-fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void) -> c_int {
+fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_int) -> c_int {
     let ctx = current_ctx();
     let nr = ioc::nr(cmd);
     let size = ioc::size(cmd) as usize;
@@ -742,8 +749,8 @@ fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void) -> c_int {
             }
         }
         _ => {
-            debug_log(&format!("unhandled drm ioctl nr=0x{nr:02x} size={size}"));
-            errno_to_rc(AmdgpuError::NoSys.errno())
+            debug_log(&format!("passthrough drm ioctl nr=0x{nr:02x} size={size} -> host_fd={host_fd}"));
+            passthrough_ioctl(host_fd, cmd, arg)
         }
     }
 }
@@ -761,6 +768,26 @@ fn errno_to_rc(errno: i32) -> c_int {
         *libc::__errno_location() = errno;
     }
     -1
+}
+
+/// Fall through to the real kernel ioctl on the host fd for unrecognized
+/// commands. This lets HIP and libdrm use ioctls that the interceptor
+/// doesn't explicitly handle.
+fn passthrough_ioctl(host_fd: c_int, cmd: u32, arg: *mut c_void) -> c_int {
+    if host_fd < 0 {
+        return errno_to_rc(libc::ENOSYS);
+    }
+    static REAL_IOCTL: OnceLock<usize> = OnceLock::new();
+    let p = *REAL_IOCTL.get_or_init(|| {
+        let s = c"ioctl";
+        unsafe { libc::dlsym(libc::RTLD_NEXT, s.as_ptr()) as usize }
+    });
+    if p == 0 {
+        return errno_to_rc(libc::ENOSYS);
+    }
+    let real: fn(c_int, libc::c_ulong, *mut c_void) -> c_int =
+        unsafe { std::mem::transmute(p) };
+    real(host_fd, cmd as libc::c_ulong, arg)
 }
 
 fn debug_enabled() -> bool {
@@ -785,11 +812,12 @@ pub fn dispatch_ioctl_with(
     kind: DeviceKind,
     cmd: u32,
     arg: *mut c_void,
+    host_fd: c_int,
 ) -> c_int {
     let ty = ioc::ty(cmd);
     match kind {
-        DeviceKind::Kfd if ty == KFD_MAGIC => dispatch_kfd(remote, cmd, arg),
-        DeviceKind::DrmRender if ty == DRM_MAGIC => dispatch_drm(remote, cmd, arg),
+        DeviceKind::Kfd if ty == KFD_MAGIC => dispatch_kfd(remote, cmd, arg, host_fd),
+        DeviceKind::DrmRender if ty == DRM_MAGIC => dispatch_drm(remote, cmd, arg, host_fd),
         _ => errno_to_rc(libc::ENOTTY),
     }
 }
@@ -797,10 +825,15 @@ pub fn dispatch_ioctl_with(
 /// Dispatch a tracked ioctl using the global [`RemoteEmulator`]
 /// configured through `MIRAGE_INTERCEPTOR_SOCKET`. Returns `ENOSYS` when
 /// the env var is unset.
-pub fn dispatch_tracked_ioctl(kind: DeviceKind, cmd: u32, arg: *mut c_void) -> c_int {
+pub fn dispatch_tracked_ioctl(kind: DeviceKind, fd: c_int, cmd: u32, arg: *mut c_void) -> c_int {
     let Some(remote) = remote() else {
         return errno_to_rc(AmdgpuError::NoSys.errno());
     };
+    // Only pass a real host_fd for passthrough; synthetic memfds must not
+    // be used for real kernel ioctls.
+    let host_fd = lookup_entry(fd)
+        .filter(|e| !e.synthetic_host)
+        .map_or(-1, |e| e.host_fd);
     debug_log(&format!(
         "dispatch kind={:?} ty=0x{:02x} nr=0x{:02x} size={}",
         kind,
@@ -808,7 +841,7 @@ pub fn dispatch_tracked_ioctl(kind: DeviceKind, cmd: u32, arg: *mut c_void) -> c
         ioc::nr(cmd),
         ioc::size(cmd)
     ));
-    dispatch_ioctl_with(remote, kind, cmd, arg)
+    dispatch_ioctl_with(remote, kind, cmd, arg, host_fd)
 }
 
 // ---------------------------------------------------------------------------
@@ -857,20 +890,34 @@ fn create_cookie_fd() -> c_int {
     fd
 }
 
-fn open_host_path(path: *const c_char, flags: c_int, mode: libc::mode_t) -> c_int {
-    let Some(real) = next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
-    else {
-        return errno_to_rc(libc::ENOSYS);
-    };
-    unsafe { real(path, flags, mode) }
+/// Attempt to open the real device node.  Returns `(fd, synthetic)` where
+/// `synthetic == true` means the real device was absent so a memfd
+/// placeholder was created instead.
+fn open_host_path_or_memfd(path: *const c_char, flags: c_int, mode: libc::mode_t) -> (c_int, bool) {
+    if let Some(real) = next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int) {
+        let fd = unsafe { real(path, flags, mode) };
+        if fd >= 0 {
+            return (fd, false);
+        }
+    }
+    // Real device not available — create a memfd placeholder so that the
+    // rest of the interceptor pipeline (cookie fd, remote emulator) still
+    // works.  mmap on this fd will use MAP_ANONYMOUS instead.
+    let name = CString::new("mirage-hostfd").unwrap();
+    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC as u32) };
+    (fd, true)
 }
 
-fn openat_host_path(dirfd: c_int, path: *const c_char, flags: c_int, mode: libc::mode_t) -> c_int {
-    let Some(real) = next_fn!(openat : fn(d: c_int, p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
-    else {
-        return errno_to_rc(libc::ENOSYS);
-    };
-    unsafe { real(dirfd, path, flags, mode) }
+fn openat_host_path_or_memfd(dirfd: c_int, path: *const c_char, flags: c_int, mode: libc::mode_t) -> (c_int, bool) {
+    if let Some(real) = next_fn!(openat : fn(d: c_int, p: *const c_char, f: c_int, m: libc::mode_t) -> c_int) {
+        let fd = unsafe { real(dirfd, path, flags, mode) };
+        if fd >= 0 {
+            return (fd, false);
+        }
+    }
+    let name = CString::new("mirage-hostfd").unwrap();
+    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC as u32) };
+    (fd, true)
 }
 
 fn tracked_path_request(_kind: DeviceKind, path: &Path) -> String {
@@ -930,7 +977,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
         && let Some(remote) = remote()
     {
         debug_log(&format!("open path={} kind={kind:?}", p.display()));
-        let host_fd = open_host_path(path, flags, mode);
+        let (host_fd, synthetic_host) = open_host_path_or_memfd(path, flags, mode);
         if host_fd < 0 {
             return host_fd;
         }
@@ -977,6 +1024,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
             cookie_fd: fd,
             remote_fd,
             host_fd,
+            synthetic_host,
             kind,
             path: p,
             fake_stat,
@@ -1004,7 +1052,7 @@ pub unsafe extern "C" fn openat(
         && let Some(remote) = remote()
     {
         debug_log(&format!("openat path={} kind={kind:?}", p.display()));
-        let host_fd = openat_host_path(dirfd, path, flags, mode);
+        let (host_fd, synthetic_host) = openat_host_path_or_memfd(dirfd, path, flags, mode);
         if host_fd < 0 {
             return host_fd;
         }
@@ -1051,6 +1099,7 @@ pub unsafe extern "C" fn openat(
             cookie_fd: fd,
             remote_fd,
             host_fd,
+            synthetic_host,
             kind,
             path: p,
             fake_stat,
@@ -1135,7 +1184,7 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ioctl(fd: c_int, cmd: libc::c_ulong, arg: *mut c_void) -> c_int {
     if let Some(kind) = lookup_fd(fd) {
-        return dispatch_tracked_ioctl(kind, cmd as u32, arg);
+        return dispatch_tracked_ioctl(kind, fd, cmd as u32, arg);
     }
     let Some(real) = next_fn!(ioctl : fn(f: c_int, c: libc::c_ulong, a: *mut c_void) -> c_int)
     else {
@@ -1148,7 +1197,7 @@ pub unsafe extern "C" fn ioctl(fd: c_int, cmd: libc::c_ulong, arg: *mut c_void) 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn drmIoctl(fd: c_int, request: c_ulong, arg: *mut c_void) -> c_int {
     if let Some(kind) = lookup_fd(fd) {
-        return dispatch_tracked_ioctl(kind, request as u32, arg);
+        return dispatch_tracked_ioctl(kind, fd, request as u32, arg);
     }
     let Some(real) = next_fn!(drmIoctl : fn(f: c_int, r: c_ulong, a: *mut c_void) -> c_int)
     else {
@@ -1170,7 +1219,7 @@ pub unsafe extern "C" fn drmCommandWriteRead(
             uapi_ioc::DRM_COMMAND_BASE + drm_command_index as u32,
             size as u32,
         );
-        return dispatch_tracked_ioctl(DeviceKind::DrmRender, cmd, data);
+        return dispatch_tracked_ioctl(DeviceKind::DrmRender, fd, cmd, data);
     }
     let Some(real) = next_fn!(drmCommandWriteRead : fn(f: c_int, i: c_ulong, d: *mut c_void, s: c_ulong) -> c_int)
     else {
@@ -1199,7 +1248,7 @@ pub unsafe extern "C" fn drmCommandWrite(
             uapi_ioc::DRM_COMMAND_BASE + drm_command_index as u32,
             size as u32,
         );
-        return dispatch_tracked_ioctl(DeviceKind::DrmRender, cmd, data);
+        return dispatch_tracked_ioctl(DeviceKind::DrmRender, fd, cmd, data);
     }
     let Some(real) = next_fn!(drmCommandWrite : fn(f: c_int, i: c_ulong, d: *mut c_void, s: c_ulong) -> c_int)
     else {
@@ -1369,15 +1418,29 @@ pub unsafe extern "C" fn mmap(
 ) -> *mut c_void {
     if let Some(entry) = lookup_entry(fd) {
         debug_log(&format!(
-            "mmap fd={} remote_fd={} host_fd={} len={} prot=0x{:x} flags=0x{:x} off={}",
-            fd, entry.remote_fd, entry.host_fd, length, prot, flags, offset
+            "mmap fd={} remote_fd={} host_fd={} synthetic={} len={} prot=0x{:x} flags=0x{:x} off={}",
+            fd, entry.remote_fd, entry.host_fd, entry.synthetic_host, length, prot, flags, offset
         ));
-        if entry.host_fd >= 0 {
-            let Some(real) = next_fn!(mmap : fn(a: *mut c_void, l: size_t, p: c_int, f: c_int, d: c_int, o: libc::off_t) -> *mut c_void)
-            else {
-                errno_to_rc(libc::ENOSYS);
-                return libc::MAP_FAILED;
+        let Some(real) = next_fn!(mmap : fn(a: *mut c_void, l: size_t, p: c_int, f: c_int, d: c_int, o: libc::off_t) -> *mut c_void)
+        else {
+            errno_to_rc(libc::ENOSYS);
+            return libc::MAP_FAILED;
+        };
+        if entry.synthetic_host {
+            // No real GPU — allocate anonymous memory so the application
+            // gets a valid mapping even without hardware.
+            return unsafe {
+                real(
+                    addr,
+                    length,
+                    prot,
+                    flags | libc::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                )
             };
+        }
+        if entry.host_fd >= 0 {
             return unsafe { real(addr, length, prot, flags, entry.host_fd, offset) };
         }
     }
