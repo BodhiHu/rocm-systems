@@ -26,15 +26,18 @@
 
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, c_char, c_int, c_ulong, c_void};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use libc::{O_CLOEXEC, size_t};
 
 use mirage_remote::RemoteEmulator;
-use mirage_schema::amdgpu::{AmdkfdIocGetVersionRequest, HandleKfdIoctl, IoctlCtx};
+use mirage_schema::amdgpu::{self, HandleDrmIoctl, HandleKfdIoctl, IoctlCtx};
 use mirage_schema::amdgpu_error::AmdgpuError;
+use mirage_schema::syscalls::{self, DeviceClass, FakeStat, HandleFsSyscalls};
+use mirage_uapi::{drm, kfd};
 
 /// Path to the KFD char device.
 pub const KFD_PATH: &str = "/dev/kfd";
@@ -77,34 +80,75 @@ impl DeviceKind {
         }
         None
     }
+
+    fn device_class(self) -> DeviceClass {
+        match self {
+            Self::Kfd => DeviceClass::Kfd,
+            Self::DrmRender => DeviceClass::DrmRender,
+        }
+    }
+
+    fn default_path(self) -> &'static str {
+        match self {
+            Self::Kfd => KFD_PATH,
+            Self::DrmRender => "/dev/dri/renderD128",
+        }
+    }
 }
 
-static FD_REGISTRY: OnceLock<Mutex<Vec<(c_int, DeviceKind)>>> = OnceLock::new();
+#[derive(Debug, Clone)]
+struct TrackedFd {
+    cookie_fd: c_int,
+    remote_fd: c_int,
+    kind: DeviceKind,
+    path: PathBuf,
+    fake_stat: FakeStat,
+}
 
-fn registry() -> &'static Mutex<Vec<(c_int, DeviceKind)>> {
+static FD_REGISTRY: OnceLock<Mutex<Vec<TrackedFd>>> = OnceLock::new();
+
+fn registry() -> &'static Mutex<Vec<TrackedFd>> {
     FD_REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 /// Public helper used by tests and out-of-process callers.
 pub fn register_fd(fd: c_int, kind: DeviceKind) {
-    let mut g = registry().lock().unwrap();
-    g.retain(|(f, _)| *f != fd);
-    g.push((fd, kind));
+    register_entry(TrackedFd {
+        cookie_fd: fd,
+        remote_fd: -1,
+        kind,
+        path: PathBuf::from(kind.default_path()),
+        fake_stat: FakeStat::default(),
+    });
 }
 
 /// Public helper: look up the device class for a tracked fd.
 pub fn lookup_fd(fd: c_int) -> Option<DeviceKind> {
-    registry()
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|(f, _)| *f == fd)
-        .map(|(_, k)| *k)
+    lookup_entry(fd).map(|entry| entry.kind)
 }
 
 /// Public helper: drop a tracked fd.
 pub fn forget_fd(fd: c_int) {
-    registry().lock().unwrap().retain(|(f, _)| *f != fd);
+    registry().lock().unwrap().retain(|entry| entry.cookie_fd != fd);
+}
+
+fn register_entry(entry: TrackedFd) {
+    let mut g = registry().lock().unwrap();
+    g.retain(|tracked| tracked.cookie_fd != entry.cookie_fd);
+    g.push(entry);
+}
+
+fn lookup_entry(fd: c_int) -> Option<TrackedFd> {
+    registry()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|entry| entry.cookie_fd == fd)
+        .cloned()
+}
+
+fn translate_remote_fd(fd: c_int) -> Option<c_int> {
+    lookup_entry(fd).and_then(|entry| (entry.remote_fd >= 0).then_some(entry.remote_fd))
 }
 
 // ---------------------------------------------------------------------------
@@ -137,63 +181,534 @@ const KFD_MAGIC: u32 = b'K' as u32;
 const DRM_MAGIC: u32 = b'd' as u32;
 
 // ---------------------------------------------------------------------------
-// Dispatch macros
-//
-// The macro invocation below is the single place where a new
-// KFD ioctl gets a real round-trip. Everything else returns ENOSYS.
-
-/// `kfd_dispatch!` expands to a `fn dispatch_kfd(...) -> i32`.
-///
-/// Each row names a KFD ioctl constant, the C arg layout (`$CArgs`),
-/// and two closures: one to build the Rust request from the C args
-/// pointer, one to write the Rust response back.
-macro_rules! kfd_dispatch {
-    ($(
-        $name:ident => $c_ty:ty, $variant:ident,
-            req = $req_expr:expr,
-            write = $write_expr:expr ;
-    )*) => {
-        fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void) -> c_int {
-            let ctx = current_ctx();
-            let nr = ioc::nr(cmd);
-            let size = ioc::size(cmd) as usize;
-            $(
-                if nr == (mirage_schema::amdgpu::$name & 0xff) {
-                    // SAFETY: kernel ABI guarantees the buffer at `arg`
-                    // is at least the declared size for this nr.
-                    if size < core::mem::size_of::<$c_ty>() { return errno_to_rc(libc::EINVAL); }
-                    let c_args: &mut $c_ty = unsafe { &mut *(arg as *mut $c_ty) };
-                    let req = $req_expr(c_args);
-                    match remote.$variant(ctx, req) {
-                        Ok(resp) => { $write_expr(c_args, resp); 0 }
-                        Err(e) => errno_to_rc(e.errno()),
-                    }
-                } else
-            )*
-            { errno_to_rc(AmdgpuError::NoSys.errno()) }
-        }
-    };
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+struct DrmVersion {
+    version_major: i32,
+    version_minor: i32,
+    version_patchlevel: i32,
+    name_len: size_t,
+    name: *mut c_char,
+    date_len: size_t,
+    date: *mut c_char,
+    desc_len: size_t,
+    desc: *mut c_char,
 }
 
 #[repr(C)]
-struct KfdIocGetVersionArgs {
-    major: u32,
-    minor: u32,
+#[derive(Debug, Default, Copy, Clone)]
+struct DrmAuth {
+    magic: u32,
 }
 
-kfd_dispatch! {
-    AMDKFD_IOC_GET_VERSION => KfdIocGetVersionArgs, amdkfd_ioc_get_version,
-        req = |_a: &mut KfdIocGetVersionArgs| AmdkfdIocGetVersionRequest {},
-        write = |a: &mut KfdIocGetVersionArgs, r: mirage_schema::amdgpu::AmdkfdIocGetVersionResponse| {
-            a.major = r.major_version;
-            a.minor = r.minor_version;
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+struct DrmClient {
+    idx: i32,
+    auth: i32,
+    pid: c_ulong,
+    uid: c_ulong,
+    magic: c_ulong,
+    iocs: c_ulong,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+struct DrmGetCap {
+    capability: u64,
+    value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+struct DrmSetClientCap {
+    capability: u64,
+    value: u64,
+}
+
+const DRM_IOCTL_VERSION_NR: u32 = 0x00;
+const DRM_IOCTL_GET_MAGIC_NR: u32 = 0x02;
+const DRM_IOCTL_GET_CLIENT_NR: u32 = 0x05;
+const DRM_IOCTL_GET_CAP_NR: u32 = 0x0c;
+const DRM_IOCTL_SET_CLIENT_CAP_NR: u32 = 0x0d;
+const DRM_IOCTL_AUTH_MAGIC_NR: u32 = 0x11;
+
+fn check_size<T>(size: usize) -> Result<(), c_int> {
+    if size < core::mem::size_of::<T>() {
+        Err(errno_to_rc(libc::EINVAL))
+    } else {
+        Ok(())
+    }
+}
+
+unsafe fn copy_u8_slice(dst: *mut u8, capacity: usize, data: &[u8]) {
+    if capacity == 0 || dst.is_null() {
+        return;
+    }
+    let len = capacity.min(data.len());
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), dst, len) };
+}
+
+unsafe fn copy_c_string(dst: *mut c_char, capacity: usize, value: &[u8]) {
+    if capacity == 0 || dst.is_null() {
+        return;
+    }
+    let text_len = value.len().min(capacity.saturating_sub(1));
+    unsafe { std::ptr::copy_nonoverlapping(value.as_ptr(), dst.cast::<u8>(), text_len) };
+    unsafe { *dst.add(text_len) = 0 };
+}
+
+unsafe fn copy_apertures_to_user(ptr: u64, apertures: &[amdgpu::KfdProcessDeviceAperture]) -> Result<(), c_int> {
+    if apertures.is_empty() {
+        return Ok(());
+    }
+    if ptr == 0 {
+        return Err(errno_to_rc(libc::EFAULT));
+    }
+    let dst = unsafe {
+        std::slice::from_raw_parts_mut(
+            ptr as usize as *mut kfd::kfd_process_device_apertures,
+            apertures.len(),
+        )
+    };
+    for (raw, aperture) in dst.iter_mut().zip(apertures.iter()) {
+        *raw = kfd::kfd_process_device_apertures {
+            lds_base: aperture.lds_base,
+            lds_limit: aperture.lds_limit,
+            scratch_base: aperture.scratch_base,
+            scratch_limit: aperture.scratch_limit,
+            gpuvm_base: aperture.gpuvm_base,
+            gpuvm_limit: aperture.gpuvm_limit,
+            gpu_id: aperture.gpu_id,
+            pad: 0,
         };
+    }
+    Ok(())
 }
 
-fn dispatch_drm(_remote: &RemoteEmulator, _cmd: u32, _arg: *mut c_void) -> c_int {
-    // DRM ioctl marshalling to be added per variant — same macro shape
-    // as `kfd_dispatch!`, against `libdrm_amdgpu` UAPI structs.
-    errno_to_rc(AmdgpuError::NoSys.errno())
+unsafe fn read_u32s_from_user(ptr: u64, count: usize) -> Result<Vec<u32>, c_int> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if ptr == 0 {
+        return Err(errno_to_rc(libc::EFAULT));
+    }
+    Ok(unsafe {
+        std::slice::from_raw_parts(ptr as usize as *const u32, count).to_vec()
+    })
+}
+
+fn cache_policy_from_raw(value: u32) -> Option<amdgpu::KfdCachePolicy> {
+    match value {
+        0 => Some(amdgpu::KfdCachePolicy::Coherent),
+        1 => Some(amdgpu::KfdCachePolicy::Noncoherent),
+        _ => None,
+    }
+}
+
+fn event_type_from_raw(value: u32) -> Option<amdgpu::KfdEventType> {
+    match value {
+        0 => Some(amdgpu::KfdEventType::Signal),
+        1 => Some(amdgpu::KfdEventType::NodeChange),
+        2 => Some(amdgpu::KfdEventType::DeviceStateChange),
+        3 => Some(amdgpu::KfdEventType::HwException),
+        4 => Some(amdgpu::KfdEventType::SystemEvent),
+        5 => Some(amdgpu::KfdEventType::DebugEvent),
+        6 => Some(amdgpu::KfdEventType::ProfileEvent),
+        7 => Some(amdgpu::KfdEventType::QueueEvent),
+        8 => Some(amdgpu::KfdEventType::Memory),
+        _ => None,
+    }
+}
+
+fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void) -> c_int {
+    let ctx = current_ctx();
+    let nr = ioc::nr(cmd);
+    let size = ioc::size(cmd) as usize;
+
+    match nr {
+        x if x == (amdgpu::AMDKFD_IOC_GET_VERSION & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_get_version_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_get_version_args) };
+            match remote.amdkfd_ioc_get_version(ctx, amdgpu::AmdkfdIocGetVersionRequest {}) {
+                Ok(resp) => {
+                    args.major_version = resp.major_version;
+                    args.minor_version = resp.minor_version;
+                    0
+                }
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_SET_MEMORY_POLICY & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_set_memory_policy_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_set_memory_policy_args) };
+            let Some(default_policy) = cache_policy_from_raw(args.default_policy) else {
+                return errno_to_rc(libc::EINVAL);
+            };
+            let Some(alternate_policy) = cache_policy_from_raw(args.alternate_policy) else {
+                return errno_to_rc(libc::EINVAL);
+            };
+            match remote.amdkfd_ioc_set_memory_policy(
+                ctx,
+                amdgpu::AmdkfdIocSetMemoryPolicyRequest {
+                    alternate_aperture_base: args.alternate_aperture_base,
+                    alternate_aperture_size: args.alternate_aperture_size,
+                    gpu_id: args.gpu_id,
+                    default_policy,
+                    alternate_policy,
+                    misc_process_flag: args.misc_process_flag,
+                },
+            ) {
+                Ok(_) => 0,
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_GET_CLOCK_COUNTERS & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_get_clock_counters_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_get_clock_counters_args) };
+            match remote.amdkfd_ioc_get_clock_counters(
+                ctx,
+                amdgpu::AmdkfdIocGetClockCountersRequest { gpu_id: args.gpu_id },
+            ) {
+                Ok(resp) => {
+                    args.gpu_clock_counter = resp.gpu_clock_counter;
+                    args.cpu_clock_counter = resp.cpu_clock_counter;
+                    args.system_clock_counter = resp.system_clock_counter;
+                    args.system_clock_freq = resp.system_clock_freq;
+                    0
+                }
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_CREATE_EVENT & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_create_event_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_create_event_args) };
+            let Some(event_type) = event_type_from_raw(args.event_type) else {
+                return errno_to_rc(libc::EINVAL);
+            };
+            match remote.amdkfd_ioc_create_event(
+                ctx,
+                amdgpu::AmdkfdIocCreateEventRequest {
+                    event_type,
+                    auto_reset: args.auto_reset,
+                    node_id: args.node_id,
+                },
+            ) {
+                Ok(resp) => {
+                    args.event_page_offset = resp.event_page_offset;
+                    args.event_trigger_data = resp.event_trigger_data;
+                    args.event_id = resp.event_id;
+                    args.event_slot_index = resp.event_slot_index;
+                    0
+                }
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_DESTROY_EVENT & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_destroy_event_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_destroy_event_args) };
+            match remote.amdkfd_ioc_destroy_event(
+                ctx,
+                amdgpu::AmdkfdIocDestroyEventRequest { event_id: args.event_id },
+            ) {
+                Ok(_) => 0,
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_SET_EVENT & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_set_event_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_set_event_args) };
+            match remote.amdkfd_ioc_set_event(
+                ctx,
+                amdgpu::AmdkfdIocSetEventRequest { event_id: args.event_id },
+            ) {
+                Ok(_) => 0,
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_GET_PROCESS_APERTURES_NEW & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_get_process_apertures_new_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_get_process_apertures_new_args) };
+            match remote.amdkfd_ioc_get_process_apertures_new(
+                ctx,
+                amdgpu::AmdkfdIocGetProcessAperturesNewRequest {
+                    max_nodes: args.num_of_nodes,
+                },
+            ) {
+                Ok(resp) => {
+                    if unsafe { copy_apertures_to_user(args.kfd_process_device_apertures_ptr, &resp.apertures) }
+                        .is_err()
+                    {
+                        return errno_to_rc(libc::EFAULT);
+                    }
+                    args.num_of_nodes = resp.apertures.len() as u32;
+                    0
+                }
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_ACQUIRE_VM & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_acquire_vm_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_acquire_vm_args) };
+            let drm_fd = translate_remote_fd(args.drm_fd as c_int).unwrap_or(args.drm_fd as c_int);
+            match remote.amdkfd_ioc_acquire_vm(
+                ctx,
+                amdgpu::AmdkfdIocAcquireVmRequest {
+                    drm_fd: drm_fd as u32,
+                    gpu_id: args.gpu_id,
+                },
+            ) {
+                Ok(_) => 0,
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_ALLOC_MEMORY_OF_GPU & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_alloc_memory_of_gpu_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_alloc_memory_of_gpu_args) };
+            match remote.amdkfd_ioc_alloc_memory_of_gpu(
+                ctx,
+                amdgpu::AmdkfdIocAllocMemoryOfGpuRequest {
+                    va_addr: args.va_addr,
+                    size: args.size,
+                    gpu_id: args.gpu_id,
+                    flags: args.flags,
+                    mmap_offset: args.mmap_offset,
+                },
+            ) {
+                Ok(resp) => {
+                    args.handle = resp.handle;
+                    args.mmap_offset = resp.mmap_offset;
+                    args.va_addr = resp.va_addr;
+                    0
+                }
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_FREE_MEMORY_OF_GPU & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_free_memory_of_gpu_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_free_memory_of_gpu_args) };
+            match remote.amdkfd_ioc_free_memory_of_gpu(
+                ctx,
+                amdgpu::AmdkfdIocFreeMemoryOfGpuRequest { handle: args.handle },
+            ) {
+                Ok(_) => 0,
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_MAP_MEMORY_TO_GPU & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_map_memory_to_gpu_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_map_memory_to_gpu_args) };
+            let Ok(device_ids) = (unsafe {
+                read_u32s_from_user(args.device_ids_array_ptr, args.n_devices as usize)
+            }) else {
+                return errno_to_rc(libc::EFAULT);
+            };
+            match remote.amdkfd_ioc_map_memory_to_gpu(
+                ctx,
+                amdgpu::AmdkfdIocMapMemoryToGpuRequest {
+                    handle: args.handle,
+                    device_ids,
+                },
+            ) {
+                Ok(resp) => {
+                    args.n_success = resp.n_success;
+                    0
+                }
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_unmap_memory_from_gpu_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_unmap_memory_from_gpu_args) };
+            let Ok(device_ids) = (unsafe {
+                read_u32s_from_user(args.device_ids_array_ptr, args.n_devices as usize)
+            }) else {
+                return errno_to_rc(libc::EFAULT);
+            };
+            match remote.amdkfd_ioc_unmap_memory_from_gpu(
+                ctx,
+                amdgpu::AmdkfdIocUnmapMemoryFromGpuRequest {
+                    handle: args.handle,
+                    device_ids,
+                },
+            ) {
+                Ok(resp) => {
+                    args.n_success = resp.n_success;
+                    0
+                }
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_SET_XNACK_MODE & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_set_xnack_mode_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_set_xnack_mode_args) };
+            match remote.amdkfd_ioc_set_xnack_mode(
+                ctx,
+                amdgpu::AmdkfdIocSetXnackModeRequest {
+                    xnack_enabled: args.xnack_enabled,
+                },
+            ) {
+                Ok(resp) => {
+                    args.xnack_enabled = resp.xnack_enabled;
+                    0
+                }
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        x if x == (amdgpu::AMDKFD_IOC_RUNTIME_ENABLE & 0xff) => {
+            if check_size::<kfd::kfd_ioctl_runtime_enable_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_runtime_enable_args) };
+            match remote.amdkfd_ioc_runtime_enable(
+                ctx,
+                amdgpu::AmdkfdIocRuntimeEnableRequest {
+                    flags: (args.mode_mask as u64) | ((args.capabilities_mask as u64) << 32),
+                },
+            ) {
+                Ok(_) => 0,
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        _ => errno_to_rc(AmdgpuError::NoSys.errno()),
+    }
+}
+
+fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void) -> c_int {
+    let ctx = current_ctx();
+    let nr = ioc::nr(cmd);
+    let size = ioc::size(cmd) as usize;
+
+    match nr {
+        DRM_IOCTL_VERSION_NR => {
+            if check_size::<DrmVersion>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut DrmVersion) };
+            let name = b"amdgpu";
+            let date = b"mirage";
+            let desc = b"mirage-amdgpu";
+            args.version_major = 3;
+            args.version_minor = 0;
+            args.version_patchlevel = 0;
+            let name_len = name.len();
+            let date_len = date.len();
+            let desc_len = desc.len();
+            unsafe {
+                copy_c_string(args.name, args.name_len, name);
+                copy_c_string(args.date, args.date_len, date);
+                copy_c_string(args.desc, args.desc_len, desc);
+            }
+            args.name_len = name_len;
+            args.date_len = date_len;
+            args.desc_len = desc_len;
+            0
+        }
+        DRM_IOCTL_GET_MAGIC_NR => {
+            if check_size::<DrmAuth>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut DrmAuth) };
+            args.magic = 1;
+            0
+        }
+        DRM_IOCTL_GET_CLIENT_NR => {
+            if check_size::<DrmClient>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut DrmClient) };
+            if args.idx != 0 {
+                return errno_to_rc(libc::ENOENT);
+            }
+            args.auth = 1;
+            args.pid = unsafe { libc::getpid() as c_ulong };
+            args.uid = unsafe { libc::geteuid() as c_ulong };
+            args.magic = 1;
+            args.iocs = 0;
+            0
+        }
+        DRM_IOCTL_GET_CAP_NR => {
+            if check_size::<DrmGetCap>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut DrmGetCap) };
+            args.value = 0;
+            0
+        }
+        DRM_IOCTL_SET_CLIENT_CAP_NR => {
+            if check_size::<DrmSetClientCap>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            0
+        }
+        DRM_IOCTL_AUTH_MAGIC_NR => {
+            if check_size::<DrmAuth>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            0
+        }
+        x if x == (amdgpu::DRM_AMDGPU_INFO & 0xff) => {
+            if check_size::<drm::drm_amdgpu_info>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut drm::drm_amdgpu_info) };
+            let (sub_query, sub_query2, sub_query3, flags) = unsafe {
+                let words = (&mut args.__bindgen_anon_1 as *mut drm::drm_amdgpu_info__bindgen_ty_1)
+                    .cast::<u32>();
+                (*words.add(0), *words.add(1), *words.add(2), *words.add(3))
+            };
+            match remote.drm_amdgpu_info(
+                ctx,
+                amdgpu::DrmAmdgpuInfoRequest {
+                    query: args.query,
+                    return_size: args.return_size,
+                    sub_query,
+                    sub_query2,
+                    sub_query3,
+                    flags,
+                },
+            ) {
+                Ok(resp) => {
+                    unsafe {
+                        copy_u8_slice(
+                            args.return_pointer as usize as *mut u8,
+                            args.return_size as usize,
+                            &resp.raw_data,
+                        );
+                    }
+                    0
+                }
+                Err(err) => errno_to_rc(err.errno()),
+            }
+        }
+        _ => errno_to_rc(AmdgpuError::NoSys.errno()),
+    }
 }
 
 fn current_ctx() -> IoctlCtx {
@@ -288,6 +803,40 @@ fn create_cookie_fd() -> c_int {
     fd
 }
 
+fn tracked_path_request(_kind: DeviceKind, path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn stat_request(remote: &RemoteEmulator, kind: DeviceKind, path: &Path) -> Result<FakeStat, c_int> {
+    remote
+        .syscall_stat_device(
+            current_ctx(),
+            syscalls::SyscallStatDeviceRequest {
+                class: kind.device_class(),
+                path: tracked_path_request(kind, path),
+            },
+        )
+        .map(|resp| resp.stat)
+        .map_err(|err| errno_to_rc(err.errno()))
+}
+
+unsafe fn fill_fake_stat(buf: *mut libc::stat, stat: FakeStat) {
+    unsafe { std::ptr::write_bytes(buf, 0, 1) };
+    unsafe {
+        (*buf).st_mode = stat.mode as libc::mode_t;
+        (*buf).st_nlink = stat.nlink as libc::nlink_t;
+        (*buf).st_rdev = stat.rdev as libc::dev_t;
+        (*buf).st_size = stat.size as libc::off_t;
+    }
+}
+
+fn tracked_fd_from_proc_path(path: &Path) -> Option<TrackedFd> {
+    let s = path.to_str()?;
+    let suffix = s.strip_prefix("/proc/self/fd/")?;
+    let fd = suffix.parse::<c_int>().ok()?;
+    lookup_entry(fd)
+}
+
 /// `open(const char *, int, ...)` — variadic in C. We match the two
 /// common forms (with and without mode) to avoid the varargs dance.
 ///
@@ -298,12 +847,41 @@ fn create_cookie_fd() -> c_int {
 pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mode_t) -> c_int {
     if let Some(p) = cstr_to_path(path)
         && let Some(kind) = DeviceKind::classify(&p)
-        && remote().is_some()
+        && let Some(remote) = remote()
     {
+        let fake_stat = match stat_request(remote, kind, &p) {
+            Ok(stat) => stat,
+            Err(rc) => return rc,
+        };
+        let remote_fd = match remote.syscall_open(
+            current_ctx(),
+            syscalls::SyscallOpenRequest {
+                path: tracked_path_request(kind, &p),
+                flags: flags as u32,
+                mode: mode as u32,
+                class: kind.device_class(),
+            },
+        ) {
+            Ok(resp) => resp.virtual_fd,
+            Err(err) => return errno_to_rc(err.errno()),
+        };
         let fd = create_cookie_fd();
-        if fd >= 0 {
-            register_fd(fd, kind);
+        if fd < 0 {
+            let _ = remote.syscall_close(
+                current_ctx(),
+                syscalls::SyscallCloseRequest {
+                    virtual_fd: remote_fd,
+                },
+            );
+            return fd;
         }
+        register_entry(TrackedFd {
+            cookie_fd: fd,
+            remote_fd,
+            kind,
+            path: p,
+            fake_stat,
+        });
         return fd;
     }
     let Some(real) = next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
@@ -324,12 +902,41 @@ pub unsafe extern "C" fn openat(
     if dirfd == libc::AT_FDCWD
         && let Some(p) = cstr_to_path(path)
         && let Some(kind) = DeviceKind::classify(&p)
-        && remote().is_some()
+        && let Some(remote) = remote()
     {
+        let fake_stat = match stat_request(remote, kind, &p) {
+            Ok(stat) => stat,
+            Err(rc) => return rc,
+        };
+        let remote_fd = match remote.syscall_open(
+            current_ctx(),
+            syscalls::SyscallOpenRequest {
+                path: tracked_path_request(kind, &p),
+                flags: flags as u32,
+                mode: mode as u32,
+                class: kind.device_class(),
+            },
+        ) {
+            Ok(resp) => resp.virtual_fd,
+            Err(err) => return errno_to_rc(err.errno()),
+        };
         let fd = create_cookie_fd();
-        if fd >= 0 {
-            register_fd(fd, kind);
+        if fd < 0 {
+            let _ = remote.syscall_close(
+                current_ctx(),
+                syscalls::SyscallCloseRequest {
+                    virtual_fd: remote_fd,
+                },
+            );
+            return fd;
         }
+        register_entry(TrackedFd {
+            cookie_fd: fd,
+            remote_fd,
+            kind,
+            path: p,
+            fake_stat,
+        });
         return fd;
     }
     let Some(real) =
@@ -342,8 +949,21 @@ pub unsafe extern "C" fn openat(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn open64(path: *const c_char, flags: c_int, mode: libc::mode_t) -> c_int {
+    unsafe { open(path, flags, mode) }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn close(fd: c_int) -> c_int {
-    if lookup_fd(fd).is_some() {
+    if let Some(entry) = lookup_entry(fd) {
+        if entry.remote_fd >= 0 && let Some(remote) = remote() {
+            let _ = remote.syscall_close(
+                current_ctx(),
+                syscalls::SyscallCloseRequest {
+                    virtual_fd: entry.remote_fd,
+                },
+            );
+        }
         forget_fd(fd);
     }
     let Some(real) = next_fn!(close : fn(f: c_int) -> c_int) else {
@@ -366,6 +986,87 @@ pub unsafe extern "C" fn ioctl(fd: c_int, cmd: libc::c_ulong, arg: *mut c_void) 
     };
     // SAFETY: forwarded to libc.
     unsafe { real(fd, cmd, arg) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn access(path: *const c_char, mode: c_int) -> c_int {
+    if let Some(p) = cstr_to_path(path)
+        && let Some(kind) = DeviceKind::classify(&p)
+        && let Some(remote) = remote()
+    {
+        return match remote.syscall_access(
+            current_ctx(),
+            syscalls::SyscallAccessRequest {
+                class: kind.device_class(),
+                path: tracked_path_request(kind, &p),
+                mode: mode as u32,
+            },
+        ) {
+            Ok(resp) if resp.allowed => 0,
+            Ok(_) => errno_to_rc(libc::EACCES),
+            Err(err) => errno_to_rc(err.errno()),
+        };
+    }
+    let Some(real) = next_fn!(access : fn(p: *const c_char, m: c_int) -> c_int) else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    unsafe { real(path, mode) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn readlink(
+    path: *const c_char,
+    buf: *mut c_char,
+    bufsiz: size_t,
+) -> libc::ssize_t {
+    if let Some(p) = cstr_to_path(path)
+        && let Some(entry) = tracked_fd_from_proc_path(&p)
+    {
+        let bytes = entry.path.as_os_str().as_bytes();
+        if bufsiz == 0 || buf.is_null() {
+            return 0;
+        }
+        let len = bytes.len().min(bufsiz);
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.cast::<u8>(), len) };
+        return len as libc::ssize_t;
+    }
+    let Some(real) =
+        next_fn!(readlink : fn(p: *const c_char, b: *mut c_char, n: size_t) -> libc::ssize_t)
+    else {
+        return errno_to_rc(libc::ENOSYS) as libc::ssize_t;
+    };
+    unsafe { real(path, buf, bufsiz) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fstat(fd: c_int, statbuf: *mut libc::stat) -> c_int {
+    if let Some(entry) = lookup_entry(fd) {
+        unsafe { fill_fake_stat(statbuf, entry.fake_stat) };
+        return 0;
+    }
+    let Some(real) = next_fn!(fstat : fn(f: c_int, s: *mut libc::stat) -> c_int) else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    unsafe { real(fd, statbuf) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn newfstatat(
+    dirfd: c_int,
+    path: *const c_char,
+    statbuf: *mut libc::stat,
+    flags: c_int,
+) -> c_int {
+    let is_empty_path = !path.is_null() && unsafe { *path } == 0;
+    if (flags & libc::AT_EMPTY_PATH) != 0 && is_empty_path && let Some(entry) = lookup_entry(dirfd) {
+        unsafe { fill_fake_stat(statbuf, entry.fake_stat) };
+        return 0;
+    }
+    let Some(real) = next_fn!(newfstatat : fn(d: c_int, p: *const c_char, s: *mut libc::stat, f: c_int) -> c_int)
+    else {
+        return errno_to_rc(libc::ENOSYS);
+    };
+    unsafe { real(dirfd, path, statbuf, flags) }
 }
 
 // Silence "unused" for the mode size helper.

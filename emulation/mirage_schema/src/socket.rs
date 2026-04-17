@@ -27,7 +27,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::common::{
-    GpuDef, HealthStatus, ProfileDef, RunExit, SessionDef, SimulatorMode, StreamData, Time,
+    ExecArgs, GpuDef, HealthStatus, ProfileDef, RunExit, SessionDef, SimulatorMode, StreamData,
+    Time,
 };
 use crate::simulator::SimulatorInfo;
 
@@ -378,6 +379,90 @@ pub struct GetSessionDetailRequest {
     /// Name of the session.
     pub name: String,
 }
+
+// ===========================================================================
+//  Boot / exec / shutdown RPCs
+// ===========================================================================
+
+/// Boot a new session: create the session record **and** start the
+/// container via the configured container runtime.
+///
+/// This is the primary entry point for the `mirage-ctl boot` command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootSessionRequest {
+    /// The session to create and boot.
+    pub session: SessionDef,
+}
+
+/// Response to [`BootSessionRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootSessionReply {
+    /// Whether the session was booted successfully.
+    #[serde(default)]
+    pub ok: bool,
+
+    /// If `ok` is `false`, a human-readable error message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+
+    /// Container ID assigned by the runtime (if booted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_id: Option<String>,
+}
+
+/// Execute a command inside a booted session's container.
+///
+/// This is the primary entry point for the `mirage-ctl exec` command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecInSessionRequest {
+    /// Name of the session to exec in.
+    pub session_name: String,
+
+    /// The command and arguments to run.
+    pub exec: ExecArgs,
+}
+
+/// Response to [`ExecInSessionRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecInSessionReply {
+    /// Process exit code.
+    #[serde(default)]
+    pub exit_code: i32,
+
+    /// Captured stdout bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stdout: Vec<u8>,
+
+    /// Captured stderr bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stderr: Vec<u8>,
+}
+
+/// Shut down a booted session: stop and remove the container, then
+/// delete the session record.
+///
+/// This is the primary entry point for the `mirage-ctl shutdown` command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShutdownSessionRequest {
+    /// Name of the session to shut down.
+    pub name: String,
+}
+
+/// Response to [`ShutdownSessionRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShutdownSessionReply {
+    /// Whether the session was shut down successfully.
+    #[serde(default)]
+    pub ok: bool,
+
+    /// If `ok` is `false`, a human-readable error message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+// ===========================================================================
+//  Dashboard RPCs — session detail
+// ===========================================================================
 
 /// Full session state including health and performance counters.
 ///

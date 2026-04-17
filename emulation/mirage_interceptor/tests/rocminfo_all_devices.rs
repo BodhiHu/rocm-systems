@@ -86,25 +86,31 @@ fn normalize(output: &str) -> Vec<String> {
         .collect()
 }
 
-#[test]
-fn rocminfo_matches_when_hardware_present() {
+struct RocminfoRuns {
+    baseline_out: String,
+    baseline_norm: Vec<String>,
+    intercepted_out: String,
+    intercepted_err: String,
+    intercepted_norm: Vec<String>,
+}
+
+fn collect_runs() -> Option<RocminfoRuns> {
     if !RealEmulator::hardware_available() {
-        eprintln!("rocminfo test: no /dev/kfd on this host — skipping");
-        return;
+        eprintln!("rocminfo test: no /dev/kfd on this host - skipping");
+        return None;
     }
     let Some(rocminfo) = which("rocminfo") else {
-        eprintln!("rocminfo test: `rocminfo` not on PATH — skipping");
-        return;
+        eprintln!("rocminfo test: `rocminfo` not on PATH - skipping");
+        return None;
     };
     let Some(cdylib) = interceptor_cdylib() else {
         eprintln!(
             "rocminfo test: libmirage_interceptor.so not found; \
-             run `cargo build -p mirage_interceptor` first — skipping"
+             run `cargo build -p mirage_interceptor` first - skipping"
         );
-        return;
+        return None;
     };
 
-    // Baseline: run rocminfo against the real kernel.
     let baseline = Command::new(&rocminfo)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -115,7 +121,7 @@ fn rocminfo_matches_when_hardware_present() {
             "rocminfo test: baseline rocminfo failed (status {:?}); skipping",
             baseline.status
         );
-        return;
+        return None;
     }
     let baseline_out = String::from_utf8_lossy(&baseline.stdout).to_string();
     let baseline_norm = normalize(&baseline_out);
@@ -124,7 +130,6 @@ fn rocminfo_matches_when_hardware_present() {
         "baseline rocminfo produced no recognisable device lines:\n{baseline_out}"
     );
 
-    // Spin up an EmulatorServer backed by a RealEmulator.
     let sock = unique_socket("all-devices");
     let real = RealEmulator::detect()
         .expect("detect real emu")
@@ -134,16 +139,8 @@ fn rocminfo_matches_when_hardware_present() {
     let server_thread = thread::spawn(move || {
         let _ = server.serve_on(listener);
     });
-    // Small settle to ensure the accept loop is running before we launch
-    // the child that will connect to it.
     thread::sleep(Duration::from_millis(10));
 
-    // Invoke rocminfo through the interceptor. Because the interceptor
-    // currently marshals only GET_VERSION, rocminfo will not observe
-    // any devices — we accept either "matches baseline normalized" or
-    // "produced no device lines" (indicating incomplete marshalling)
-    // so that this test passes CI while development is ongoing and
-    // tightens as more ioctls get implemented.
     let intercepted = Command::new(&rocminfo)
         .env("LD_PRELOAD", &cdylib)
         .env("MIRAGE_INTERCEPTOR_SOCKET", &sock)
@@ -152,29 +149,79 @@ fn rocminfo_matches_when_hardware_present() {
         .output()
         .expect("run rocminfo under interceptor");
     let intercepted_out = String::from_utf8_lossy(&intercepted.stdout).to_string();
+    let intercepted_err = String::from_utf8_lossy(&intercepted.stderr).to_string();
     let intercepted_norm = normalize(&intercepted_out);
 
-    // Halt the server thread by dropping the socket file (the accept
-    // loop will exit on the next failed accept).
-    drop(server_thread); // detached; OS will tear down on process exit
+    drop(server_thread);
     let _ = std::fs::remove_file(&sock);
 
-    if intercepted_norm.is_empty() {
+    Some(RocminfoRuns {
+        baseline_out,
+        baseline_norm,
+        intercepted_out,
+        intercepted_err,
+        intercepted_norm,
+    })
+}
+
+#[test]
+fn rocminfo_smoke_reaches_real_backed_daemon() {
+    let Some(runs) = collect_runs() else {
+        return;
+    };
+
+    if runs.intercepted_norm.is_empty() {
         eprintln!(
-            "rocminfo under interceptor produced no device lines \
-             (expected while ioctl marshalling is incomplete). \
-             baseline lines:\n{baseline_norm:#?}"
+            "rocminfo under interceptor produced no device lines. \
+             The daemon-backed path runs, but the interceptor still lacks \
+             enough ioctl/fs marshalling to reproduce baseline output. \
+             baseline lines:\n{:#?}\n\nintercepted stderr:\n{}",
+            runs.baseline_norm,
+            runs.intercepted_err
         );
         return;
     }
 
     assert_eq!(
-        intercepted_norm,
-        baseline_norm,
+        runs.intercepted_norm,
+        runs.baseline_norm,
         "rocminfo output under the interceptor diverged from the real kernel\n\
-         baseline stdout:\n{baseline_out}\n\
-         intercepted stdout:\n{intercepted_out}\n\
+         baseline stdout:\n{}\n\
+         intercepted stdout:\n{}\n\
          intercepted stderr:\n{}",
-        String::from_utf8_lossy(&intercepted.stderr)
+        runs.baseline_out,
+        runs.intercepted_out,
+        runs.intercepted_err
+    );
+}
+
+#[test]
+#[ignore = "enable once mirage_interceptor marshals the rocminfo ioctl/fs surface end-to-end"]
+fn rocminfo_matches_when_hardware_present() {
+    let Some(runs) = collect_runs() else {
+        return;
+    };
+
+    assert!(
+        !runs.intercepted_norm.is_empty(),
+        "rocminfo under interceptor produced no device lines\n\
+         baseline stdout:\n{}\n\
+         intercepted stdout:\n{}\n\
+         intercepted stderr:\n{}",
+        runs.baseline_out,
+        runs.intercepted_out,
+        runs.intercepted_err
+    );
+
+    assert_eq!(
+        runs.intercepted_norm,
+        runs.baseline_norm,
+        "rocminfo output under the interceptor diverged from the real kernel\n\
+         baseline stdout:\n{}\n\
+         intercepted stdout:\n{}\n\
+         intercepted stderr:\n{}",
+        runs.baseline_out,
+        runs.intercepted_out,
+        runs.intercepted_err
     );
 }

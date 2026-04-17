@@ -1,7 +1,9 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
 
+use mirage_container::DockerCli;
 use mirage_daemon::InMemoryMirageDaemon;
 use mirage_schema::daemon::MirageDaemonServer;
 use mirage_schema::paths;
@@ -16,7 +18,8 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    let daemon = InMemoryMirageDaemon::new();
+    let docker = Arc::new(DockerCli::new());
+    let daemon = InMemoryMirageDaemon::with_container_runtime(docker);
     let server = MirageDaemonServer::new(cli.socket, daemon);
     server.serve().await?;
     Ok(())

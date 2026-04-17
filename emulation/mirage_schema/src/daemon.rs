@@ -12,13 +12,15 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::paths;
 use crate::socket::{
-    AttachReply, AttachRequest, CreateProfileReply, CreateProfileRequest,
-    DashboardCreateSessionReply, DashboardCreateSessionRequest, DashboardDeleteSessionReply,
-    DashboardDeleteSessionRequest, DeleteProfileReply, DeleteProfileRequest, GetOverviewReply,
+    AttachReply, AttachRequest, BootSessionReply, BootSessionRequest, CreateProfileReply,
+    CreateProfileRequest, DashboardCreateSessionReply, DashboardCreateSessionRequest,
+    DashboardDeleteSessionReply, DashboardDeleteSessionRequest, DeleteProfileReply,
+    DeleteProfileRequest, ExecInSessionReply, ExecInSessionRequest, GetOverviewReply,
     GetOverviewRequest, GetSessionDetailReply, GetSessionDetailRequest, GetSimulatorReply,
     GetSimulatorRequest, HealthReply, HealthRequest, ListProfilesReply, ListProfilesRequest,
     ListSessionsReply, ListSessionsRequest, ListSimulatorsReply, ListSimulatorsRequest,
-    RegisterSimReply, RegisterSimRequest, TimeReply, TimeRequest,
+    RegisterSimReply, RegisterSimRequest, ShutdownSessionReply, ShutdownSessionRequest, TimeReply,
+    TimeRequest,
 };
 
 const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
@@ -234,6 +236,15 @@ mirage_daemon_rpcs! {
         create_session(DashboardCreateSessionRequest) -> DashboardCreateSessionReply => CreateSession;
         delete_session(DashboardDeleteSessionRequest) -> DashboardDeleteSessionReply => DeleteSession;
         get_session_detail(GetSessionDetailRequest) -> GetSessionDetailReply => GetSessionDetail;
+    }
+    MirageDaemonBoot {
+        boot_session(BootSessionRequest) -> BootSessionReply => BootSession;
+    }
+    MirageDaemonExec {
+        exec_in_session(ExecInSessionRequest) -> ExecInSessionReply => ExecInSession;
+    }
+    MirageDaemonShutdown {
+        shutdown_session(ShutdownSessionRequest) -> ShutdownSessionReply => ShutdownSession;
     }
 }
 
@@ -588,6 +599,47 @@ mod tests {
                 ipc: 0.0,
                 simulation_speed: 0.0,
                 active_contexts: 0,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl MirageDaemonBoot for FixedDaemon {
+        async fn boot_session(
+            &self,
+            _request: BootSessionRequest,
+        ) -> MirageDaemonResult<BootSessionReply> {
+            Ok(BootSessionReply {
+                ok: true,
+                error: None,
+                container_id: Some("mock-container-id".to_string()),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl MirageDaemonExec for FixedDaemon {
+        async fn exec_in_session(
+            &self,
+            _request: ExecInSessionRequest,
+        ) -> MirageDaemonResult<ExecInSessionReply> {
+            Ok(ExecInSessionReply {
+                exit_code: 0,
+                stdout: b"ok\n".to_vec(),
+                stderr: vec![],
+            })
+        }
+    }
+
+    #[async_trait]
+    impl MirageDaemonShutdown for FixedDaemon {
+        async fn shutdown_session(
+            &self,
+            _request: ShutdownSessionRequest,
+        ) -> MirageDaemonResult<ShutdownSessionReply> {
+            Ok(ShutdownSessionReply {
+                ok: true,
+                error: None,
             })
         }
     }

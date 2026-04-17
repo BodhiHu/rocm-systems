@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 async-trait = { workspace = true }
 clap = { workspace = true }
+mirage_container = { path = "../mirage_container" }
 mirage_schema = { workspace = true }
 tokio = { workspace = true }

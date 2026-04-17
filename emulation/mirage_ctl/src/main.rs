@@ -5,15 +5,18 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use mirage_schema::common::{HealthStatus, ProfileDef, SessionDef, SimulatorMode, Time};
+use mirage_schema::common::{
+    ExecArgs, HealthStatus, ProfileDef, SessionDef, SimulatorMode, Time,
+};
 use mirage_schema::daemon::{MirageDaemon, MirageDaemonClient, MirageDaemonError};
 use mirage_schema::paths;
 use mirage_schema::socket::{
-    CreateProfileReply, CreateProfileRequest, DashboardCreateSessionReply,
-    DashboardCreateSessionRequest, DashboardDeleteSessionReply, DashboardDeleteSessionRequest,
-    DeleteProfileReply, DeleteProfileRequest, GetOverviewRequest, GetSessionDetailRequest,
-    GetSimulatorRequest, HealthRequest, ListProfilesRequest, ListSessionsRequest,
-    ListSimulatorsRequest, TimeRequest,
+    BootSessionReply, BootSessionRequest, CreateProfileReply, CreateProfileRequest,
+    DashboardCreateSessionReply, DashboardCreateSessionRequest, DashboardDeleteSessionReply,
+    DashboardDeleteSessionRequest, DeleteProfileReply, DeleteProfileRequest,
+    ExecInSessionRequest, GetOverviewRequest, GetSessionDetailRequest, GetSimulatorRequest,
+    HealthRequest, ListProfilesRequest, ListSessionsRequest, ListSimulatorsRequest,
+    ShutdownSessionReply, ShutdownSessionRequest, TimeRequest,
 };
 
 #[derive(Debug)]
@@ -104,6 +107,12 @@ enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
+    /// Boot a new session from a profile and container image.
+    Boot(BootArgs),
+    /// Run a command inside a booted session.
+    Exec(ExecCommandArgs),
+    /// Shut down a booted session and release its resources.
+    Shutdown(ShutdownArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -182,6 +191,37 @@ struct SessionCreateArgs {
     profile: String,
     #[arg(long)]
     image: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct BootArgs {
+    #[arg(long)]
+    name: String,
+    #[arg(long)]
+    profile: String,
+    #[arg(long)]
+    image: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ExecCommandArgs {
+    #[arg(long)]
+    name: String,
+    /// The command and arguments to run, separated by `--`.
+    #[arg(last = true, required = true)]
+    command: Vec<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ShutdownArgs {
+    #[arg(long)]
+    name: String,
     #[arg(long)]
     json: bool,
 }
@@ -416,6 +456,62 @@ async fn run_command(daemon: &dyn MirageDaemon, command: Command) -> CliResult {
                 }
             }
         },
+        Command::Boot(args) => {
+            let reply = daemon
+                .boot_session(BootSessionRequest {
+                    session: SessionDef {
+                        name: args.name.clone(),
+                        profile: args.profile,
+                        image: args.image,
+                    },
+                })
+                .await?;
+            handle_boot_reply(reply, args.json, &args.name)?;
+        }
+        Command::Exec(args) => {
+            if args.command.is_empty() {
+                return Err(CliError::new("no command provided after --"));
+            }
+            let (program, program_args) = args.command.split_first().unwrap();
+            let reply = daemon
+                .exec_in_session(ExecInSessionRequest {
+                    session_name: args.name.clone(),
+                    exec: ExecArgs {
+                        command: program.clone(),
+                        args: program_args.to_vec(),
+                        env: vec![],
+                    },
+                })
+                .await?;
+            if args.json {
+                print_json(&serde_json::json!({
+                    "exit_code": reply.exit_code,
+                    "stdout": String::from_utf8_lossy(&reply.stdout),
+                    "stderr": String::from_utf8_lossy(&reply.stderr),
+                }))?;
+            } else {
+                if !reply.stdout.is_empty() {
+                    print!("{}", String::from_utf8_lossy(&reply.stdout));
+                }
+                if !reply.stderr.is_empty() {
+                    eprint!("{}", String::from_utf8_lossy(&reply.stderr));
+                }
+                if reply.exit_code != 0 {
+                    return Err(CliError::new(format!(
+                        "exec exited with code {}",
+                        reply.exit_code
+                    )));
+                }
+            }
+        }
+        Command::Shutdown(args) => {
+            let reply = daemon
+                .shutdown_session(ShutdownSessionRequest {
+                    name: args.name.clone(),
+                })
+                .await?;
+            handle_shutdown_reply(reply, args.json, &format!("session '{}' shut down", args.name))?;
+        }
     }
 
     Ok(())
@@ -442,6 +538,30 @@ fn handle_delete_session_reply(
     json: bool,
     message: &str,
 ) -> CliResult {
+    handle_ok_reply(reply.ok, reply.error, json, message)
+}
+
+fn handle_boot_reply(reply: BootSessionReply, json: bool, name: &str) -> CliResult {
+    if !reply.ok {
+        return Err(CliError::new(
+            reply.error.unwrap_or_else(|| "boot failed".to_string()),
+        ));
+    }
+    if json {
+        print_json(&serde_json::json!({
+            "ok": true,
+            "container_id": reply.container_id,
+        }))?;
+    } else {
+        println!("session '{}' booted", name);
+        if let Some(id) = reply.container_id {
+            println!("container: {id}");
+        }
+    }
+    Ok(())
+}
+
+fn handle_shutdown_reply(reply: ShutdownSessionReply, json: bool, message: &str) -> CliResult {
     handle_ok_reply(reply.ok, reply.error, json, message)
 }
 
