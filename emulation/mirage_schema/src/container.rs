@@ -9,7 +9,12 @@
 //! Docker, Podman, or any other OCI-compatible runtime without the
 //! simulator ever knowing which runtime is in use.
 
+use std::error::Error;
+use std::fmt;
+
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::common::ExecArgs;
 
@@ -196,6 +201,250 @@ pub struct ContainerDef {
     /// Example: `{"cpu": "4", "memory": "16Gi"}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_limits_json: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+//  Container runtime contract
+// ---------------------------------------------------------------------------
+
+/// Progress sender used by long-running container runtime operations.
+pub type ContainerRuntimeProgressSender = UnboundedSender<ContainerRuntimeEvent>;
+
+/// Progress receiver used by long-running container runtime operations.
+pub type ContainerRuntimeProgressReceiver = UnboundedReceiver<ContainerRuntimeEvent>;
+
+/// Creates an unbounded progress channel for container runtime events.
+pub fn container_runtime_progress_channel() -> (
+    ContainerRuntimeProgressSender,
+    ContainerRuntimeProgressReceiver,
+) {
+    unbounded_channel()
+}
+
+/// Standard result type for container runtime operations.
+pub type Result<T> = std::result::Result<T, ContainerRuntimeError>;
+
+/// High-level operation performed by the container runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerRuntimeOperation {
+    PullImage,
+    StartContainer,
+    InspectContainer,
+    ReadLogs,
+    Exec,
+    StopContainer,
+    RemoveContainer,
+}
+
+/// Streamable progress event emitted by the container runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ContainerRuntimeEvent {
+    Status {
+        operation: ContainerRuntimeOperation,
+        message: String,
+    },
+    Stdout {
+        operation: ContainerRuntimeOperation,
+        chunk: Vec<u8>,
+    },
+    Stderr {
+        operation: ContainerRuntimeOperation,
+        chunk: Vec<u8>,
+    },
+}
+
+/// Runtime abstraction for managing OCI-compatible containers used by Mirage.
+#[async_trait]
+pub trait ContainerRuntime: Send + Sync {
+    async fn pull_image(
+        &self,
+        image: &str,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<()>;
+
+    async fn start_container(
+        &self,
+        request: StartContainerRequest,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<StartedContainer>;
+
+    async fn inspect_container(
+        &self,
+        handle: &ContainerHandle,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<ContainerInspection>;
+
+    async fn read_logs(
+        &self,
+        handle: &ContainerHandle,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<ContainerLogs>;
+
+    async fn exec(
+        &self,
+        request: ExecRequest,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<ExecResult>;
+
+    async fn stop_container(
+        &self,
+        handle: &ContainerHandle,
+        timeout_secs: u32,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<()>;
+
+    async fn remove_container(
+        &self,
+        handle: &ContainerHandle,
+        force: bool,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<()>;
+}
+
+/// Container start request resolved by the simulator and consumed by a runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartContainerRequest {
+    pub name: String,
+    pub container: ContainerDef,
+}
+
+/// Runtime-specific handle to a managed container.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerHandle {
+    pub id: String,
+    pub name: String,
+}
+
+/// Lifecycle state returned by the runtime for a managed container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerState {
+    Created,
+    Running,
+    Exited,
+    Dead,
+}
+
+/// Port mapping resolved by the runtime after the container has started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPortMapping {
+    pub container_port: u16,
+    pub host_port: Option<u16>,
+    pub protocol: Protocol,
+    pub label: Option<String>,
+}
+
+/// Resolved inspection result for a managed container.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerInspection {
+    pub handle: ContainerHandle,
+    pub image: String,
+    pub state: ContainerState,
+    pub exit_code: Option<i32>,
+    pub ports: Vec<ResolvedPortMapping>,
+}
+
+/// Start result including the first resolved inspection payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedContainer {
+    pub inspection: ContainerInspection,
+}
+
+/// Captured container logs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContainerLogs {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+/// Request to execute a command inside a running container.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecRequest {
+    pub container: ContainerHandle,
+    pub exec: ExecArgs,
+    pub working_dir: Option<String>,
+}
+
+/// Result of an `exec` request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecResult {
+    pub exit_code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+/// Failure modes exposed by the container runtime contract.
+#[derive(Debug)]
+pub enum ContainerRuntimeError {
+    InvalidRequest(String),
+    NotFound(String),
+    Parse(String),
+    RuntimeUnavailable(String),
+    CommandFailed {
+        command: String,
+        status: Option<i32>,
+        stdout: String,
+        stderr: String,
+    },
+    Io(std::io::Error),
+    Json(serde_json::Error),
+}
+
+impl fmt::Display for ContainerRuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRequest(message) => write!(f, "invalid container request: {message}"),
+            Self::NotFound(message) => write!(f, "container not found: {message}"),
+            Self::Parse(message) => {
+                write!(f, "failed to parse container runtime output: {message}")
+            }
+            Self::RuntimeUnavailable(message) => {
+                write!(f, "container runtime unavailable: {message}")
+            }
+            Self::CommandFailed {
+                command,
+                status,
+                stdout,
+                stderr,
+            } => {
+                write!(f, "container command failed: {command}")?;
+                if let Some(status) = status {
+                    write!(f, " (exit {status})")?;
+                }
+                if !stderr.is_empty() {
+                    write!(f, ": {stderr}")?;
+                } else if !stdout.is_empty() {
+                    write!(f, ": {stdout}")?;
+                }
+                Ok(())
+            }
+            Self::Io(error) => write!(f, "container runtime I/O error: {error}"),
+            Self::Json(error) => write!(f, "container runtime JSON error: {error}"),
+        }
+    }
+}
+
+impl Error for ContainerRuntimeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Json(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for ContainerRuntimeError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+impl From<serde_json::Error> for ContainerRuntimeError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Json(value)
+    }
 }
 
 // ---------------------------------------------------------------------------
