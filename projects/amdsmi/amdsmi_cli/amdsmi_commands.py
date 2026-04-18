@@ -134,7 +134,7 @@ class AMDSMICommands:
         if self.helpers.is_amdgpu_initialized():
             try:
                 self.device_handles = amdsmi_interface.amdsmi_get_processor_handles()
-                self.device_handles_gpus = amdsmi_interface.get_gpu_handles()
+                self.device_handles_gpus = self.helpers.get_gpu_handles()
             except amdsmi_exception.AmdSmiLibraryException as e:
                 if e.err_code in (
                     amdsmi_interface.amdsmi_wrapper.AMDSMI_STATUS_NOT_INIT,
@@ -155,11 +155,11 @@ class AMDSMICommands:
 
         if self.helpers.is_ainic_initialized():
             try:
-                self.device_handles_brcm_nics = amdsmi_interface.get_nic_handles()
-                self.device_handles_ainics = amdsmi_interface.get_ainic_handles()
+                self.device_handles_brcm_nics = self.helpers.get_nic_handles()
+                self.device_handles_ainics = self.helpers.get_ainic_handles()
                 if len(self.device_handles_gpus) == 0:
-                    self.device_handles_gpus = amdsmi_interface.get_gpu_handles()
-                self.device_handles_switchs = amdsmi_interface.get_switch_handles()
+                    self.device_handles_gpus = self.helpers.get_gpu_handles()
+                self.device_handles_switchs = self.helpers.get_switch_handles()
             except amdsmi_exception.AmdSmiLibraryException as e:
                 if e.err_code in (
                     amdsmi_interface.amdsmi_wrapper.AMDSMI_STATUS_NOT_INIT,
@@ -317,7 +317,7 @@ class AMDSMICommands:
         nic_version_str = "N/A"
         if args.nic_version:
             try:
-                ainic_device_handles = amdsmi_interface.get_ainic_handles()
+                ainic_device_handles = self.helpers.get_ainic_handles()
                 for nic_id, device_handle in enumerate(ainic_device_handles):
                     nic_info = amdsmi_interface.amdsmi_get_ainic_info(device_handle, True)
                     if nic_version_str != "":

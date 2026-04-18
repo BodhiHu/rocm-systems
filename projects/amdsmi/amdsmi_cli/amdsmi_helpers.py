@@ -210,10 +210,42 @@ class AMDSMIHelpers:
         return AMDSMI_INIT_FLAG & amdsmi_interface.amdsmi_wrapper.AMDSMI_INIT_AMD_NICS
 
     def is_brcm_nic_initialized(self):
-        return False
+        if not (AMDSMI_INIT_FLAG & amdsmi_interface.amdsmi_wrapper.AMDSMI_INIT_AMD_NICS):
+            return False
+        try:
+            return len(self.get_nic_handles()) > 0
+        except amdsmi_interface.AmdSmiLibraryException:
+            return False
 
     def is_brcm_switch_initialized(self):
-        return False
+        if not (AMDSMI_INIT_FLAG & amdsmi_interface.amdsmi_wrapper.AMDSMI_INIT_AMD_NICS):
+            return False
+        try:
+            return len(self.get_switch_handles()) > 0
+        except amdsmi_interface.AmdSmiLibraryException:
+            return False
+
+    def get_handles_by_processor_type(self, processor_type):
+        """Get all processor handles of a given type across all sockets."""
+        handles = []
+        for socket in amdsmi_interface.amdsmi_get_socket_handles():
+            result = amdsmi_interface.amdsmi_get_processor_handles_by_type(socket, processor_type)
+            handles.extend(result["processor_handles"])
+        return handles
+
+    def get_gpu_handles(self):
+        return self.get_handles_by_processor_type(amdsmi_interface.AmdSmiProcessorType.AMD_GPU)
+
+    def get_nic_handles(self):
+        return self.get_handles_by_processor_type(amdsmi_interface.AmdSmiProcessorType.AMD_BRCM_NIC)
+
+    def get_switch_handles(self):
+        return self.get_handles_by_processor_type(
+            amdsmi_interface.AmdSmiProcessorType.AMD_BRCM_SWITCH
+        )
+
+    def get_ainic_handles(self):
+        return self.get_handles_by_processor_type(amdsmi_interface.AmdSmiProcessorType.AMD_AINIC)
 
     def get_rocm_version(self):
         try:
@@ -416,8 +448,8 @@ class AMDSMIHelpers:
 
         try:
             # get_nic_handles returns the device_handles sorted for nic_id
-            nic_device_handles = amdsmi_interface.get_nic_handles()
-            ainic_device_handles = amdsmi_interface.get_ainic_handles()
+            nic_device_handles = self.get_nic_handles()
+            ainic_device_handles = self.get_ainic_handles()
 
         except amdsmi_interface.AmdSmiLibraryException as e:
             if e.err_code in (
@@ -466,7 +498,7 @@ class AMDSMIHelpers:
 
         try:
             # get_switch_handles returns the device_handles sorted for switch_id
-            device_handles = amdsmi_interface.get_switch_handles()
+            device_handles = self.get_switch_handles()
 
         except amdsmi_interface.AmdSmiLibraryException as e:
             if e.err_code in (
@@ -599,7 +631,7 @@ class AMDSMIHelpers:
             (False, str): Return False, and the first input that failed to be converted
         """
         if "all" in nic_selections:
-            return (True, amdsmi_interface.get_nic_handles() + amdsmi_interface.get_ainic_handles())
+            return (True, self.get_nic_handles() + self.get_ainic_handles())
 
         if isinstance(nic_selections, str):
             nic_selections = [nic_selections]
@@ -652,7 +684,7 @@ class AMDSMIHelpers:
             (False, str): Return False, and the first input that failed to be converted
         """
         if "all" in switch_selections:
-            return (True, amdsmi_interface.get_switch_handles())
+            return (True, self.get_switch_handles())
 
         if isinstance(switch_selections, str):
             switch_selections = [switch_selections]
@@ -1118,7 +1150,7 @@ class AMDSMIHelpers:
         """Get the nic index from the device_handle.
         get_nic_handles() returns the list of device_handles in order of nic_index
         """
-        device_handles = amdsmi_interface.get_nic_handles()
+        device_handles = self.get_nic_handles()
         if len(device_handles) == 0:
             return -1
         for nic_index, device_handle in enumerate(device_handles):
@@ -1134,7 +1166,7 @@ class AMDSMIHelpers:
         """Get the ainic index from the device_handle.
         get_ainic_handles() returns the list of device_handles in order of ainic_index
         """
-        device_handles = amdsmi_interface.get_ainic_handles()
+        device_handles = self.get_ainic_handles()
         if len(device_handles) == 0:
             return -1
         for nic_index, device_handle in enumerate(device_handles):
@@ -1150,7 +1182,7 @@ class AMDSMIHelpers:
         """Get the nic index from the device_handle.
         get_switch_handles() returns the list of device_handles in order of nic_index
         """
-        device_handles = amdsmi_interface.get_switch_handles()
+        device_handles = self.get_switch_handles()
         for switch_index, device_handle in enumerate(device_handles):
             if input_device_handle.value == device_handle.value:
                 return switch_index
