@@ -14,6 +14,8 @@
 #include "rocjitsu/isa/instruction.h"
 #include "rocjitsu/vm/amdgpu/mtype.h"
 
+#include <string>
+
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -82,6 +84,9 @@ struct VectorMemState : DynamicInstState {
   bool lds_dst = false;                ///< Buffer load with LDS bit: write to LDS, not VGPRs.
   uint32_t lds_base = 0;               ///< M0 value for LDS-destination buffer loads.
   uint64_t issue_pc = 0;               ///< PC at which the instruction was issued (debug).
+  uint32_t wg_id = 0;                  ///< Workgroup ID (for trace output).
+  uint32_t wf_id = 0;                  ///< Wavefront ID within WG (for trace output).
+  std::string cu_path;                 ///< CU full path (for trace output).
   std::vector<uint8_t> response_data;
   std::vector<uint8_t> store_data;
 

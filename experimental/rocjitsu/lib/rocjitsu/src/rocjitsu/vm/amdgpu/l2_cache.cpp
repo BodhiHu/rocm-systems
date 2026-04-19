@@ -117,15 +117,15 @@ void L2Cache::write(uint64_t addr, const uint8_t *src, uint32_t size, Mtype mtyp
   cache_.lookup(addr, &tag);
   assert(tag != nullptr && "ensure_line must guarantee hit");
 
-  if (mtype == Mtype::CC) {
-    // Coherently Cacheable: write-through to HBM.
-    send_backing(addr, const_cast<uint8_t *>(src), size, simdojo::MessageOp::WRITE);
-    tag->coherence = simdojo::CoherenceState::SHARED;
-  } else {
-    // Read-Write / Write-Back: mark dirty, defer write-back to eviction.
-    tag->dirty = true;
-    tag->coherence = simdojo::CoherenceState::MODIFIED;
-  }
+  // Write through to backing store for all mtypes. In the simulator, GPU
+  // virtual addresses are host-mapped (MAP_FIXED), so hipMemcpy reads from
+  // backing store directly. Without write-through, RW-mtype stores remain
+  // in L2 as dirty lines and never reach the host-visible pages — causing
+  // stale reads on D2H copy.
+  send_backing(addr, const_cast<uint8_t *>(src), size, simdojo::MessageOp::WRITE);
+  tag->coherence =
+      (mtype == Mtype::CC) ? simdojo::CoherenceState::SHARED : simdojo::CoherenceState::EXCLUSIVE;
+  tag->dirty = false;
 
   ++write_count_;
 }

@@ -443,7 +443,7 @@ inline void execute_s_ashr_i32_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]
 template <typename Inst>
 inline void execute_s_ashr_i64_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   int64_t s0 = static_cast<int64_t>(inst.ssrc0.read_scalar64(wf));
-  int64_t s1 = static_cast<int64_t>(inst.ssrc1.read_scalar64(wf));
+  uint32_t s1 = inst.ssrc1.read_scalar(wf);
   int64_t result = s0 >> (s1 & 63);
   inst.sdst.write_scalar64(wf, static_cast<uint64_t>(result));
   wf.write_scc(result != 0);
@@ -1194,7 +1194,7 @@ inline void execute_s_lshl_b32_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]
 template <typename Inst>
 inline void execute_s_lshl_b64_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   uint64_t s0 = inst.ssrc0.read_scalar64(wf);
-  uint64_t s1 = inst.ssrc1.read_scalar64(wf);
+  uint32_t s1 = inst.ssrc1.read_scalar(wf);
   uint64_t result = s0 << (s1 & 63u);
   inst.sdst.write_scalar64(wf, result);
   wf.write_scc(result != 0);
@@ -1212,7 +1212,7 @@ inline void execute_s_lshr_b32_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]
 template <typename Inst>
 inline void execute_s_lshr_b64_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   uint64_t s0 = inst.ssrc0.read_scalar64(wf);
-  uint64_t s1 = inst.ssrc1.read_scalar64(wf);
+  uint32_t s1 = inst.ssrc1.read_scalar(wf);
   uint64_t result = s0 >> (s1 & 63u);
   inst.sdst.write_scalar64(wf, result);
   wf.write_scc(result != 0);

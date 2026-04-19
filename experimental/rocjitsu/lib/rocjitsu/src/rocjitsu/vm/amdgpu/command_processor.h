@@ -186,9 +186,10 @@ private:
     uint64_t completion_signal = 0;    ///< AQL completion signal handle (0 = none).
     uint64_t scratch_backing_addr = 0; ///< GPU VA of scratch backing memory (from amd_queue_t).
     uint32_t private_segment_fixed_size =
-        0;                    ///< Per-lane scratch size in bytes (from kernel descriptor).
-    bool host_signal = false; ///< True if signal is in host memory (KFD path).
-    bool ordered = false;     ///< True for KFD (host-accessible) queue dispatches.
+        0; ///< Per-lane scratch size in bytes (from kernel descriptor).
+    uint32_t group_segment_fixed_size = 0; ///< Per-WG LDS size in bytes (from kernel descriptor).
+    bool host_signal = false;              ///< True if signal is in host memory (KFD path).
+    bool ordered = false;                  ///< True for KFD (host-accessible) queue dispatches.
   };
 
   /// @brief Initialize a wavefront's registers per the AMDHSA ABI.

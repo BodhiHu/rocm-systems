@@ -101,6 +101,9 @@ public:
   /// @brief Clear all halted wavefront slots and free their register allocations.
   void retire_halted_wfs();
 
+  /// @brief Like retire_halted_wfs but without resetting the LDS allocator.
+  void retire_halted_wfs_no_lds_reset();
+
   /// @brief Check whether this CU can accept an entire workgroup.
   ///
   /// @details Queries the number of free wavefront slots and register file
@@ -180,6 +183,20 @@ public:
   /// @brief Return the Local Data Share (LDS).
   Lds &lds() { return lds_; }
 
+  /// @brief Clear LDS contents (zero-fill).
+  void clear_lds() { lds_.clear(); }
+
+  /// @brief Allocate a per-WG LDS region and return its base offset.
+  uint32_t allocate_lds(uint32_t size_bytes) {
+    uint32_t base = next_lds_alloc_;
+    uint32_t aligned = (size_bytes + 255u) & ~255u;
+    next_lds_alloc_ += aligned;
+    return base;
+  }
+
+  /// @brief Reset LDS allocation (called when all WFs retire).
+  void reset_lds_alloc() { next_lds_alloc_ = 0; }
+
   /// @brief Flush all per-CU caches and the shared L2 to backing store.
   ///
   /// @details L1 V$ uses write-through, so flush just invalidates. L2 flushes
@@ -193,13 +210,15 @@ public:
                           reinterpret_cast<uintptr_t>(this), l1_vector_.store_count(),
                           l1_vector_.store_active_count(), l1_vector_.store_l2_writes());
     });
+    l1_scalar_.writeback_all();
     l1_scalar_.invalidate_all();
     l1_vector_.flush_all();
     l2_->flush_all();
   }
 
-  /// @brief Flush only the per-CU L1 caches (invalidate, since L1 is write-through).
+  /// @brief Flush only the per-CU L1 caches.
   void flush_l1() {
+    l1_scalar_.writeback_all();
     l1_scalar_.invalidate_all();
     l1_vector_.flush_all();
   }
@@ -388,6 +407,7 @@ protected:
   L1ScalarCache l1_scalar_;
   L1VectorCache l1_vector_;
   Lds lds_;
+  uint32_t next_lds_alloc_ = 0; ///< Next free LDS offset for per-WG allocation.
   ScalarMemPipeline scalar_mem_pipeline_;
   GlobalMemPipeline global_mem_pipeline_;
   LocalMemPipeline local_mem_pipeline_;

@@ -41,8 +41,16 @@ void CommandProcessor::init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf,
   // the legacy layout: kernarg at s[0:1].
   if (kcp != 0) {
     uint32_t idx = 0;
-    if (AMDHSA_BITS_GET(kcp, KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_BUFFER))
+    if (AMDHSA_BITS_GET(kcp, KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_BUFFER)) {
+      if (pkt.queue_ptr != 0) {
+        auto *q = reinterpret_cast<const amd_queue_t *>(pkt.queue_ptr);
+        cu->write_sgpr(sbase + idx + 0, q->scratch_resource_descriptor[0]);
+        cu->write_sgpr(sbase + idx + 1, q->scratch_resource_descriptor[1]);
+        cu->write_sgpr(sbase + idx + 2, q->scratch_resource_descriptor[2]);
+        cu->write_sgpr(sbase + idx + 3, q->scratch_resource_descriptor[3]);
+      }
       idx += 4;
+    }
     if (AMDHSA_BITS_GET(kcp, KERNEL_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_PTR)) {
       cu->write_sgpr(sbase + idx, static_cast<uint32_t>(pkt.dispatch_ptr));
       cu->write_sgpr(sbase + idx + 1, static_cast<uint32_t>(pkt.dispatch_ptr >> 32));
@@ -61,8 +69,13 @@ void CommandProcessor::init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf,
       idx += 2;
     }
     if (AMDHSA_BITS_GET(kcp, KERNEL_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_ID)) {
-      cu->write_sgpr(sbase + idx, pkt.workgroup_id_offset);
-      cu->write_sgpr(sbase + idx + 1, 0);
+      uint64_t dispatch_id = 0;
+      if (pkt.queue_ptr != 0) {
+        auto *q = reinterpret_cast<const amd_queue_t *>(pkt.queue_ptr);
+        dispatch_id = q->write_dispatch_id;
+      }
+      cu->write_sgpr(sbase + idx, static_cast<uint32_t>(dispatch_id));
+      cu->write_sgpr(sbase + idx + 1, static_cast<uint32_t>(dispatch_id >> 32));
       idx += 2;
     }
     if (AMDHSA_BITS_GET(kcp, KERNEL_CODE_PROPERTY_ENABLE_SGPR_FLAT_SCRATCH_INIT))
@@ -80,8 +93,10 @@ void CommandProcessor::init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf,
   }
 
   // System SGPRs: workgroup_id_{x,y,z} placed sequentially after user SGPRs.
-  // workgroup_id_x is always present. Y and Z are conditional on COMPUTE_PGM_RSRC2
-  // enable bits and only occupy an SGPR slot when enabled.
+  // When the kernel enables workgroup_id_y/z, the SPI decomposes the flat WG
+  // index into (x,y,z). When neither is enabled, workgroup_id_x receives the
+  // flat serial index — the kernel is responsible for its own decomposition
+  // (Tensile GEMM kernels do this via kernarg constants).
   uint32_t sys_idx = pkt.num_user_sgprs;
   if (pkt.enable_wg_id_y || pkt.enable_wg_id_z) {
     uint32_t gx = pkt.grid_wgs_x > 0 ? pkt.grid_wgs_x : 1;
@@ -97,18 +112,30 @@ void CommandProcessor::init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf,
 
   util::Logger::vm([&](auto &os) {
     static thread_local uint64_t init_count = 0;
-    if (++init_count <= 5 || (init_count % 40) == 0)
-      os << std::format("CP: init_wf #{} cu={} wf={} global_wg={} kernarg={:#x}", init_count,
-                        cu->name(), wf->wf_id(), global_wg_id, pkt.kernarg_addr);
+    if (++init_count <= 200 && wf_index_in_wg == 0)
+      os << std::format("CP: init_wf #{} cu={} global_wg={} s[{}]=({},{},{})"
+                        " grid_wgs=({},{},{}) enable_y={} enable_z={}",
+                        init_count, cu->name(), global_wg_id, pkt.num_user_sgprs,
+                        cu->read_sgpr(sbase + pkt.num_user_sgprs),
+                        pkt.enable_wg_id_y ? cu->read_sgpr(sbase + pkt.num_user_sgprs + 1) : 0u,
+                        pkt.enable_wg_id_z ? cu->read_sgpr(sbase + pkt.num_user_sgprs + 2) : 0u,
+                        pkt.grid_wgs_x, pkt.grid_wgs_y, pkt.grid_wgs_z, pkt.enable_wg_id_y,
+                        pkt.enable_wg_id_z);
   });
 
   // Workitem ID: v0 = workitem_id_x within the workgroup.
   // For multi-wavefront workgroups, each wavefront covers a different range:
   // wf0: 0..wf_size-1, wf1: wf_size..2*wf_size-1, etc.
   uint32_t vbase = wf->vgpr_alloc().base;
+  uint32_t sbase_dbg = wf->sgpr_alloc().base;
   uint32_t workitem_base = wf_index_in_wg * cu->wf_size();
   for (uint32_t lane = 0; lane < cu->wf_size(); ++lane)
     cu->write_vgpr(vbase, lane, workitem_base + lane);
+  util::Logger::vm([&](auto &os) {
+    os << std::format("{} wg[{}] wf[{}] init: wf_idx_in_wg={} vbase={} sbase={} workitem_base={}",
+                      cu->full_path(), global_wg_id, wf->wf_id(), wf_index_in_wg, vbase, sbase_dbg,
+                      workitem_base);
+  });
 
   // Scratch (private segment) setup.
   // Each wavefront gets a unique slice of scratch memory. The per-lane
@@ -275,10 +302,12 @@ bool CommandProcessor::step() {
       cu->retire_halted_wfs();
       if (!cu->can_accept_workgroup(pkt.wfs_per_workgroup))
         continue;
+      uint32_t lds_base = cu->allocate_lds(pkt.group_segment_fixed_size);
       for (uint32_t w = 0; w < pkt.wfs_per_workgroup; ++w) {
         Wavefront *wf =
             cu->dispatch_wf(wg, pkt.kernel_entry_pc, pkt.sgprs_per_wf, pkt.vgprs_per_wf);
         assert(wf && "dispatch_wf failed after can_accept_workgroup returned true");
+        wf->set_lds_base(lds_base);
         init_wavefront_regs(cu, wf, pkt, global_wg_id, w);
       }
       next_cu_ = (cu_idx + 1) % cus_.size();
@@ -613,6 +642,7 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
   uint32_t wave_size = cus_.empty() ? 64 : cus_[0]->wf_size();
   uint32_t wfs_per_wg = (wg_size + wave_size - 1) / wave_size;
 
+  uint32_t num_dims = pkt.setup & 0x3;
   uint32_t grid_wgs_x = pkt.workgroup_size_x > 0 ? pkt.grid_size_x / pkt.workgroup_size_x : 1;
   uint32_t grid_wgs_y = pkt.workgroup_size_y > 0 ? pkt.grid_size_y / pkt.workgroup_size_y : 1;
   uint32_t grid_wgs_z = pkt.workgroup_size_z > 0 ? pkt.grid_size_z / pkt.workgroup_size_z : 1;
@@ -627,6 +657,7 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
   dp.num_user_sgprs = user_sgprs;
   dp.kernel_code_properties = kd.kernel_code_properties;
   dp.private_segment_fixed_size = kd.private_segment_fixed_size;
+  dp.group_segment_fixed_size = std::max(kd.group_segment_fixed_size, pkt.group_segment_size);
 
   // For KFD dispatches, provide pointers the kernel may need via user SGPRs.
   if (host_accessible) {
@@ -639,13 +670,15 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
   }
 
   dp.workgroup_id_offset = workgroup_id_offset_;
-  dp.grid_wgs_x = grid_wgs_x;
-  dp.grid_wgs_y = grid_wgs_y;
-  dp.grid_wgs_z = grid_wgs_z;
-  dp.enable_wg_id_y = AMDHSA_BITS_GET(kd.compute_pgm_rsrc2,
-                                       COMPUTE_PGM_RSRC2_ENABLE_SGPR_WORKGROUP_ID_Y);
-  dp.enable_wg_id_z = AMDHSA_BITS_GET(kd.compute_pgm_rsrc2,
-                                       COMPUTE_PGM_RSRC2_ENABLE_SGPR_WORKGROUP_ID_Z);
+  // For WG ID decomposition, use the dispatch dimensionality (setup field).
+  // A 1D dispatch flattens the entire grid into workgroup_id_x.
+  dp.grid_wgs_x = (num_dims <= 1) ? total_wgs : grid_wgs_x;
+  dp.grid_wgs_y = (num_dims >= 2) ? grid_wgs_y : 1;
+  dp.grid_wgs_z = (num_dims >= 3) ? grid_wgs_z : 1;
+  dp.enable_wg_id_y =
+      AMDHSA_BITS_GET(kd.compute_pgm_rsrc2, COMPUTE_PGM_RSRC2_ENABLE_SGPR_WORKGROUP_ID_Y);
+  dp.enable_wg_id_z =
+      AMDHSA_BITS_GET(kd.compute_pgm_rsrc2, COMPUTE_PGM_RSRC2_ENABLE_SGPR_WORKGROUP_ID_Z);
   dp.completion_signal = pkt.completion_signal.handle;
   dp.host_signal = host_accessible;
   dp.ordered = host_accessible;
@@ -664,12 +697,19 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
     std::string sym = find_kernel_symbol(pkt.kernel_object, host_accessible);
     os << std::format("CP: dispatch \"{}\" entry_pc={:#x} kernarg={:#x}"
                       " wgs={} wfs/wg={} grid=[{},{},{}] wg=[{},{},{}]"
-                      " sgprs={} vgprs={} user_sgprs={} kcp={:#x} signal={:#x}",
+                      " sgprs={} vgprs={} user_sgprs={} kcp={:#x} signal={:#x}"
+                      " setup={} grid_wgs=({},{},{})",
                       sym.empty() ? "?" : sym, entry_pc,
                       reinterpret_cast<uint64_t>(pkt.kernarg_address), total_wgs, wfs_per_wg,
                       pkt.grid_size_x, pkt.grid_size_y, pkt.grid_size_z, pkt.workgroup_size_x,
                       pkt.workgroup_size_y, pkt.workgroup_size_z, dp.sgprs_per_wf, dp.vgprs_per_wf,
-                      dp.num_user_sgprs, dp.kernel_code_properties, dp.completion_signal);
+                      dp.num_user_sgprs, dp.kernel_code_properties, dp.completion_signal, num_dims,
+                      dp.grid_wgs_x, dp.grid_wgs_y, dp.grid_wgs_z);
+    os << std::format("\n[rj log VM] CP: LDS: kd.group_seg={} pkt.group_seg={} dp.group_seg={}"
+                      " kd.private_seg={} pkt.private_seg={}",
+                      kd.group_segment_fixed_size, pkt.group_segment_size,
+                      dp.group_segment_fixed_size, kd.private_segment_fixed_size,
+                      pkt.private_segment_size);
   });
 
   // Process AQL acquire fence: invalidate caches so the kernel sees the
@@ -677,8 +717,10 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
   // On real hardware the CP issues GL1_INV + GL2_INV for SYSTEM/AGENT scope.
   uint32_t acquire_scope = (pkt.header >> HSA_PACKET_HEADER_SCACQUIRE_FENCE_SCOPE) & 0x3;
   if (acquire_scope >= HSA_FENCE_SCOPE_AGENT && !cus_.empty()) {
-    cus_[0]->flush_all();
-    util::Logger::vm("CP: acquire fence scope=", acquire_scope, " → L1+L2 flush+invalidate");
+    for (auto *cu : cus_)
+      cu->flush_all();
+    util::Logger::vm("CP: acquire fence scope=", acquire_scope, " → L1+L2 flush+invalidate (",
+                     cus_.size(), " CUs)");
   }
 
   dispatch_queue_.push_back(std::move(dp));

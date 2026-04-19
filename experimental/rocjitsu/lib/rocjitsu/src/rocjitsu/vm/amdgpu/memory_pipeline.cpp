@@ -48,18 +48,16 @@ void vector_complete(VectorMemState &d, ComputeUnitCore &cu) {
       static thread_local uint64_t lds_dst_trace = 0;
       if (++lds_dst_trace > 80)
         return;
-      os << std::format("BUF->LDS: lds_base={:#x} plb={}", d.lds_base, per_lane_bytes);
-      uint64_t rm = d.lane_mask;
-      int cnt = 0;
-      while (rm && cnt < 4) {
-        uint32_t ln = std::countr_zero(rm);
-        rm &= rm - 1;
+      os << std::format("{} wg[{}] wf[{}] BUF->LDS: lds_base={:#x} plb={}", d.cu_path, d.wg_id,
+                        d.wf_id, d.lds_base, per_lane_bytes);
+      for (uint32_t ln = 0; ln < d.wf_size; ++ln) {
+        if (!(d.lane_mask & (1ULL << ln)))
+          continue;
         uint32_t v = 0;
         if (per_lane_bytes >= 4)
           std::memcpy(&v, &d.response_data[ln * per_lane_bytes], 4);
         os << std::format(" L{}:@{:#x}->lds[{:#x}]={:#x}", ln, d.per_lane_addr[ln],
                           d.lds_base + ln * per_lane_bytes, v);
-        ++cnt;
       }
     });
     return;
@@ -83,7 +81,8 @@ void vector_complete(VectorMemState &d, ComputeUnitCore &cu) {
   if (oob_mask) {
     static uint64_t oob_count = 0;
     if (++oob_count <= 10)
-      util::Logger::vm("OOB zeroing: exec=", std::hex, d.exec_mask, " lane=", d.lane_mask,
+      util::Logger::vm(d.cu_path, " wg[", d.wg_id, "] wf[", d.wf_id,
+                       "] OOB zeroing: exec=", std::hex, d.exec_mask, " lane=", d.lane_mask,
                        " oob=", oob_mask, std::dec, " dst=", d.dst_reg_base, " vgprs=", vgpr_count);
     for (uint32_t lane = 0; lane < d.wf_size; ++lane) {
       if (!(oob_mask & (1ULL << lane)))
@@ -112,16 +111,14 @@ void vector_complete(VectorMemState &d, ComputeUnitCore &cu) {
     static thread_local uint64_t vcomp_trace = 0;
     if (++vcomp_trace > 80)
       return;
-    os << std::format("VMEM complete: dst_v={} esz={} nelm={} stride={}", d.dst_reg_base,
-                      d.elem_size, d.num_elems, stride);
-    uint64_t rm = d.lane_mask;
-    int cnt = 0;
-    while (rm && cnt < 4) {
-      uint32_t ln = std::countr_zero(rm);
-      rm &= rm - 1;
+    os << std::format("{} wg[{}] wf[{}] VMEM complete: dst_v={} esz={} nelm={} stride={}",
+                      d.cu_path, d.wg_id, d.wf_id, d.dst_reg_base, d.elem_size, d.num_elems,
+                      stride);
+    for (uint32_t ln = 0; ln < d.wf_size; ++ln) {
+      if (!(d.lane_mask & (1ULL << ln)))
+        continue;
       uint32_t v0 = cu.read_vgpr(d.dst_reg_base, ln);
       os << std::format(" L{}:@{:#x}={:#x}", ln, d.per_lane_addr[ln], v0);
-      ++cnt;
     }
   });
 }
@@ -340,6 +337,11 @@ void execute_lds_atomic_rmw(VectorMemState &d, Lds *lds) {
 
 void GlobalMemPipeline::initiate_access(Instruction &inst, Wavefront &wf) {
   auto &d = *inst.data_as<VectorMemState>();
+  if (d.cu_path.empty()) {
+    d.cu_path = wf.cu().full_path();
+    d.wg_id = wf.wg_id();
+    d.wf_id = wf.wf_id();
+  }
 
   if (d.atomic_op != AtomicOp::NONE) {
     execute_atomic_rmw(d, l2_, l1_);
@@ -354,24 +356,16 @@ void GlobalMemPipeline::initiate_access(Instruction &inst, Wavefront &wf) {
     // Trace: dump per-lane addresses, hex data, and float values for stores.
     util::Logger::vm([&](auto &os) {
       static thread_local uint64_t store_trace = 0;
-      ++store_trace;
-      // Only log GEMM kernel stores (skip blit kernel noise)
-      if (d.elem_size == 4 && d.num_elems == 2 && d.lane_mask != 0 && store_trace > 40) {
-      } // log it below
-      else if (store_trace > 200)
+      if (++store_trace > 500)
         return;
-      else if (d.elem_size != 4 || d.num_elems != 2)
-        return; // skip non-dwordx2 stores to reduce noise
-      os << std::format("VMEM store: wf={} wg={} esz={} nelm={} pc={:#x} exec={:#x}", wf.wf_id(),
-                        wf.wg_id(), d.elem_size, d.num_elems, d.issue_pc, d.lane_mask);
+      os << std::format("VMEM store: {} wg[{}] wf[{}] esz={} nelm={} pc={:#x} exec={:#x}",
+                        wf.cu().full_path(), wf.wg_id(), wf.wf_id(), d.elem_size, d.num_elems,
+                        d.issue_pc, d.lane_mask);
       uint32_t stride = d.num_elems * d.elem_size;
-      uint64_t rm = d.lane_mask;
-      int cnt = 0;
-      while (rm && cnt < 4) {
-        uint32_t ln = std::countr_zero(rm);
-        rm &= rm - 1;
+      for (uint32_t ln = 0; ln < d.wf_size; ++ln) {
+        if (!(d.lane_mask & (1ULL << ln)))
+          continue;
         uint64_t addr = d.per_lane_addr[ln];
-        // Extract up to num_elems dwords of store data for this lane.
         os << std::format("\n[rj log VM]   L{}:@{:#x} =", ln, addr);
         for (uint32_t e = 0; e < d.num_elems; ++e) {
           uint32_t v = 0;
@@ -381,7 +375,6 @@ void GlobalMemPipeline::initiate_access(Instruction &inst, Wavefront &wf) {
           float fv = std::bit_cast<float>(v);
           os << std::format(" [{:#x}|{:.6g}]", v, fv);
         }
-        ++cnt;
       }
     });
     l1_->store(d.per_lane_addr.data(), d.lane_mask, d.elem_size, d.num_elems, d.store_data.data(),
@@ -393,8 +386,13 @@ void GlobalMemPipeline::complete_access(Instruction &inst, Wavefront &wf) {
   vector_complete(*inst.data_as<VectorMemState>(), wf.cu());
 }
 
-void LocalMemPipeline::initiate_access(Instruction &inst, Wavefront & /*wf*/) {
+void LocalMemPipeline::initiate_access(Instruction &inst, Wavefront &wf) {
   auto &d = *inst.data_as<VectorMemState>();
+  if (d.cu_path.empty()) {
+    d.cu_path = wf.cu().full_path();
+    d.wg_id = wf.wg_id();
+    d.wf_id = wf.wf_id();
+  }
 
   if (d.atomic_op != AtomicOp::NONE) {
     execute_lds_atomic_rmw(d, lds_);
@@ -415,13 +413,12 @@ void LocalMemPipeline::initiate_access(Instruction &inst, Wavefront & /*wf*/) {
       static thread_local uint64_t ds_ld_trace = 0;
       if (++ds_ld_trace > 80)
         return;
-      os << std::format("DS load: esz={} nelm={} ds2={}", d.elem_size, d.num_elems, d.ds2_active);
+      os << std::format("{} wg[{}] wf[{}] DS load: esz={} nelm={} ds2={}", d.cu_path, d.wg_id,
+                        d.wf_id, d.elem_size, d.num_elems, d.ds2_active);
       uint32_t stride = d.num_elems * d.elem_size;
-      uint64_t rm = d.lane_mask;
-      int cnt = 0;
-      while (rm && cnt < 4) {
-        uint32_t ln = std::countr_zero(rm);
-        rm &= rm - 1;
+      for (uint32_t ln = 0; ln < d.wf_size; ++ln) {
+        if (!(d.lane_mask & (1ULL << ln)))
+          continue;
         uint32_t v = 0;
         if (stride >= 4)
           std::memcpy(&v, &d.response_data[ln * stride], 4);
@@ -434,27 +431,33 @@ void LocalMemPipeline::initiate_access(Instruction &inst, Wavefront & /*wf*/) {
           os << std::format(",lds2[{:#x}]={:#x}", static_cast<uint32_t>(d.ds2_per_lane_addr[ln]),
                             v2);
         }
-        ++cnt;
       }
     });
   } else {
-    // Per-lane LDS store trace: log addresses and values for first 4 lanes.
+    // Per-lane LDS store trace: log addresses and values for all lanes.
     util::Logger::vm([&](auto &os) {
       static thread_local uint64_t ds_st_trace = 0;
-      if (++ds_st_trace > 80)
+      bool in_region = false;
+      for (uint32_t ln = 0; ln < d.wf_size && !in_region; ++ln)
+        if ((d.lane_mask & (1ULL << ln)) && d.per_lane_addr[ln] >= 0x2000 &&
+            d.per_lane_addr[ln] < 0x3200)
+          in_region = true;
+      if (!in_region && ++ds_st_trace > 80)
         return;
-      os << std::format("DS store: esz={} nelm={} ds2={}", d.elem_size, d.num_elems, d.ds2_active);
+      os << std::format("{} wg[{}] wf[{}] DS store: esz={} nelm={} ds2={}", d.cu_path, d.wg_id,
+                        d.wf_id, d.elem_size, d.num_elems, d.ds2_active);
       uint32_t stride = d.num_elems * d.elem_size;
-      uint64_t rm = d.lane_mask;
-      int cnt = 0;
-      while (rm && cnt < 4) {
-        uint32_t ln = std::countr_zero(rm);
-        rm &= rm - 1;
-        uint32_t v = 0;
-        if (stride >= 4 && d.store_data.size() >= ln * stride + 4)
-          std::memcpy(&v, &d.store_data[ln * stride], 4);
-        os << std::format(" L{}:lds[{:#x}]<={:#x}", ln, static_cast<uint32_t>(d.per_lane_addr[ln]),
-                          v);
+      for (uint32_t ln = 0; ln < d.wf_size; ++ln) {
+        if (!(d.lane_mask & (1ULL << ln)))
+          continue;
+        os << std::format(" L{}:lds[{:#x}]<=", ln, static_cast<uint32_t>(d.per_lane_addr[ln]));
+        for (uint32_t e = 0; e < d.num_elems; ++e) {
+          uint32_t v = 0;
+          uint32_t off = ln * stride + e * d.elem_size;
+          if (d.elem_size >= 4 && d.store_data.size() >= off + 4)
+            std::memcpy(&v, &d.store_data[off], 4);
+          os << std::format("{}{:#x}", e ? "," : "", v);
+        }
         if (d.ds2_active) {
           uint32_t v2 = 0;
           if (stride >= 4 && d.ds2_store_data.size() >= ln * stride + 4)
@@ -462,7 +465,6 @@ void LocalMemPipeline::initiate_access(Instruction &inst, Wavefront & /*wf*/) {
           os << std::format(",lds2[{:#x}]<={:#x}", static_cast<uint32_t>(d.ds2_per_lane_addr[ln]),
                             v2);
         }
-        ++cnt;
       }
     });
     lds_->vector_store(d.per_lane_addr.data(), d.lane_mask, d.elem_size, d.num_elems,
@@ -499,16 +501,13 @@ void LocalMemPipeline::complete_access(Instruction &inst, Wavefront &wf) {
         return;
       os << std::format("DS read2 complete: dst1_v={} dst2_v={}", d.dst_reg_base,
                         d.ds2_dst_reg_base);
-      uint64_t rm = d.lane_mask;
-      int cnt = 0;
-      while (rm && cnt < 4) {
-        uint32_t ln = std::countr_zero(rm);
-        rm &= rm - 1;
+      for (uint32_t ln = 0; ln < d.wf_size; ++ln) {
+        if (!(d.lane_mask & (1ULL << ln)))
+          continue;
         uint32_t v1 = cu.read_vgpr(d.dst_reg_base, ln);
         uint32_t v2 = cu.read_vgpr(d.ds2_dst_reg_base, ln);
         os << std::format(" L{}:v{}={:#x},v{}={:#x}", ln, d.dst_reg_base, v1, d.ds2_dst_reg_base,
                           v2);
-        ++cnt;
       }
     });
   }
