@@ -1921,6 +1921,1143 @@ mod tests {
         assert!(!reply.ok);
         assert!(reply.error.unwrap().contains("does not exist"));
     }
+
+    // -----------------------------------------------------------------------
+    //  MNIST training E2E tests
+    // -----------------------------------------------------------------------
+
+    const MNIST_IMAGE: &str = "docker.io/rocm/pytorch:rocm6.4_ubuntu24.04_py3.12_pytorch_release_2.6.0";
+
+    fn mnist_exec(cmd: &str, args: &[&str]) -> ExecArgs {
+        ExecArgs {
+            command: cmd.to_string(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            env: vec![],
+        }
+    }
+
+    fn _mnist_exec_with_env(cmd: &str, args: &[&str], env: Vec<SetEnv>) -> ExecArgs {
+        ExecArgs {
+            command: cmd.to_string(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            env,
+        }
+    }
+
+    fn mnist_result_json(accuracy: f64, passed: bool) -> String {
+        format!(
+            r#"{{"status":"success","device":"cuda","cuda_available":true,"epochs":2,"training_time_s":12.34,"test_loss":0.0456,"test_accuracy":{accuracy},"model_parameters":206922,"passed":{passed}}}"#
+        )
+    }
+
+    async fn mnist_daemon_with_mock() -> (
+        InMemoryMirageDaemon,
+        Arc<mirage_container::MockContainerRuntime>,
+    ) {
+        let mock = Arc::new(mirage_container::MockContainerRuntime::default());
+        let daemon = InMemoryMirageDaemon::with_container_runtime(mock.clone());
+
+        daemon
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x-mnist".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
+            .await
+            .unwrap();
+
+        (daemon, mock)
+    }
+
+    async fn boot_mnist_session(
+        daemon: &InMemoryMirageDaemon,
+        mock: &Arc<mirage_container::MockContainerRuntime>,
+    ) -> (String, mirage_container::ContainerHandle) {
+        let boot = daemon
+            .boot_session(boot_session_request(SessionDef {
+                name: "mnist-test".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(boot.ok, "MNIST boot failed: {:?}", boot.error);
+
+        let container_id = boot.container_id.clone().unwrap();
+        let starts = mock.start_requests().await;
+        let handle = mirage_container::ContainerHandle {
+            id: container_id.clone(),
+            name: starts.last().unwrap().name.clone(),
+        };
+        (container_id, handle)
+    }
+
+    #[tokio::test]
+    async fn mnist_profile_creation_with_single_gpu() {
+        let daemon = InMemoryMirageDaemon::new();
+
+        let reply = daemon
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x-mnist".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
+            .await
+            .unwrap();
+        assert!(reply.ok, "profile creation should succeed");
+
+        let profiles = daemon
+            .list_profiles(ListProfilesRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(profiles.profiles.len(), 1);
+        assert_eq!(profiles.profiles[0].name, "mi300x-mnist");
+        assert_eq!(profiles.profiles[0].simulator, "rocjitsu");
+        assert_eq!(profiles.profiles[0].gpu, "MI300X");
+        assert_eq!(profiles.profiles[0].num_gpus, 1);
+        assert_eq!(profiles.profiles[0].num_nodes, 1);
+        assert_eq!(profiles.profiles[0].mode, SimulatorMode::Functional);
+    }
+
+    #[tokio::test]
+    async fn mnist_profile_rejects_unsupported_gpu() {
+        let daemon = InMemoryMirageDaemon::new();
+
+        let reply = daemon
+            .create_profile(create_profile_request(ProfileDef {
+                name: "bad-gpu".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "RTX4090".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
+            .await
+            .unwrap();
+        assert!(!reply.ok, "should reject unsupported GPU");
+    }
+
+    #[tokio::test]
+    async fn mnist_boot_session_starts_container() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+
+        let boot = daemon
+            .boot_session(boot_session_request(SessionDef {
+                name: "mnist-boot".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+            }))
+            .await
+            .unwrap();
+
+        assert!(boot.ok, "boot should succeed: {:?}", boot.error);
+        assert!(boot.container_id.is_some());
+
+        let sessions = daemon
+            .list_sessions(ListSessionsRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(sessions.sessions.len(), 1);
+        assert_eq!(sessions.sessions[0].name.as_deref(), Some("mnist-boot"));
+        assert_eq!(
+            sessions.sessions[0].image.as_deref(),
+            Some(MNIST_IMAGE)
+        );
+
+        let starts = mock.start_requests().await;
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0].container.image, MNIST_IMAGE);
+    }
+
+    #[tokio::test]
+    async fn mnist_boot_rejects_duplicate_session_name() {
+        let (daemon, _mock) = mnist_daemon_with_mock().await;
+
+        let boot1 = daemon
+            .boot_session(boot_session_request(SessionDef {
+                name: "mnist-dup".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(boot1.ok);
+
+        let boot2 = daemon
+            .boot_session(boot_session_request(SessionDef {
+                name: "mnist-dup".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(!boot2.ok, "duplicate session should fail");
+    }
+
+    #[tokio::test]
+    async fn mnist_exec_python_version_check() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+        let (_cid, handle) = boot_mnist_session(&daemon, &mock).await;
+
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 0,
+                stdout: b"Python 3.12.4\n".to_vec(),
+                stderr: vec![],
+            },
+        )
+        .await;
+
+        let reply = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-test",
+                mnist_exec("python", &["-c", "import sys; print(f'Python {sys.version}')"]),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(reply.exit_code, 0);
+        assert!(String::from_utf8_lossy(&reply.stdout).contains("Python"));
+    }
+
+    #[tokio::test]
+    async fn mnist_exec_pytorch_gpu_detection() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+        let (_cid, handle) = boot_mnist_session(&daemon, &mock).await;
+
+        let gpu_report = serde_json::json!({
+            "pytorch_version": "2.6.0",
+            "cuda_available": true,
+            "hip_version": "6.4.0",
+            "gpu_count": 1,
+            "gpu_name": "AMD Instinct MI300X"
+        });
+
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 0,
+                stdout: format!("{}\n", gpu_report).into_bytes(),
+                stderr: vec![],
+            },
+        )
+        .await;
+
+        let reply = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-test",
+                mnist_exec("python", &["-c", "import torch, json; print(json.dumps({'pytorch_version': torch.__version__}))"]),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(reply.exit_code, 0);
+        let stdout = String::from_utf8_lossy(&reply.stdout);
+        let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+        assert_eq!(parsed["cuda_available"], true);
+        assert_eq!(parsed["gpu_count"], 1);
+        assert_eq!(parsed["gpu_name"], "AMD Instinct MI300X");
+    }
+
+    #[tokio::test]
+    async fn mnist_exec_torchvision_check() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+        let (_cid, handle) = boot_mnist_session(&daemon, &mock).await;
+
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 0,
+                stdout: b"torchvision 0.21.0\nMNIST dataset and transforms: OK\n".to_vec(),
+                stderr: vec![],
+            },
+        )
+        .await;
+
+        let reply = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-test",
+                mnist_exec("python", &["-c", "import torchvision; print('OK')"]),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(reply.exit_code, 0);
+        let stdout = String::from_utf8_lossy(&reply.stdout);
+        assert!(stdout.contains("torchvision"));
+    }
+
+    #[tokio::test]
+    async fn mnist_exec_training_succeeds_with_high_accuracy() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+        let (_cid, handle) = boot_mnist_session(&daemon, &mock).await;
+
+        let result_json = mnist_result_json(97.5, true);
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 0,
+                stdout: format!("Training...\n--- RESULT ---\n{result_json}\nMNIST training test passed.\n").into_bytes(),
+                stderr: vec![],
+            },
+        )
+        .await;
+
+        let reply = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-test",
+                mnist_exec("python", &["-c", "# MNIST training code"]),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(reply.exit_code, 0);
+        let stdout = String::from_utf8_lossy(&reply.stdout);
+        assert!(stdout.contains("MNIST training test passed"));
+        assert!(stdout.contains("--- RESULT ---"));
+
+        let result_line = stdout
+            .lines()
+            .find(|l| l.starts_with('{'))
+            .expect("should contain JSON result");
+        let result: serde_json::Value = serde_json::from_str(result_line).unwrap();
+        assert_eq!(result["status"], "success");
+        assert_eq!(result["passed"], true);
+        assert!(result["test_accuracy"].as_f64().unwrap() > 85.0);
+    }
+
+    #[tokio::test]
+    async fn mnist_exec_training_fails_with_low_accuracy() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+        let (_cid, handle) = boot_mnist_session(&daemon, &mock).await;
+
+        let result_json = mnist_result_json(42.0, false);
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 1,
+                stdout: format!("--- RESULT ---\n{result_json}\n").into_bytes(),
+                stderr: b"FAILED: test accuracy 42.0% < 85.0% threshold\n".to_vec(),
+            },
+        )
+        .await;
+
+        let reply = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-test",
+                mnist_exec("python", &["-c", "# training fails"]),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(reply.exit_code, 1);
+        let stderr = String::from_utf8_lossy(&reply.stderr);
+        assert!(stderr.contains("FAILED"));
+        assert!(stderr.contains("42.0%"));
+    }
+
+    #[tokio::test]
+    async fn mnist_full_e2e_boot_train_shutdown() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+
+        // 1. Boot session.
+        let boot = daemon
+            .boot_session(boot_session_request(SessionDef {
+                name: "mnist-e2e".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(boot.ok);
+        let container_id = boot.container_id.unwrap();
+        let starts = mock.start_requests().await;
+        let handle = mirage_container::ContainerHandle {
+            id: container_id,
+            name: starts[0].name.clone(),
+        };
+
+        // 2. Pre-flight: Python version.
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 0,
+                stdout: b"Python 3.12.4\n".to_vec(),
+                stderr: vec![],
+            },
+        )
+        .await;
+        let r = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-e2e",
+                mnist_exec("python", &["--version"]),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.exit_code, 0);
+
+        // 3. Pre-flight: PyTorch + GPU.
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 0,
+                stdout: b"{\"pytorch\": \"2.6.0\", \"cuda\": true, \"gpu\": \"MI300X\"}\n".to_vec(),
+                stderr: vec![],
+            },
+        )
+        .await;
+        let r = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-e2e",
+                mnist_exec("python", &["-c", "import torch; print('ok')"]),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.exit_code, 0);
+
+        // 4. Training run.
+        let result_json = mnist_result_json(98.1, true);
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 0,
+                stdout: format!(
+                    "Device: cuda\nGPU: AMD Instinct MI300X\n\
+                     Epoch 1: loss=0.1234 acc=95.2%\n\
+                     Epoch 2: loss=0.0567 acc=98.1%\n\
+                     --- RESULT ---\n{result_json}\n\
+                     MNIST training test passed.\n"
+                )
+                .into_bytes(),
+                stderr: vec![],
+            },
+        )
+        .await;
+        let r = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-e2e",
+                mnist_exec("python", &["/workspace/mnist_train.py", "--epochs", "2"]),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.exit_code, 0);
+        let stdout = String::from_utf8_lossy(&r.stdout);
+        assert!(stdout.contains("MNIST training test passed"));
+        assert!(stdout.contains("Device: cuda"));
+
+        // 5. Shutdown.
+        let shutdown = daemon
+            .shutdown_session(ShutdownSessionRequest {
+                name: "mnist-e2e".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(shutdown.ok);
+
+        let sessions = daemon
+            .list_sessions(ListSessionsRequest::default())
+            .await
+            .unwrap();
+        assert!(sessions.sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mnist_session_detail_shows_correct_info() {
+        let (daemon, _mock) = mnist_daemon_with_mock().await;
+
+        let boot = daemon
+            .boot_session(boot_session_request(SessionDef {
+                name: "mnist-detail".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(boot.ok);
+
+        let detail = daemon
+            .get_session_detail(GetSessionDetailRequest {
+                name: "mnist-detail".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(detail.name.as_deref(), Some("mnist-detail"));
+        assert_eq!(detail.simulator.as_deref(), Some("rocjitsu"));
+        assert_eq!(detail.image.as_deref(), Some(MNIST_IMAGE));
+        let profile = detail.profile.unwrap();
+        assert_eq!(profile.gpu, "MI300X");
+        assert_eq!(profile.mode, SimulatorMode::Functional);
+    }
+
+    #[tokio::test]
+    async fn mnist_workload_create_single_step() {
+        let daemon = InMemoryMirageDaemon::new();
+        daemon
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x-mnist".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
+            .await
+            .unwrap();
+
+        let reply = daemon
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "mnist-train".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+                startup: None,
+                execs: vec![mnist_exec(
+                    "python",
+                    &["/workspace/mnist_train.py", "--epochs", "2"],
+                )],
+                cleanup: mirage_schema::common::CleanupPolicy::Always,
+            }))
+            .await
+            .unwrap();
+        assert!(reply.ok, "workload create should succeed: {:?}", reply.error);
+
+        let list = daemon
+            .list_workloads(ListWorkloadsRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(list.workloads.len(), 1);
+        assert_eq!(list.workloads[0].name, "mnist-train");
+        assert_eq!(list.workloads[0].profile, "mi300x-mnist");
+        assert_eq!(list.workloads[0].image, MNIST_IMAGE);
+        assert!(!list.workloads[0].has_startup);
+        assert_eq!(list.workloads[0].exec_count, 1);
+    }
+
+    #[tokio::test]
+    async fn mnist_workload_create_multi_step_with_startup() {
+        let daemon = InMemoryMirageDaemon::new();
+        daemon
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x-mnist".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
+            .await
+            .unwrap();
+
+        let reply = daemon
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "mnist-full".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+                startup: Some(mnist_exec("pip", &["install", "torchvision"])),
+                execs: vec![
+                    mnist_exec("python", &["-c", "import torch; assert torch.cuda.is_available()"]),
+                    mnist_exec("python", &["-c", "import torchvision; print('OK')"]),
+                    mnist_exec("python", &["/workspace/mnist_train.py", "--epochs", "2"]),
+                ],
+                cleanup: mirage_schema::common::CleanupPolicy::OnSuccess,
+            }))
+            .await
+            .unwrap();
+        assert!(reply.ok);
+
+        let workload = daemon
+            .get_workload(GetWorkloadRequest {
+                name: "mnist-full".to_string(),
+            })
+            .await
+            .unwrap()
+            .workload
+            .unwrap();
+        assert_eq!(workload.name, "mnist-full");
+        assert!(workload.startup.is_some());
+        assert_eq!(workload.startup.unwrap().command, "pip");
+        assert_eq!(workload.execs.len(), 3);
+        assert_eq!(workload.execs[2].command, "python");
+        assert_eq!(
+            workload.cleanup,
+            mirage_schema::common::CleanupPolicy::OnSuccess
+        );
+    }
+
+    #[tokio::test]
+    async fn mnist_workload_delete_and_recreate() {
+        let daemon = InMemoryMirageDaemon::new();
+        daemon
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x-mnist".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
+            .await
+            .unwrap();
+
+        // Create.
+        let r = daemon
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "mnist-temp".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+                startup: None,
+                execs: vec![mnist_exec("python", &["train.py"])],
+                cleanup: mirage_schema::common::CleanupPolicy::Always,
+            }))
+            .await
+            .unwrap();
+        assert!(r.ok);
+
+        // Delete.
+        let r = daemon
+            .delete_workload(DeleteWorkloadRequest {
+                name: "mnist-temp".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(r.ok);
+        assert!(
+            daemon
+                .list_workloads(ListWorkloadsRequest::default())
+                .await
+                .unwrap()
+                .workloads
+                .is_empty()
+        );
+
+        // Recreate with same name.
+        let r = daemon
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "mnist-temp".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+                startup: None,
+                execs: vec![mnist_exec("python", &["train_v2.py"])],
+                cleanup: mirage_schema::common::CleanupPolicy::Always,
+            }))
+            .await
+            .unwrap();
+        assert!(r.ok, "recreating workload after delete should succeed");
+    }
+
+    #[tokio::test]
+    async fn mnist_exec_with_import_error_returns_nonzero() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+        let (_cid, handle) = boot_mnist_session(&daemon, &mock).await;
+
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 1,
+                stdout: vec![],
+                stderr: b"ModuleNotFoundError: No module named 'torchvision'\n".to_vec(),
+            },
+        )
+        .await;
+
+        let reply = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-test",
+                mnist_exec("python", &["-c", "import torchvision"]),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(reply.exit_code, 1);
+        assert!(String::from_utf8_lossy(&reply.stderr).contains("ModuleNotFoundError"));
+    }
+
+    #[tokio::test]
+    async fn mnist_exec_gpu_oom_returns_nonzero() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+        let (_cid, handle) = boot_mnist_session(&daemon, &mock).await;
+
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 1,
+                stdout: b"Device: cuda\n".to_vec(),
+                stderr: b"RuntimeError: HIP out of memory. Tried to allocate 2.00 GiB\n".to_vec(),
+            },
+        )
+        .await;
+
+        let reply = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-test",
+                mnist_exec("python", &["train.py", "--batch-size", "65536"]),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(reply.exit_code, 1);
+        assert!(String::from_utf8_lossy(&reply.stderr).contains("out of memory"));
+    }
+
+    #[tokio::test]
+    async fn mnist_multiple_sequential_execs() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+        let (_cid, handle) = boot_mnist_session(&daemon, &mock).await;
+
+        let steps: Vec<(&str, Vec<u8>)> = vec![
+            ("python --version", b"Python 3.12.4\n".to_vec()),
+            ("rocminfo", b"ROCk module loaded\n1 agent(s)\n".to_vec()),
+            ("nvidia-smi", b"AMD Instinct MI300X\n".to_vec()),
+            ("python -c 'import torch'", b"torch OK\n".to_vec()),
+            ("python train.py", b"Training complete. Accuracy: 97.5%\n".to_vec()),
+        ];
+
+        for (_i, (_desc, output)) in steps.iter().enumerate() {
+            mock.queue_exec_result(
+                &handle,
+                mirage_container::ExecResult {
+                    exit_code: 0,
+                    stdout: output.clone(),
+                    stderr: vec![],
+                },
+            )
+            .await;
+        }
+
+        for (i, (_desc, expected_output)) in steps.iter().enumerate() {
+            let reply = daemon
+                .exec_in_session(exec_in_session_request(
+                    "mnist-test",
+                    mnist_exec("python", &["-c", &format!("step {i}")]),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(reply.exit_code, 0, "step {i} should succeed");
+            assert_eq!(reply.stdout, *expected_output, "step {i} output mismatch");
+        }
+
+        let exec_requests = mock.exec_requests().await;
+        assert_eq!(exec_requests.len(), 5, "should have 5 exec requests");
+    }
+
+    #[tokio::test]
+    async fn mnist_shutdown_after_failed_training_cleans_up() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+        let (_cid, handle) = boot_mnist_session(&daemon, &mock).await;
+
+        // Training fails.
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 1,
+                stdout: vec![],
+                stderr: b"CUDA error: device-side assert triggered\n".to_vec(),
+            },
+        )
+        .await;
+
+        let reply = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-test",
+                mnist_exec("python", &["train.py"]),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(reply.exit_code, 1);
+
+        // Shutdown should still succeed.
+        let shutdown = daemon
+            .shutdown_session(ShutdownSessionRequest {
+                name: "mnist-test".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(shutdown.ok, "shutdown after failed training should succeed");
+
+        let sessions = daemon
+            .list_sessions(ListSessionsRequest::default())
+            .await
+            .unwrap();
+        assert!(sessions.sessions.is_empty(), "session should be cleaned up");
+    }
+
+    #[tokio::test]
+    async fn mnist_profile_with_multi_gpu() {
+        let daemon = InMemoryMirageDaemon::new();
+
+        let reply = daemon
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x-8gpu".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 8,
+                num_nodes: 1,
+            }))
+            .await
+            .unwrap();
+        assert!(reply.ok);
+
+        let profiles = daemon
+            .list_profiles(ListProfilesRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(profiles.profiles[0].num_gpus, 8);
+    }
+
+    #[tokio::test]
+    async fn mnist_profile_with_mi350x() {
+        let daemon = InMemoryMirageDaemon::new();
+
+        let reply = daemon
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi350x-mnist".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI350X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
+            .await
+            .unwrap();
+        assert!(reply.ok, "MI350X should be a supported GPU");
+    }
+
+    #[tokio::test]
+    async fn mnist_exec_captures_both_stdout_and_stderr() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+        let (_cid, handle) = boot_mnist_session(&daemon, &mock).await;
+
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 0,
+                stdout: b"Epoch 1: loss=0.12 acc=95.2%\nEpoch 2: loss=0.05 acc=98.1%\n".to_vec(),
+                stderr: b"UserWarning: plan_cache is deprecated\n".to_vec(),
+            },
+        )
+        .await;
+
+        let reply = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-test",
+                mnist_exec("python", &["train.py"]),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(reply.exit_code, 0);
+        let stdout = String::from_utf8_lossy(&reply.stdout);
+        let stderr = String::from_utf8_lossy(&reply.stderr);
+        assert!(stdout.contains("Epoch 1"));
+        assert!(stdout.contains("Epoch 2"));
+        assert!(stderr.contains("UserWarning"));
+    }
+
+    #[tokio::test]
+    async fn mnist_container_image_passed_correctly() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+
+        let boot = daemon
+            .boot_session(boot_session_request(SessionDef {
+                name: "mnist-image-check".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(boot.ok);
+
+        let starts = mock.start_requests().await;
+        assert_eq!(starts[0].container.image, MNIST_IMAGE);
+
+        let pulled = mock.pulled_images().await;
+        assert!(
+            pulled.contains(&MNIST_IMAGE.to_string()),
+            "image should have been pulled"
+        );
+    }
+
+    #[tokio::test]
+    async fn mnist_overview_reflects_active_session() {
+        let (daemon, _mock) = mnist_daemon_with_mock().await;
+
+        let overview_before = daemon
+            .get_overview(GetOverviewRequest::default())
+            .await
+            .unwrap();
+        let session_count_before = overview_before.session_count;
+
+        let boot = daemon
+            .boot_session(boot_session_request(SessionDef {
+                name: "mnist-overview".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(boot.ok);
+
+        let overview_after = daemon
+            .get_overview(GetOverviewRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            overview_after.session_count,
+            session_count_before + 1,
+            "session count should increase after boot"
+        );
+    }
+
+    #[tokio::test]
+    async fn mnist_exec_training_result_json_parsing() {
+        let (daemon, mock) = mnist_daemon_with_mock().await;
+        let (_cid, handle) = boot_mnist_session(&daemon, &mock).await;
+
+        let expected_result = serde_json::json!({
+            "status": "success",
+            "device": "cuda",
+            "cuda_available": true,
+            "gpu_name": "AMD Instinct MI300X",
+            "hip_version": "6.4.0",
+            "epochs": 2,
+            "batch_size": 256,
+            "learning_rate": 0.01,
+            "training_time_s": 8.42,
+            "epoch_results": [
+                {"epoch": 1, "train_loss": 0.1234, "train_acc": 95.2},
+                {"epoch": 2, "train_loss": 0.0567, "train_acc": 98.1}
+            ],
+            "test_loss": 0.0456,
+            "test_accuracy": 97.5,
+            "model_parameters": 206922,
+            "passed": true
+        });
+
+        mock.queue_exec_result(
+            &handle,
+            mirage_container::ExecResult {
+                exit_code: 0,
+                stdout: format!(
+                    "Device: cuda\nLoading MNIST...\nTraining...\n--- RESULT ---\n{}\nMNIST training test passed.\n",
+                    serde_json::to_string(&expected_result).unwrap()
+                )
+                .into_bytes(),
+                stderr: vec![],
+            },
+        )
+        .await;
+
+        let reply = daemon
+            .exec_in_session(exec_in_session_request(
+                "mnist-test",
+                mnist_exec("python", &["mnist_train.py"]),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(reply.exit_code, 0);
+        let stdout = String::from_utf8_lossy(&reply.stdout);
+
+        // Extract and parse the JSON result block.
+        let json_str = stdout
+            .lines()
+            .skip_while(|l| !l.contains("--- RESULT ---"))
+            .skip(1)
+            .take_while(|l| !l.contains("MNIST training test"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: serde_json::Value = serde_json::from_str(json_str.trim()).unwrap();
+
+        assert_eq!(parsed["status"], "success");
+        assert_eq!(parsed["device"], "cuda");
+        assert_eq!(parsed["cuda_available"], true);
+        assert_eq!(parsed["epochs"], 2);
+        assert_eq!(parsed["test_accuracy"], 97.5);
+        assert_eq!(parsed["passed"], true);
+        assert_eq!(parsed["model_parameters"], 206922);
+
+        let epoch_results = parsed["epoch_results"].as_array().unwrap();
+        assert_eq!(epoch_results.len(), 2);
+        assert!(epoch_results[1]["train_acc"].as_f64().unwrap() > epoch_results[0]["train_acc"].as_f64().unwrap());
+    }
+
+    #[tokio::test]
+    async fn mnist_exec_on_nonexistent_session_fails() {
+        let (daemon, _mock) = mnist_daemon_with_mock().await;
+
+        let result = daemon
+            .exec_in_session(exec_in_session_request(
+                "no-such-session",
+                mnist_exec("python", &["train.py"]),
+            ))
+            .await;
+
+        assert!(result.is_err(), "exec on missing session should error");
+    }
+
+    #[tokio::test]
+    async fn mnist_double_shutdown_second_fails() {
+        let (daemon, _mock) = mnist_daemon_with_mock().await;
+
+        let boot = daemon
+            .boot_session(boot_session_request(SessionDef {
+                name: "mnist-dbl-shut".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(boot.ok);
+
+        let r1 = daemon
+            .shutdown_session(ShutdownSessionRequest {
+                name: "mnist-dbl-shut".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(r1.ok);
+
+        let r2 = daemon
+            .shutdown_session(ShutdownSessionRequest {
+                name: "mnist-dbl-shut".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(!r2.ok, "second shutdown should fail");
+    }
+
+    #[tokio::test]
+    async fn mnist_workload_accepts_any_valid_image() {
+        let daemon = InMemoryMirageDaemon::new();
+        daemon
+            .create_profile(create_profile_request(ProfileDef {
+                name: "mi300x-mnist".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            }))
+            .await
+            .unwrap();
+
+        let reply = daemon
+            .create_workload(create_workload_request(WorkloadDef {
+                name: "custom-image".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: "ghcr.io/custom/pytorch:latest".to_string(),
+                startup: None,
+                execs: vec![mnist_exec("python", &["train.py"])],
+                cleanup: mirage_schema::common::CleanupPolicy::Always,
+            }))
+            .await
+            .unwrap();
+        assert!(reply.ok, "workload with custom image should succeed");
+
+        let w = daemon
+            .get_workload(GetWorkloadRequest {
+                name: "custom-image".to_string(),
+            })
+            .await
+            .unwrap()
+            .workload
+            .unwrap();
+        assert_eq!(w.image, "ghcr.io/custom/pytorch:latest");
+    }
+
+    #[tokio::test]
+    async fn mnist_concurrent_sessions_independent() {
+        let (daemon, _mock) = mnist_daemon_with_mock().await;
+
+        // Boot two sessions.
+        let boot_a = daemon
+            .boot_session(boot_session_request(SessionDef {
+                name: "mnist-a".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(boot_a.ok);
+
+        let boot_b = daemon
+            .boot_session(boot_session_request(SessionDef {
+                name: "mnist-b".to_string(),
+                profile: "mi300x-mnist".to_string(),
+                image: MNIST_IMAGE.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(boot_b.ok);
+
+        let sessions = daemon
+            .list_sessions(ListSessionsRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(sessions.sessions.len(), 2);
+
+        // Shutdown only one.
+        let shutdown = daemon
+            .shutdown_session(ShutdownSessionRequest {
+                name: "mnist-a".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(shutdown.ok);
+
+        let sessions = daemon
+            .list_sessions(ListSessionsRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(sessions.sessions.len(), 1);
+        assert_eq!(sessions.sessions[0].name.as_deref(), Some("mnist-b"));
+    }
+
+    #[tokio::test]
+    async fn mnist_simulator_listed_with_correct_capabilities() {
+        let daemon = InMemoryMirageDaemon::new();
+
+        let sims = daemon
+            .list_simulators(ListSimulatorsRequest::default())
+            .await
+            .unwrap();
+
+        let rocjitsu = sims
+            .simulators
+            .iter()
+            .find(|s| s.name.as_deref() == Some("rocjitsu"))
+            .expect("rocjitsu should be registered");
+
+        assert!(rocjitsu.version.is_some());
+        assert!(
+            rocjitsu
+                .supported_gpus
+                .iter()
+                .any(|g| g.name == "MI300X"),
+            "MI300X should be supported"
+        );
+        assert!(
+            rocjitsu
+                .supported_gpus
+                .iter()
+                .any(|g| g.name == "MI350X"),
+            "MI350X should be supported"
+        );
+        assert!(
+            rocjitsu
+                .supported_modes
+                .contains(&SimulatorMode::Functional),
+            "functional mode should be supported"
+        );
+    }
 }
 
 /// Find the interceptor shared library, trying the binary's directory and
