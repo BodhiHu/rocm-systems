@@ -30,8 +30,8 @@ import { GetOverviewRequest } from "../generated/mirage/socket/get-overview-requ
 import { GetOverviewReply } from "../generated/mirage/socket/get-overview-reply";
 import { ListSimulatorsRequest } from "../generated/mirage/socket/list-simulators-request";
 import { ListSimulatorsReply } from "../generated/mirage/socket/list-simulators-reply";
-import { GetSimulatorRequest } from "../generated/mirage/socket/get-simulator-request";
-import { GetSimulatorReply } from "../generated/mirage/socket/get-simulator-reply";
+import { ShowSimulatorRequest } from "../generated/mirage/socket/show-simulator-request";
+import { ShowSimulatorReply } from "../generated/mirage/socket/show-simulator-reply";
 import { ListProfilesRequest } from "../generated/mirage/socket/list-profiles-request";
 import { ListProfilesReply } from "../generated/mirage/socket/list-profiles-reply";
 import { CreateProfileRequest } from "../generated/mirage/socket/create-profile-request";
@@ -44,8 +44,8 @@ import { DashboardCreateSessionRequest } from "../generated/mirage/socket/dashbo
 import { DashboardCreateSessionReply } from "../generated/mirage/socket/dashboard-create-session-reply";
 import { DashboardDeleteSessionRequest } from "../generated/mirage/socket/dashboard-delete-session-request";
 import { DashboardDeleteSessionReply } from "../generated/mirage/socket/dashboard-delete-session-reply";
-import { GetSessionDetailRequest } from "../generated/mirage/socket/get-session-detail-request";
-import { GetSessionDetailReply } from "../generated/mirage/socket/get-session-detail-reply";
+import { StatusRequest } from "../generated/mirage/socket/status-request";
+import { StatusReply } from "../generated/mirage/socket/status-reply";
 import { ListRunsRequest } from "../generated/mirage/socket/list-runs-request";
 import { ListRunsReply } from "../generated/mirage/socket/list-runs-reply";
 import { CreateRunRequest } from "../generated/mirage/socket/create-run-request";
@@ -179,10 +179,10 @@ export async function getSimulator(
 ): Promise<SimulatorSummary | null> {
   const body = finish((b) => {
     const n = b.createString(name);
-    return GetSimulatorRequest.createGetSimulatorRequest(b, n);
+    return ShowSimulatorRequest.createShowSimulatorRequest(b, n);
   });
-  const ab = await rpc("GetSimulator", body);
-  const r = GetSimulatorReply.getRootAsGetSimulatorReply(buf(ab));
+  const ab = await rpc("ShowSimulator", body);
+  const r = ShowSimulatorReply.getRootAsShowSimulatorReply(buf(ab));
   const s = r.simulator();
   if (!s) return null;
   const gpus = [];
@@ -335,11 +335,11 @@ export async function getSessionDetail(
 ): Promise<SessionDetail | null> {
   const body = finish((b) => {
     const n = b.createString(name);
-    return GetSessionDetailRequest.createGetSessionDetailRequest(b, n);
+    return StatusRequest.createStatusRequest(b, n);
   });
   try {
-    const ab = await rpc("GetSessionDetail", body);
-    const r = GetSessionDetailReply.getRootAsGetSessionDetailReply(buf(ab));
+    const ab = await rpc("Status", body);
+    const r = StatusReply.getRootAsStatusReply(buf(ab));
     const prof = r.profile();
     return {
       name: r.name() ?? "",

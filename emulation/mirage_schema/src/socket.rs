@@ -6,16 +6,17 @@
 
 pub use crate::ctl::{SessionSummary, SimulatorSummary, WorkloadSummary};
 pub use crate::ctl::daemon::{
-    AttachInput, AttachOutput, AttachReply, AttachRequest, BootSessionReply, BootSessionRequest,
+    AttachInput, AttachOutput, AttachReply, AttachRequest, BootReply, BootRequest,
     CreateProfileReply, CreateProfileRequest, CreateSessionReply, CreateSessionRequest,
     CreateWorkloadReply, CreateWorkloadRequest, DeleteProfileReply, DeleteProfileRequest,
     DeleteSessionReply, DeleteSessionRequest, DeleteWorkloadReply, DeleteWorkloadRequest,
-    ExecInSessionReply, ExecInSessionRequest, GetOverviewReply, GetOverviewRequest,
-    GetSessionDetailReply, GetSessionDetailRequest, GetSimulatorReply, GetSimulatorRequest,
-    GetWorkloadReply, GetWorkloadRequest, HealthReply, HealthRequest, ListProfilesReply,
+    ExecReply, ExecRequest, GetOverviewReply, GetOverviewRequest,
+    HealthReply, HealthRequest, ListProfilesReply,
     ListProfilesRequest, ListSessionsReply, ListSessionsRequest, ListSimulatorsReply,
     ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest, RegisterSimReply,
-    RegisterSimRequest, ShutdownSessionReply, ShutdownSessionRequest, TimeReply, TimeRequest,
+    RegisterSimRequest, ShowSimulatorReply, ShowSimulatorRequest,
+    ShowWorkloadReply, ShowWorkloadRequest, ShutdownReply, ShutdownRequest,
+    StatusReply, StatusRequest, TimeReply, TimeRequest,
 };
 
 /// Backward-compatible alias for the pre-refactor session-creation request.

@@ -22,34 +22,35 @@ pub use crate::ctl::{
     MirageDaemonError, MirageDaemonResult, SessionSummary, SimulatorSummary, WorkloadSummary,
 };
 pub use crate::ctl::daemon::{
-    AttachInput, AttachOutput, AttachReply, AttachRequest, BootSessionReply, BootSessionRequest,
+    AttachInput, AttachOutput, AttachReply, AttachRequest, BootReply, BootRequest,
     CreateProfileReply, CreateProfileRequest, CreateSessionReply, CreateSessionRequest,
     CreateWorkloadReply, CreateWorkloadRequest, DeleteProfileReply, DeleteProfileRequest,
     DeleteSessionReply, DeleteSessionRequest, DeleteWorkloadReply, DeleteWorkloadRequest,
-    ExecInSessionReply, ExecInSessionRequest, GetOverviewReply, GetOverviewRequest,
-    GetSessionDetailReply, GetSessionDetailRequest, GetSimulatorReply, GetSimulatorRequest,
-    GetWorkloadReply, GetWorkloadRequest, HealthReply, HealthRequest, ListProfilesReply,
+    ExecReply, ExecRequest, GetOverviewReply, GetOverviewRequest,
+    HealthReply, HealthRequest, ListProfilesReply,
     ListProfilesRequest, ListSessionsReply, ListSessionsRequest, ListSimulatorsReply,
     ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest, RegisterSimReply,
-    RegisterSimRequest, ShutdownSessionReply, ShutdownSessionRequest, TimeReply, TimeRequest,
+    RegisterSimRequest, ShowSimulatorReply, ShowSimulatorRequest,
+    ShowWorkloadReply, ShowWorkloadRequest, ShutdownReply, ShutdownRequest,
+    StatusReply, StatusRequest, TimeReply, TimeRequest,
 };
 pub use crate::ctl::daemon::{
     DaemonCli as MirageDaemonCli, DaemonCommand as MirageDaemonCommand,
     DaemonImpl as MirageDaemon, ImplAttach as MirageDaemonAttach,
-    ImplBootSession as MirageDaemonBoot, ImplCreateProfile as MirageDaemonCreateProfile,
+    ImplBoot as MirageDaemonBoot, ImplCreateProfile as MirageDaemonCreateProfile,
     ImplCreateSession as MirageDaemonCreateSession,
     ImplCreateWorkload as MirageDaemonCreateWorkload,
     ImplDeleteProfile as MirageDaemonDeleteProfile,
     ImplDeleteSession as MirageDaemonDeleteSession,
     ImplDeleteWorkload as MirageDaemonDeleteWorkload,
-    ImplExecInSession as MirageDaemonExec, ImplGetOverview as MirageDaemonOverview,
-    ImplGetSessionDetail as MirageDaemonGetSessionDetail,
-    ImplGetSimulator as MirageDaemonGetSimulator, ImplGetWorkload as MirageDaemonGetWorkload,
+    ImplExec as MirageDaemonExec, ImplGetOverview as MirageDaemonOverview,
+    ImplStatus as MirageDaemonStatus,
+    ImplShowSimulator as MirageDaemonShowSimulator, ImplShowWorkload as MirageDaemonShowWorkload,
     ImplHealth as MirageDaemonHealth, ImplListProfiles as MirageDaemonListProfiles,
     ImplListSessions as MirageDaemonListSessions,
     ImplListSimulators as MirageDaemonListSimulators,
     ImplListWorkloads as MirageDaemonListWorkloads,
-    ImplRegisterSim as MirageDaemonRegistration, ImplShutdownSession as MirageDaemonShutdown,
+    ImplRegisterSim as MirageDaemonRegistration, ImplShutdown as MirageDaemonShutdown,
     ImplTime as MirageDaemonTime,
 };
 
@@ -501,12 +502,12 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl MirageDaemonGetSimulator for FixedDaemon {
-        async fn get_simulator(
+    impl MirageDaemonShowSimulator for FixedDaemon {
+        async fn show_simulator(
             &self,
-            request: GetSimulatorRequest,
-        ) -> MirageDaemonResult<GetSimulatorReply> {
-            Ok(GetSimulatorReply {
+            request: ShowSimulatorRequest,
+        ) -> MirageDaemonResult<ShowSimulatorReply> {
+            Ok(ShowSimulatorReply {
                 simulator: (request.name == "rocjitsu").then(|| SimulatorSummary {
                     name: Some("rocjitsu".to_string()),
                     version: Some("1.0.0".to_string()),
@@ -593,12 +594,12 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl MirageDaemonGetSessionDetail for FixedDaemon {
-        async fn get_session_detail(
+    impl MirageDaemonStatus for FixedDaemon {
+        async fn status(
             &self,
-            _request: GetSessionDetailRequest,
-        ) -> MirageDaemonResult<GetSessionDetailReply> {
-            Ok(GetSessionDetailReply {
+            _request: StatusRequest,
+        ) -> MirageDaemonResult<StatusReply> {
+            Ok(StatusReply {
                 name: None,
                 profile: None,
                 simulator: None,
@@ -616,11 +617,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MirageDaemonBoot for FixedDaemon {
-        async fn boot_session(
+        async fn boot(
             &self,
-            _request: BootSessionRequest,
-        ) -> MirageDaemonResult<BootSessionReply> {
-            Ok(BootSessionReply {
+            _request: BootRequest,
+        ) -> MirageDaemonResult<BootReply> {
+            Ok(BootReply {
                 ok: true,
                 error: None,
                 container_id: Some("mock-container-id".to_string()),
@@ -631,11 +632,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MirageDaemonExec for FixedDaemon {
-        async fn exec_in_session(
+        async fn exec(
             &self,
-            _request: crate::ctl::daemon::ExecInSessionRequest,
-        ) -> MirageDaemonResult<crate::ctl::daemon::ExecInSessionReply> {
-            Ok(crate::ctl::daemon::ExecInSessionReply {
+            _request: crate::ctl::daemon::ExecRequest,
+        ) -> MirageDaemonResult<crate::ctl::daemon::ExecReply> {
+            Ok(crate::ctl::daemon::ExecReply {
                 exit_code: 0,
                 stdout: b"ok\n".to_vec(),
                 stderr: vec![],
@@ -645,11 +646,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MirageDaemonShutdown for FixedDaemon {
-        async fn shutdown_session(
+        async fn shutdown(
             &self,
-            _request: ShutdownSessionRequest,
-        ) -> MirageDaemonResult<ShutdownSessionReply> {
-            Ok(ShutdownSessionReply {
+            _request: ShutdownRequest,
+        ) -> MirageDaemonResult<ShutdownReply> {
+            Ok(ShutdownReply {
                 ok: true,
                 error: None,
             })
@@ -680,12 +681,12 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl MirageDaemonGetWorkload for FixedDaemon {
-        async fn get_workload(
+    impl MirageDaemonShowWorkload for FixedDaemon {
+        async fn show_workload(
             &self,
-            _request: GetWorkloadRequest,
-        ) -> MirageDaemonResult<GetWorkloadReply> {
-            Ok(GetWorkloadReply { workload: None })
+            _request: ShowWorkloadRequest,
+        ) -> MirageDaemonResult<ShowWorkloadReply> {
+            Ok(ShowWorkloadReply { workload: None })
         }
     }
 

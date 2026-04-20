@@ -221,7 +221,7 @@ pub mod daemon {
     };
 
     /// Fetch the summary for one simulator by name.
-    get_simulator({
+    show_simulator({
         /// Machine-readable simulator name.
         name: String,
     }) -> {
@@ -308,7 +308,7 @@ pub mod daemon {
     };
 
     /// Fetch the full dashboard detail view for one session.
-    get_session_detail({
+    status({
         /// Session name to inspect.
         name: String,
     }) -> {
@@ -337,7 +337,7 @@ pub mod daemon {
     };
 
     /// Create a session record and boot its backing containers.
-    boot_session({
+    boot({
         /// Unique session name.
         name: String,
         /// Profile used for the session.
@@ -356,7 +356,7 @@ pub mod daemon {
     };
 
     /// Run one command inside an already booted session.
-    exec_in_session({
+    exec({
         /// Session that should execute the command.
         session_name: String,
         /// Program and arguments to run inside the session container.
@@ -375,7 +375,7 @@ pub mod daemon {
     };
 
     /// Stop a booted session and clean up its backing resources.
-    shutdown_session({
+    shutdown({
         /// Session name to shut down.
         name: String,
     }) -> {
@@ -415,7 +415,7 @@ pub mod daemon {
     };
 
     /// Fetch one stored workload definition by name.
-    get_workload({
+    show_workload({
         /// Workload name to fetch.
         name: String,
     }) -> {

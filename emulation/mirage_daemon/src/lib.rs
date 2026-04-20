@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use mirage_container::{
-    ContainerHandle, ContainerRuntime, ExecRequest, StartContainerRequest,
+    ContainerHandle, ContainerRuntime, ExecRequest as ContainerExecRequest, StartContainerRequest,
 };
 use mirage_schema::common::{
     ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SessionDef, SetEnv, SimulatorMode, Time,
@@ -19,25 +19,25 @@ use mirage_schema::container::{BindMount, ContainerDef};
 use mirage_schema::daemon::{
     MirageDaemonAttach, MirageDaemonBoot, MirageDaemonCreateProfile, MirageDaemonCreateSession,
     MirageDaemonCreateWorkload, MirageDaemonDeleteProfile, MirageDaemonDeleteSession,
-    MirageDaemonDeleteWorkload, MirageDaemonExec, MirageDaemonGetSessionDetail,
-    MirageDaemonGetSimulator, MirageDaemonGetWorkload, MirageDaemonHealth,
+    MirageDaemonDeleteWorkload, MirageDaemonExec, MirageDaemonStatus,
+    MirageDaemonShowSimulator, MirageDaemonShowWorkload, MirageDaemonHealth,
     MirageDaemonListProfiles, MirageDaemonListSessions, MirageDaemonListSimulators,
     MirageDaemonListWorkloads, MirageDaemonOverview, MirageDaemonRegistration,
     MirageDaemonResult, MirageDaemonShutdown, MirageDaemonTime,
 };
 use mirage_schema::simulator::SimulatorInfo;
 use mirage_schema::socket::{
-    AttachInput, AttachOutput, AttachReply, AttachRequest, BootSessionReply, BootSessionRequest,
+    AttachInput, AttachOutput, AttachReply, AttachRequest, BootReply, BootRequest,
     CreateProfileReply, CreateProfileRequest, CreateSessionReply, CreateSessionRequest,
     CreateWorkloadReply, CreateWorkloadRequest, DeleteProfileReply, DeleteProfileRequest,
     DeleteSessionReply, DeleteSessionRequest, DeleteWorkloadReply, DeleteWorkloadRequest,
-    ExecInSessionReply, ExecInSessionRequest, GetOverviewReply, GetOverviewRequest,
-    GetSessionDetailReply, GetSessionDetailRequest, GetSimulatorReply, GetSimulatorRequest,
-    GetWorkloadReply, GetWorkloadRequest, HealthReply, HealthRequest, ListProfilesReply,
+    ExecReply, ExecRequest, GetOverviewReply, GetOverviewRequest,
+    HealthReply, HealthRequest, ListProfilesReply,
     ListProfilesRequest, ListSessionsReply, ListSessionsRequest, ListSimulatorsReply,
     ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest, RegisterSimReply,
-    RegisterSimRequest, SessionSummary, ShutdownSessionReply, ShutdownSessionRequest,
-    SimulatorSummary, TimeReply, TimeRequest, WorkloadSummary,
+    RegisterSimRequest, SessionSummary, ShowSimulatorReply, ShowSimulatorRequest,
+    ShowWorkloadReply, ShowWorkloadRequest, ShutdownReply, ShutdownRequest,
+    SimulatorSummary, StatusReply, StatusRequest, TimeReply, TimeRequest, WorkloadSummary,
 };
 
 pub struct InMemoryMirageDaemon {
@@ -68,7 +68,7 @@ struct State {
 #[derive(Debug, Clone)]
 struct SessionRecord {
     session: SessionDef,
-    detail: GetSessionDetailReply,
+    detail: StatusReply,
     /// Container handles for all nodes (head node first, then workers).
     container_handles: Vec<ContainerHandle>,
     /// Docker network name for multi-node sessions.
@@ -370,17 +370,17 @@ impl MirageDaemonListSimulators for InMemoryMirageDaemon {
 }
 
 #[async_trait]
-impl MirageDaemonGetSimulator for InMemoryMirageDaemon {
-    async fn get_simulator(
+impl MirageDaemonShowSimulator for InMemoryMirageDaemon {
+    async fn show_simulator(
         &self,
-        request: GetSimulatorRequest,
-    ) -> MirageDaemonResult<GetSimulatorReply> {
+        request: ShowSimulatorRequest,
+    ) -> MirageDaemonResult<ShowSimulatorReply> {
         let state = self.state.read().await;
         let simulator = state
             .simulators
             .get(&request.name)
             .map(|info| Self::simulator_summary(&state, info));
-        Ok(GetSimulatorReply { simulator })
+        Ok(ShowSimulatorReply { simulator })
     }
 }
 
@@ -581,7 +581,7 @@ impl MirageDaemonCreateSession for InMemoryMirageDaemon {
             });
         }
 
-        let detail = GetSessionDetailReply {
+        let detail = StatusReply {
             name: Some(session.name.clone()),
             profile: Some(profile.clone()),
             simulator: Some(profile.simulator.clone()),
@@ -636,11 +636,11 @@ impl MirageDaemonDeleteSession for InMemoryMirageDaemon {
 }
 
 #[async_trait]
-impl MirageDaemonGetSessionDetail for InMemoryMirageDaemon {
-    async fn get_session_detail(
+impl MirageDaemonStatus for InMemoryMirageDaemon {
+    async fn status(
         &self,
-        request: GetSessionDetailRequest,
-    ) -> MirageDaemonResult<GetSessionDetailReply> {
+        request: StatusRequest,
+    ) -> MirageDaemonResult<StatusReply> {
         let state = self.state.read().await;
         let detail = state
             .sessions
@@ -661,13 +661,13 @@ const MIRAGE_HEAD_PORT: u16 = 29500;
 
 #[async_trait]
 impl MirageDaemonBoot for InMemoryMirageDaemon {
-    async fn boot_session(
+    async fn boot(
         &self,
-        request: BootSessionRequest,
-    ) -> MirageDaemonResult<BootSessionReply> {
+        request: BootRequest,
+    ) -> MirageDaemonResult<BootReply> {
         let session = Self::session_from_parts(request.name, request.profile, request.image);
         if session.name.trim().is_empty() {
-            return Ok(BootSessionReply {
+            return Ok(BootReply {
                 ok: false,
                 error: Some("session name must not be empty".to_string()),
                 container_id: None,
@@ -677,7 +677,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
 
         let mut state = self.state.write().await;
         if state.sessions.contains_key(&session.name) {
-            return Ok(BootSessionReply {
+            return Ok(BootReply {
                 ok: false,
                 error: Some(format!("session '{}' already exists", session.name)),
                 container_id: None,
@@ -686,7 +686,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
         }
 
         let Some(profile) = state.profiles.get(&session.profile).cloned() else {
-            return Ok(BootSessionReply {
+            return Ok(BootReply {
                 ok: false,
                 error: Some(format!("profile '{}' does not exist", session.profile)),
                 container_id: None,
@@ -695,7 +695,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
         };
 
         if !state.simulators.contains_key(&profile.simulator) {
-            return Ok(BootSessionReply {
+            return Ok(BootReply {
                 ok: false,
                 error: Some(format!(
                     "simulator '{}' is not registered",
@@ -707,7 +707,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
         }
 
         let Some(runtime) = &self.container_runtime else {
-            return Ok(BootSessionReply {
+            return Ok(BootReply {
                 ok: false,
                 error: Some("no container runtime configured".to_string()),
                 container_id: None,
@@ -739,7 +739,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                     let listener = match server.bind() {
                         Ok(l) => l,
                         Err(e) => {
-                            return Ok(BootSessionReply {
+                            return Ok(BootReply {
                                 ok: false,
                                 error: Some(format!("failed to bind emulator socket: {e}")),
                                 container_id: None,
@@ -830,7 +830,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
         let network_name = if multi_node {
             let name = format!("mirage-{}", session.name);
             if let Err(err) = runtime.create_network(&name, None).await {
-                return Ok(BootSessionReply {
+                return Ok(BootReply {
                     ok: false,
                     error: Some(format!("failed to create network: {err}")),
                     container_id: None,
@@ -909,7 +909,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
                     if let Some(ref net) = network_name {
                         let _ = runtime.remove_network(net, None).await;
                     }
-                    return Ok(BootSessionReply {
+                    return Ok(BootReply {
                         ok: false,
                         error: Some(format!("failed to start container: {err}")),
                         container_id: None,
@@ -924,7 +924,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
 
         let head_container_id = container_ids.first().cloned();
 
-        let detail = GetSessionDetailReply {
+        let detail = StatusReply {
             name: Some(session.name.clone()),
             profile: Some(profile.clone()),
             simulator: Some(profile.simulator.clone()),
@@ -950,7 +950,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
             },
         );
 
-        Ok(BootSessionReply {
+        Ok(BootReply {
             ok: true,
             error: None,
             container_id: head_container_id,
@@ -961,10 +961,10 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
 
 #[async_trait]
 impl MirageDaemonExec for InMemoryMirageDaemon {
-    async fn exec_in_session(
+    async fn exec(
         &self,
-        request: ExecInSessionRequest,
-    ) -> MirageDaemonResult<ExecInSessionReply> {
+        request: ExecRequest,
+    ) -> MirageDaemonResult<ExecReply> {
         let state = self.state.read().await;
         let Some(record) = state.sessions.get(&request.session_name) else {
             return Err(mirage_schema::daemon::MirageDaemonError::Remote(format!(
@@ -986,7 +986,7 @@ impl MirageDaemonExec for InMemoryMirageDaemon {
             ));
         };
 
-        let exec_request = ExecRequest {
+        let exec_request = ContainerExecRequest {
             container: handle.clone(),
             exec: {
                 let mut exec = Self::exec_from_command(request.command)?;
@@ -1009,7 +1009,7 @@ impl MirageDaemonExec for InMemoryMirageDaemon {
         };
 
         match runtime.exec(exec_request, None).await {
-            Ok(result) => Ok(ExecInSessionReply {
+            Ok(result) => Ok(ExecReply {
                 exit_code: result.exit_code,
                 stdout: result.stdout,
                 stderr: result.stderr,
@@ -1023,13 +1023,13 @@ impl MirageDaemonExec for InMemoryMirageDaemon {
 
 #[async_trait]
 impl MirageDaemonShutdown for InMemoryMirageDaemon {
-    async fn shutdown_session(
+    async fn shutdown(
         &self,
-        request: ShutdownSessionRequest,
-    ) -> MirageDaemonResult<ShutdownSessionReply> {
+        request: ShutdownRequest,
+    ) -> MirageDaemonResult<ShutdownReply> {
         let mut state = self.state.write().await;
         let Some(record) = state.sessions.remove(&request.name) else {
-            return Ok(ShutdownSessionReply {
+            return Ok(ShutdownReply {
                 ok: false,
                 error: Some(format!("session '{}' does not exist", request.name)),
             });
@@ -1047,7 +1047,7 @@ impl MirageDaemonShutdown for InMemoryMirageDaemon {
             }
         }
 
-        Ok(ShutdownSessionReply {
+        Ok(ShutdownReply {
             ok: true,
             error: None,
         })
@@ -1125,14 +1125,14 @@ impl MirageDaemonListWorkloads for InMemoryMirageDaemon {
 }
 
 #[async_trait]
-impl MirageDaemonGetWorkload for InMemoryMirageDaemon {
-    async fn get_workload(
+impl MirageDaemonShowWorkload for InMemoryMirageDaemon {
+    async fn show_workload(
         &self,
-        request: GetWorkloadRequest,
-    ) -> MirageDaemonResult<GetWorkloadReply> {
+        request: ShowWorkloadRequest,
+    ) -> MirageDaemonResult<ShowWorkloadReply> {
         let state = self.state.read().await;
         let workload = state.workloads.get(&request.name).cloned();
-        Ok(GetWorkloadReply { workload })
+        Ok(ShowWorkloadReply { workload })
     }
 }
 
@@ -1180,18 +1180,18 @@ mod tests {
         }
     }
 
-    fn boot_session_request(session: SessionDef) -> BootSessionRequest {
-        BootSessionRequest {
+    fn boot_request(session: SessionDef) -> BootRequest {
+        BootRequest {
             name: session.name,
             profile: session.profile,
             image: session.image,
         }
     }
 
-    fn exec_in_session_request(session_name: impl Into<String>, exec: ExecArgs) -> ExecInSessionRequest {
+    fn exec_request(session_name: impl Into<String>, exec: ExecArgs) -> ExecRequest {
         let mut command = vec![exec.command];
         command.extend(exec.args);
-        ExecInSessionRequest {
+        ExecRequest {
             session_name: session_name.into(),
             command,
         }
@@ -1307,7 +1307,7 @@ mod tests {
         let (daemon, mock) = daemon_with_mock_runtime().await;
 
         let reply = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "vllm-test".to_string(),
                 profile: "mi300x".to_string(),
                 image: "ghcr.io/rocm/vllm:latest".to_string(),
@@ -1338,7 +1338,7 @@ mod tests {
         let (daemon, _mock) = daemon_with_mock_runtime().await;
 
         let reply = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "test".to_string(),
                 profile: "nonexistent".to_string(),
                 image: "img:latest".to_string(),
@@ -1356,7 +1356,7 @@ mod tests {
 
         // Boot first.
         let boot = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "exec-test".to_string(),
                 profile: "mi300x".to_string(),
                 image: "img:latest".to_string(),
@@ -1383,7 +1383,7 @@ mod tests {
 
         // Exec.
         let reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "exec-test",
                 ExecArgs {
                     command: "python".to_string(),
@@ -1406,7 +1406,7 @@ mod tests {
         let (daemon, _mock) = daemon_with_mock_runtime().await;
 
         let result = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "nonexistent",
                 ExecArgs {
                     command: "echo".to_string(),
@@ -1425,7 +1425,7 @@ mod tests {
 
         // Boot.
         let boot = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "shutdown-test".to_string(),
                 profile: "mi300x".to_string(),
                 image: "img:latest".to_string(),
@@ -1443,7 +1443,7 @@ mod tests {
 
         // Shutdown.
         let reply = daemon
-            .shutdown_session(ShutdownSessionRequest {
+            .shutdown(ShutdownRequest {
                 name: "shutdown-test".to_string(),
             })
             .await
@@ -1463,7 +1463,7 @@ mod tests {
         let (daemon, _mock) = daemon_with_mock_runtime().await;
 
         let reply = daemon
-            .shutdown_session(ShutdownSessionRequest {
+            .shutdown(ShutdownRequest {
                 name: "nonexistent".to_string(),
             })
             .await
@@ -1477,7 +1477,7 @@ mod tests {
 
         // 1. Boot a vLLM session.
         let boot = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "vllm-e2e".to_string(),
                 profile: "mi300x".to_string(),
                 image: "ghcr.io/rocm/vllm:latest".to_string(),
@@ -1504,7 +1504,7 @@ mod tests {
         .await;
 
         let exec_reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "vllm-e2e",
                 ExecArgs {
                     command: "python".to_string(),
@@ -1522,7 +1522,7 @@ mod tests {
 
         // 3. Shutdown.
         let shutdown = daemon
-            .shutdown_session(ShutdownSessionRequest {
+            .shutdown(ShutdownRequest {
                 name: "vllm-e2e".to_string(),
             })
             .await
@@ -1564,7 +1564,7 @@ mod tests {
         let (daemon, mock) = daemon_with_multinode_profile().await;
 
         let reply = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "multi-test".to_string(),
                 profile: "mi300x-2node".to_string(),
                 image: "ghcr.io/rocm/vllm:latest".to_string(),
@@ -1647,7 +1647,7 @@ mod tests {
         let (daemon, mock) = daemon_with_multinode_profile().await;
 
         let boot = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "multi-shutdown".to_string(),
                 profile: "mi300x-2node".to_string(),
                 image: "img:latest".to_string(),
@@ -1657,7 +1657,7 @@ mod tests {
         assert!(boot.ok);
 
         let shutdown = daemon
-            .shutdown_session(ShutdownSessionRequest {
+            .shutdown(ShutdownRequest {
                 name: "multi-shutdown".to_string(),
             })
             .await
@@ -1854,7 +1854,7 @@ mod tests {
             .unwrap();
 
         let reply = daemon
-            .get_workload(GetWorkloadRequest {
+            .show_workload(ShowWorkloadRequest {
                 name: "showme".to_string(),
             })
             .await
@@ -1868,7 +1868,7 @@ mod tests {
 
         // Non-existent workload returns None.
         let reply = daemon
-            .get_workload(GetWorkloadRequest {
+            .show_workload(ShowWorkloadRequest {
                 name: "nope".to_string(),
             })
             .await
