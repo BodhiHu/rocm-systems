@@ -1886,7 +1886,7 @@ mod tests {
         mock: &Arc<mirage_container::MockContainerRuntime>,
     ) -> (String, mirage_container::ContainerHandle) {
         let boot = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "mnist-test".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
@@ -1957,7 +1957,7 @@ mod tests {
         let (daemon, mock) = mnist_daemon_with_mock().await;
 
         let boot = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "mnist-boot".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
@@ -1989,7 +1989,7 @@ mod tests {
         let (daemon, _mock) = mnist_daemon_with_mock().await;
 
         let boot1 = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "mnist-dup".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
@@ -1999,7 +1999,7 @@ mod tests {
         assert!(boot1.ok);
 
         let boot2 = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "mnist-dup".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
@@ -2025,7 +2025,7 @@ mod tests {
         .await;
 
         let reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-test",
                 mnist_exec("python", &["-c", "import sys; print(f'Python {sys.version}')"]),
             ))
@@ -2060,7 +2060,7 @@ mod tests {
         .await;
 
         let reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-test",
                 mnist_exec("python", &["-c", "import torch, json; print(json.dumps({'pytorch_version': torch.__version__}))"]),
             ))
@@ -2091,7 +2091,7 @@ mod tests {
         .await;
 
         let reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-test",
                 mnist_exec("python", &["-c", "import torchvision; print('OK')"]),
             ))
@@ -2120,7 +2120,7 @@ mod tests {
         .await;
 
         let reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-test",
                 mnist_exec("python", &["-c", "# MNIST training code"]),
             ))
@@ -2159,7 +2159,7 @@ mod tests {
         .await;
 
         let reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-test",
                 mnist_exec("python", &["-c", "# training fails"]),
             ))
@@ -2178,7 +2178,7 @@ mod tests {
 
         // 1. Boot session.
         let boot = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "mnist-e2e".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
@@ -2204,7 +2204,7 @@ mod tests {
         )
         .await;
         let r = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-e2e",
                 mnist_exec("python", &["--version"]),
             ))
@@ -2223,7 +2223,7 @@ mod tests {
         )
         .await;
         let r = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-e2e",
                 mnist_exec("python", &["-c", "import torch; print('ok')"]),
             ))
@@ -2250,7 +2250,7 @@ mod tests {
         )
         .await;
         let r = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-e2e",
                 mnist_exec("python", &["/workspace/mnist_train.py", "--epochs", "2"]),
             ))
@@ -2263,7 +2263,7 @@ mod tests {
 
         // 5. Shutdown.
         let shutdown = daemon
-            .shutdown_session(ShutdownSessionRequest {
+            .shutdown(ShutdownRequest {
                 name: "mnist-e2e".to_string(),
             })
             .await
@@ -2282,7 +2282,7 @@ mod tests {
         let (daemon, _mock) = mnist_daemon_with_mock().await;
 
         let boot = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "mnist-detail".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
@@ -2292,7 +2292,7 @@ mod tests {
         assert!(boot.ok);
 
         let detail = daemon
-            .get_session_detail(GetSessionDetailRequest {
+            .status(StatusRequest {
                 name: "mnist-detail".to_string(),
             })
             .await
@@ -2382,7 +2382,7 @@ mod tests {
         assert!(reply.ok);
 
         let workload = daemon
-            .get_workload(GetWorkloadRequest {
+            .show_workload(ShowWorkloadRequest {
                 name: "mnist-full".to_string(),
             })
             .await
@@ -2477,7 +2477,7 @@ mod tests {
         .await;
 
         let reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-test",
                 mnist_exec("python", &["-c", "import torchvision"]),
             ))
@@ -2504,7 +2504,7 @@ mod tests {
         .await;
 
         let reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-test",
                 mnist_exec("python", &["train.py", "--batch-size", "65536"]),
             ))
@@ -2542,7 +2542,7 @@ mod tests {
 
         for (i, (_desc, expected_output)) in steps.iter().enumerate() {
             let reply = daemon
-                .exec_in_session(exec_in_session_request(
+                .exec(exec_request(
                     "mnist-test",
                     mnist_exec("python", &["-c", &format!("step {i}")]),
                 ))
@@ -2573,7 +2573,7 @@ mod tests {
         .await;
 
         let reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-test",
                 mnist_exec("python", &["train.py"]),
             ))
@@ -2583,7 +2583,7 @@ mod tests {
 
         // Shutdown should still succeed.
         let shutdown = daemon
-            .shutdown_session(ShutdownSessionRequest {
+            .shutdown(ShutdownRequest {
                 name: "mnist-test".to_string(),
             })
             .await
@@ -2655,7 +2655,7 @@ mod tests {
         .await;
 
         let reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-test",
                 mnist_exec("python", &["train.py"]),
             ))
@@ -2675,7 +2675,7 @@ mod tests {
         let (daemon, mock) = mnist_daemon_with_mock().await;
 
         let boot = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "mnist-image-check".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
@@ -2705,7 +2705,7 @@ mod tests {
         let session_count_before = overview_before.session_count;
 
         let boot = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "mnist-overview".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
@@ -2765,7 +2765,7 @@ mod tests {
         .await;
 
         let reply = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "mnist-test",
                 mnist_exec("python", &["mnist_train.py"]),
             ))
@@ -2803,7 +2803,7 @@ mod tests {
         let (daemon, _mock) = mnist_daemon_with_mock().await;
 
         let result = daemon
-            .exec_in_session(exec_in_session_request(
+            .exec(exec_request(
                 "no-such-session",
                 mnist_exec("python", &["train.py"]),
             ))
@@ -2817,7 +2817,7 @@ mod tests {
         let (daemon, _mock) = mnist_daemon_with_mock().await;
 
         let boot = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "mnist-dbl-shut".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
@@ -2827,7 +2827,7 @@ mod tests {
         assert!(boot.ok);
 
         let r1 = daemon
-            .shutdown_session(ShutdownSessionRequest {
+            .shutdown(ShutdownRequest {
                 name: "mnist-dbl-shut".to_string(),
             })
             .await
@@ -2835,7 +2835,7 @@ mod tests {
         assert!(r1.ok);
 
         let r2 = daemon
-            .shutdown_session(ShutdownSessionRequest {
+            .shutdown(ShutdownRequest {
                 name: "mnist-dbl-shut".to_string(),
             })
             .await
@@ -2872,7 +2872,7 @@ mod tests {
         assert!(reply.ok, "workload with custom image should succeed");
 
         let w = daemon
-            .get_workload(GetWorkloadRequest {
+            .show_workload(ShowWorkloadRequest {
                 name: "custom-image".to_string(),
             })
             .await
@@ -2888,7 +2888,7 @@ mod tests {
 
         // Boot two sessions.
         let boot_a = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "mnist-a".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
@@ -2898,7 +2898,7 @@ mod tests {
         assert!(boot_a.ok);
 
         let boot_b = daemon
-            .boot_session(boot_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "mnist-b".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
@@ -2915,7 +2915,7 @@ mod tests {
 
         // Shutdown only one.
         let shutdown = daemon
-            .shutdown_session(ShutdownSessionRequest {
+            .shutdown(ShutdownRequest {
                 name: "mnist-a".to_string(),
             })
             .await
