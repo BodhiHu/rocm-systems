@@ -3577,9 +3577,9 @@ class CodeGenerator:
         L.append('    if (!(exec & (1ULL << lane))) continue;')
         L.append(f'    uint64_t raw0 = {s0}.read_lane64(wf, lane);')
         L.append(f'    uint64_t raw1 = {s1}.read_lane64(wf, lane);')
-        opsel, _opsel_hi = self._vop3p_opsel_exprs()
+        opsel, opsel_hi = self._vop3p_opsel_exprs()
         L.append(f'    uint32_t lo = ({opsel} & 1) ? static_cast<uint32_t>(raw0 >> 32) : static_cast<uint32_t>(raw0);')
-        L.append(f'    uint32_t hi = ({opsel} & 2) ? static_cast<uint32_t>(raw1 >> 32) : static_cast<uint32_t>(raw1);')
+        L.append(f'    uint32_t hi = ({opsel_hi} & 2) ? static_cast<uint32_t>(raw1 >> 32) : static_cast<uint32_t>(raw1);')
         L.append(f'    {d}.write_lane64(wf, lane, static_cast<uint64_t>(lo) | (static_cast<uint64_t>(hi) << 32));')
         L.append('  }')
         return '\n'.join(L)
@@ -3646,41 +3646,53 @@ class CodeGenerator:
         return '\n'.join(L)
 
     def _gen_dot2(self, dst: list[str], src: list[str], cls: str) -> str:
-        """Generate V_DOT2_F32_F16, V_DOT2_I32_I16, V_DOT2_U32_U16."""
+        """Generate V_DOT2_F32_F16, V_DOT2_I32_I16, V_DOT2_U32_U16.
+
+        Uses op_sel to select which 16-bit half of each source feeds
+        element 0 (low) and element 1 (high) of the dot product.
+        neg/neg_hi are split per element.
+        """
         d, s0, s1, s2 = dst[0], src[0], src[1], src[2]
+        opsel, opsel_hi = self._vop3p_opsel_exprs()
         L = []
         L.append('  uint64_t exec = wf.exec();')
         L.append('  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {')
         L.append('    if (!(exec & (1ULL << lane))) continue;')
         L.append(f'    uint32_t raw0 = {s0}.read_lane(wf, lane);')
         L.append(f'    uint32_t raw1 = {s1}.read_lane(wf, lane);')
+        L.append(f'    bool sel0_lo = ({opsel} >> 0) & 1;')
+        L.append(f'    bool sel1_lo = ({opsel} >> 1) & 1;')
+        L.append(f'    bool sel0_hi = ({opsel_hi} >> 0) & 1;')
+        L.append(f'    bool sel1_hi = ({opsel_hi} >> 1) & 1;')
 
         if cls == 'dot2_f32_f16':
-            L.append('    float a0 = util::f16_to_f32(static_cast<uint16_t>(raw0));')
-            L.append('    float a1 = util::f16_to_f32(static_cast<uint16_t>(raw0 >> 16));')
-            L.append('    float b0 = util::f16_to_f32(static_cast<uint16_t>(raw1));')
-            L.append('    float b1 = util::f16_to_f32(static_cast<uint16_t>(raw1 >> 16));')
-            L.append('    if (inst_.neg & 1) { a0 = -a0; a1 = -a1; }')
-            L.append('    if (inst_.neg & 2) { b0 = -b0; b1 = -b1; }')
+            L.append('    float a0 = util::f16_to_f32(static_cast<uint16_t>(sel0_lo ? (raw0 >> 16) : raw0));')
+            L.append('    float a1 = util::f16_to_f32(static_cast<uint16_t>(sel0_hi ? (raw0 >> 16) : raw0));')
+            L.append('    float b0 = util::f16_to_f32(static_cast<uint16_t>(sel1_lo ? (raw1 >> 16) : raw1));')
+            L.append('    float b1 = util::f16_to_f32(static_cast<uint16_t>(sel1_hi ? (raw1 >> 16) : raw1));')
+            L.append('    if (inst_.neg & 1) a0 = -a0;')
+            L.append('    if (inst_.neg & 2) b0 = -b0;')
+            L.append('    if (inst_.neg_hi & 1) a1 = -a1;')
+            L.append('    if (inst_.neg_hi & 2) b1 = -b1;')
             L.append(f'    float acc = std::bit_cast<float>({s2}.read_lane(wf, lane));')
             L.append('    if (inst_.neg & 4) acc = -acc;')
             L.append('    float result = a0 * b0 + a1 * b1 + acc;')
             L.append('    if (inst_.clamp) result = std::clamp(result, 0.0f, 1.0f);')
             L.append(f'    {d}.write_lane(wf, lane, std::bit_cast<uint32_t>(result));')
         elif cls == 'dot2_i32_i16':
-            L.append('    int16_t a0 = static_cast<int16_t>(raw0);')
-            L.append('    int16_t a1 = static_cast<int16_t>(raw0 >> 16);')
-            L.append('    int16_t b0 = static_cast<int16_t>(raw1);')
-            L.append('    int16_t b1 = static_cast<int16_t>(raw1 >> 16);')
+            L.append('    int16_t a0 = static_cast<int16_t>(sel0_lo ? (raw0 >> 16) : raw0);')
+            L.append('    int16_t a1 = static_cast<int16_t>(sel0_hi ? (raw0 >> 16) : raw0);')
+            L.append('    int16_t b0 = static_cast<int16_t>(sel1_lo ? (raw1 >> 16) : raw1);')
+            L.append('    int16_t b1 = static_cast<int16_t>(sel1_hi ? (raw1 >> 16) : raw1);')
             L.append(f'    int32_t acc = static_cast<int32_t>({s2}.read_lane(wf, lane));')
             L.append('    int32_t result = static_cast<int32_t>(a0) * b0 + static_cast<int32_t>(a1) * b1 + acc;')
             L.append('    if (inst_.clamp) result = std::clamp(result, static_cast<int32_t>(0), std::numeric_limits<int32_t>::max());')
             L.append(f'    {d}.write_lane(wf, lane, static_cast<uint32_t>(result));')
         else:  # dot2_u32_u16
-            L.append('    uint16_t a0 = static_cast<uint16_t>(raw0);')
-            L.append('    uint16_t a1 = static_cast<uint16_t>(raw0 >> 16);')
-            L.append('    uint16_t b0 = static_cast<uint16_t>(raw1);')
-            L.append('    uint16_t b1 = static_cast<uint16_t>(raw1 >> 16);')
+            L.append('    uint16_t a0 = static_cast<uint16_t>(sel0_lo ? (raw0 >> 16) : raw0);')
+            L.append('    uint16_t a1 = static_cast<uint16_t>(sel0_hi ? (raw0 >> 16) : raw0);')
+            L.append('    uint16_t b0 = static_cast<uint16_t>(sel1_lo ? (raw1 >> 16) : raw1);')
+            L.append('    uint16_t b1 = static_cast<uint16_t>(sel1_hi ? (raw1 >> 16) : raw1);')
             L.append(f'    uint32_t acc = {s2}.read_lane(wf, lane);')
             L.append('    uint32_t result = static_cast<uint32_t>(a0) * b0 + static_cast<uint32_t>(a1) * b1 + acc;')
             L.append(f'    {d}.write_lane(wf, lane, result);')
@@ -4975,6 +4987,24 @@ class CodeGenerator:
                                 '    src_operands_[0] = dpp_src0_.get();\n'
                                 '  }\n'
                             )
+                        # SDWA postamble: apply float clamp after ALU.
+                        _sdwa_postamble = ''
+                        is_float_op = (sem and sem.data_type in ('f16', 'f32', 'f64'))
+                        if (enc.enc_name.upper() in ('ENC_VOP1', 'ENC_VOP2')
+                                and is_float_op):
+                            _sdwa_postamble = (
+                                '  if (sdwa_clamp_) {\n'
+                                '    uint64_t ex = wf.exec();\n'
+                                '    uint32_t vb = wf.vgpr_alloc().base;\n'
+                                '    for (uint32_t ln = 0; ln < wf.wf_size(); ++ln) {\n'
+                                '      if (!(ex & (1ULL << ln))) continue;\n'
+                                '      uint32_t dv = wf.cu().read_vgpr(vb + inst_.vdst, ln);\n'
+                                '      float fv = std::bit_cast<float>(dv);\n'
+                                '      fv = std::clamp(fv, 0.0f, 1.0f);\n'
+                                '      wf.cu().write_vgpr(vb + inst_.vdst, ln, std::bit_cast<uint32_t>(fv));\n'
+                                '    }\n'
+                                '  }\n'
+                            )
                         can_share = self._can_share_execute(inst.mnemonic)
                         if can_share:
                             enc_key = enc.enc_name.lower().replace('enc_', '')
@@ -4983,7 +5013,8 @@ class CodeGenerator:
                                 f'void {inst.fmt_name}::execute_impl'
                                 f'(amdgpu::Wavefront &wf) {{\n'
                                 f'{_dpp_preamble}'
-                                f'  amdgpu::execute_{tmpl_name}(*this, wf);\n}}'
+                                f'  amdgpu::execute_{tmpl_name}(*this, wf);\n'
+                                f'{_sdwa_postamble}}}'
                             )
                             body_key = (inst.mnemonic, enc.enc_name)
                             self._shared_execute_bodies[body_key] = (
@@ -4994,7 +5025,8 @@ class CodeGenerator:
                                 f'void {inst.fmt_name}::execute_impl'
                                 f'(amdgpu::Wavefront &wf) {{\n'
                                 f'{_dpp_preamble}'
-                                f'{body}\n}}'
+                                f'{body}\n'
+                                f'{_sdwa_postamble}}}'
                             )
                     else:
                         exec_impl = cgen.Line(

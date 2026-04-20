@@ -8317,18 +8317,22 @@ inline void execute_v_dot2_f32_bf16_vop3p([[maybe_unused]] Inst &inst,
       continue;
     uint32_t raw0 = inst.src0.read_lane(wf, lane);
     uint32_t raw1 = inst.src1.read_lane(wf, lane);
-    float a0 = util::f16_to_f32(static_cast<uint16_t>(raw0));
-    float a1 = util::f16_to_f32(static_cast<uint16_t>(raw0 >> 16));
-    float b0 = util::f16_to_f32(static_cast<uint16_t>(raw1));
-    float b1 = util::f16_to_f32(static_cast<uint16_t>(raw1 >> 16));
-    if (inst.inst_.neg & 1) {
+    bool sel0_lo = (inst.inst_.op_sel >> 0) & 1;
+    bool sel1_lo = (inst.inst_.op_sel >> 1) & 1;
+    bool sel0_hi = (inst.inst_.op_sel_hi >> 0) & 1;
+    bool sel1_hi = (inst.inst_.op_sel_hi >> 1) & 1;
+    float a0 = util::f16_to_f32(static_cast<uint16_t>(sel0_lo ? (raw0 >> 16) : raw0));
+    float a1 = util::f16_to_f32(static_cast<uint16_t>(sel0_hi ? (raw0 >> 16) : raw0));
+    float b0 = util::f16_to_f32(static_cast<uint16_t>(sel1_lo ? (raw1 >> 16) : raw1));
+    float b1 = util::f16_to_f32(static_cast<uint16_t>(sel1_hi ? (raw1 >> 16) : raw1));
+    if (inst.inst_.neg & 1)
       a0 = -a0;
-      a1 = -a1;
-    }
-    if (inst.inst_.neg & 2) {
+    if (inst.inst_.neg & 2)
       b0 = -b0;
+    if (inst.inst_.neg_hi & 1)
+      a1 = -a1;
+    if (inst.inst_.neg_hi & 2)
       b1 = -b1;
-    }
     float acc = std::bit_cast<float>(inst.src2.read_lane(wf, lane));
     if (inst.inst_.neg & 4)
       acc = -acc;
@@ -8348,18 +8352,22 @@ inline void execute_v_dot2_f32_f16_vop3p([[maybe_unused]] Inst &inst,
       continue;
     uint32_t raw0 = inst.src0.read_lane(wf, lane);
     uint32_t raw1 = inst.src1.read_lane(wf, lane);
-    float a0 = util::f16_to_f32(static_cast<uint16_t>(raw0));
-    float a1 = util::f16_to_f32(static_cast<uint16_t>(raw0 >> 16));
-    float b0 = util::f16_to_f32(static_cast<uint16_t>(raw1));
-    float b1 = util::f16_to_f32(static_cast<uint16_t>(raw1 >> 16));
-    if (inst.inst_.neg & 1) {
+    bool sel0_lo = (inst.inst_.op_sel >> 0) & 1;
+    bool sel1_lo = (inst.inst_.op_sel >> 1) & 1;
+    bool sel0_hi = (inst.inst_.op_sel_hi >> 0) & 1;
+    bool sel1_hi = (inst.inst_.op_sel_hi >> 1) & 1;
+    float a0 = util::f16_to_f32(static_cast<uint16_t>(sel0_lo ? (raw0 >> 16) : raw0));
+    float a1 = util::f16_to_f32(static_cast<uint16_t>(sel0_hi ? (raw0 >> 16) : raw0));
+    float b0 = util::f16_to_f32(static_cast<uint16_t>(sel1_lo ? (raw1 >> 16) : raw1));
+    float b1 = util::f16_to_f32(static_cast<uint16_t>(sel1_hi ? (raw1 >> 16) : raw1));
+    if (inst.inst_.neg & 1)
       a0 = -a0;
-      a1 = -a1;
-    }
-    if (inst.inst_.neg & 2) {
+    if (inst.inst_.neg & 2)
       b0 = -b0;
+    if (inst.inst_.neg_hi & 1)
+      a1 = -a1;
+    if (inst.inst_.neg_hi & 2)
       b1 = -b1;
-    }
     float acc = std::bit_cast<float>(inst.src2.read_lane(wf, lane));
     if (inst.inst_.neg & 4)
       acc = -acc;
@@ -8379,10 +8387,14 @@ inline void execute_v_dot2_i32_i16_vop3p([[maybe_unused]] Inst &inst,
       continue;
     uint32_t raw0 = inst.src0.read_lane(wf, lane);
     uint32_t raw1 = inst.src1.read_lane(wf, lane);
-    int16_t a0 = static_cast<int16_t>(raw0);
-    int16_t a1 = static_cast<int16_t>(raw0 >> 16);
-    int16_t b0 = static_cast<int16_t>(raw1);
-    int16_t b1 = static_cast<int16_t>(raw1 >> 16);
+    bool sel0_lo = (inst.inst_.op_sel >> 0) & 1;
+    bool sel1_lo = (inst.inst_.op_sel >> 1) & 1;
+    bool sel0_hi = (inst.inst_.op_sel_hi >> 0) & 1;
+    bool sel1_hi = (inst.inst_.op_sel_hi >> 1) & 1;
+    int16_t a0 = static_cast<int16_t>(sel0_lo ? (raw0 >> 16) : raw0);
+    int16_t a1 = static_cast<int16_t>(sel0_hi ? (raw0 >> 16) : raw0);
+    int16_t b0 = static_cast<int16_t>(sel1_lo ? (raw1 >> 16) : raw1);
+    int16_t b1 = static_cast<int16_t>(sel1_hi ? (raw1 >> 16) : raw1);
     int32_t acc = static_cast<int32_t>(inst.src2.read_lane(wf, lane));
     int32_t result = static_cast<int32_t>(a0) * b0 + static_cast<int32_t>(a1) * b1 + acc;
     if (inst.inst_.clamp)
@@ -8400,10 +8412,14 @@ inline void execute_v_dot2_u32_u16_vop3p([[maybe_unused]] Inst &inst,
       continue;
     uint32_t raw0 = inst.src0.read_lane(wf, lane);
     uint32_t raw1 = inst.src1.read_lane(wf, lane);
-    uint16_t a0 = static_cast<uint16_t>(raw0);
-    uint16_t a1 = static_cast<uint16_t>(raw0 >> 16);
-    uint16_t b0 = static_cast<uint16_t>(raw1);
-    uint16_t b1 = static_cast<uint16_t>(raw1 >> 16);
+    bool sel0_lo = (inst.inst_.op_sel >> 0) & 1;
+    bool sel1_lo = (inst.inst_.op_sel >> 1) & 1;
+    bool sel0_hi = (inst.inst_.op_sel_hi >> 0) & 1;
+    bool sel1_hi = (inst.inst_.op_sel_hi >> 1) & 1;
+    uint16_t a0 = static_cast<uint16_t>(sel0_lo ? (raw0 >> 16) : raw0);
+    uint16_t a1 = static_cast<uint16_t>(sel0_hi ? (raw0 >> 16) : raw0);
+    uint16_t b0 = static_cast<uint16_t>(sel1_lo ? (raw1 >> 16) : raw1);
+    uint16_t b1 = static_cast<uint16_t>(sel1_hi ? (raw1 >> 16) : raw1);
     uint32_t acc = inst.src2.read_lane(wf, lane);
     uint32_t result = static_cast<uint32_t>(a0) * b0 + static_cast<uint32_t>(a1) * b1 + acc;
     inst.vdst.write_lane(wf, lane, result);
@@ -12708,8 +12724,8 @@ inline void execute_v_pk_mov_b32_vop3p([[maybe_unused]] Inst &inst,
     uint64_t raw1 = inst.src1.read_lane64(wf, lane);
     uint32_t lo =
         (inst.inst_.op_sel & 1) ? static_cast<uint32_t>(raw0 >> 32) : static_cast<uint32_t>(raw0);
-    uint32_t hi =
-        (inst.inst_.op_sel & 2) ? static_cast<uint32_t>(raw1 >> 32) : static_cast<uint32_t>(raw1);
+    uint32_t hi = (inst.inst_.op_sel_hi & 2) ? static_cast<uint32_t>(raw1 >> 32)
+                                             : static_cast<uint32_t>(raw1);
     inst.vdst.write_lane64(wf, lane, static_cast<uint64_t>(lo) | (static_cast<uint64_t>(hi) << 32));
   }
 }
