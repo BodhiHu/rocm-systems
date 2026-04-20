@@ -353,6 +353,7 @@ dependencies = [
  "mirage_real",
  "mirage_remote",
  "mirage_schema",
+ "serde_json",
  "tokio",
 ]
 
