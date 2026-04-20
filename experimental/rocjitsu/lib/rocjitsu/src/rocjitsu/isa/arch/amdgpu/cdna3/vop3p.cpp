@@ -1082,35 +1082,7 @@ VPkFmaF32Vop3p::VPkFmaF32Vop3p(const MachineInst *inst)
 }
 
 void VPkFmaF32Vop3p::execute_impl(amdgpu::Wavefront &wf) {
-  uint64_t exec = wf.exec();
-  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
-    if (!(exec & (1ULL << lane)))
-      continue;
-    uint64_t raw0 = src0.read_lane64(wf, lane);
-    uint64_t raw1 = src1.read_lane64(wf, lane);
-    uint64_t raw2 = src2.read_lane64(wf, lane);
-    float a_lo = std::bit_cast<float>(static_cast<uint32_t>(raw0));
-    float a_hi = std::bit_cast<float>(static_cast<uint32_t>(raw0 >> 32));
-    float b_lo = std::bit_cast<float>(static_cast<uint32_t>(raw1));
-    float b_hi = std::bit_cast<float>(static_cast<uint32_t>(raw1 >> 32));
-    float c_lo = std::bit_cast<float>(static_cast<uint32_t>(raw2));
-    float c_hi = std::bit_cast<float>(static_cast<uint32_t>(raw2 >> 32));
-    if (inst_.neg & 1) {
-      a_lo = -a_lo;
-      a_hi = -a_hi;
-    }
-    if (inst_.neg & 2) {
-      b_lo = -b_lo;
-      b_hi = -b_hi;
-    }
-    if (inst_.neg & 4) {
-      c_lo = -c_lo;
-      c_hi = -c_hi;
-    }
-    uint32_t rlo = std::bit_cast<uint32_t>(std::fma(a_lo, b_lo, c_lo));
-    uint32_t rhi = std::bit_cast<uint32_t>(std::fma(a_hi, b_hi, c_hi));
-    vdst.write_lane64(wf, lane, static_cast<uint64_t>(rlo) | (static_cast<uint64_t>(rhi) << 32));
-  }
+  amdgpu::execute_v_pk_fma_f32_vop3p(*this, wf);
 }
 
 VPkMulF32Vop3p::VPkMulF32Vop3p(const MachineInst *inst)
@@ -1127,28 +1099,7 @@ VPkMulF32Vop3p::VPkMulF32Vop3p(const MachineInst *inst)
 }
 
 void VPkMulF32Vop3p::execute_impl(amdgpu::Wavefront &wf) {
-  uint64_t exec = wf.exec();
-  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
-    if (!(exec & (1ULL << lane)))
-      continue;
-    uint64_t raw0 = src0.read_lane64(wf, lane);
-    uint64_t raw1 = src1.read_lane64(wf, lane);
-    float a_lo = std::bit_cast<float>(static_cast<uint32_t>(raw0));
-    float a_hi = std::bit_cast<float>(static_cast<uint32_t>(raw0 >> 32));
-    float b_lo = std::bit_cast<float>(static_cast<uint32_t>(raw1));
-    float b_hi = std::bit_cast<float>(static_cast<uint32_t>(raw1 >> 32));
-    if (inst_.neg & 1) {
-      a_lo = -a_lo;
-      a_hi = -a_hi;
-    }
-    if (inst_.neg & 2) {
-      b_lo = -b_lo;
-      b_hi = -b_hi;
-    }
-    uint32_t rlo = std::bit_cast<uint32_t>(a_lo * b_lo);
-    uint32_t rhi = std::bit_cast<uint32_t>(a_hi * b_hi);
-    vdst.write_lane64(wf, lane, static_cast<uint64_t>(rlo) | (static_cast<uint64_t>(rhi) << 32));
-  }
+  amdgpu::execute_v_pk_mul_f32_vop3p(*this, wf);
 }
 
 VPkAddF32Vop3p::VPkAddF32Vop3p(const MachineInst *inst)
@@ -1165,36 +1116,17 @@ VPkAddF32Vop3p::VPkAddF32Vop3p(const MachineInst *inst)
 }
 
 void VPkAddF32Vop3p::execute_impl(amdgpu::Wavefront &wf) {
-  uint64_t exec = wf.exec();
-  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
-    if (!(exec & (1ULL << lane)))
-      continue;
-    uint64_t raw0 = src0.read_lane64(wf, lane);
-    uint64_t raw1 = src1.read_lane64(wf, lane);
-    float a_lo = std::bit_cast<float>(static_cast<uint32_t>(raw0));
-    float a_hi = std::bit_cast<float>(static_cast<uint32_t>(raw0 >> 32));
-    float b_lo = std::bit_cast<float>(static_cast<uint32_t>(raw1));
-    float b_hi = std::bit_cast<float>(static_cast<uint32_t>(raw1 >> 32));
-    if (inst_.neg & 1) {
-      a_lo = -a_lo;
-      a_hi = -a_hi;
-    }
-    if (inst_.neg & 2) {
-      b_lo = -b_lo;
-      b_hi = -b_hi;
-    }
-    uint32_t rlo = std::bit_cast<uint32_t>(a_lo + b_lo);
-    uint32_t rhi = std::bit_cast<uint32_t>(a_hi + b_hi);
-    vdst.write_lane64(wf, lane, static_cast<uint64_t>(rlo) | (static_cast<uint64_t>(rhi) << 32));
-  }
+  amdgpu::execute_v_pk_add_f32_vop3p(*this, wf);
 }
 
 VPkMovB32Vop3p::VPkMovB32Vop3p(const MachineInst *inst)
     : Vop3p("v_pk_mov_b32", reinterpret_cast<const OpEncoding *>(inst),
             make_exec_fn<VPkMovB32Vop3p>()),
       vdst(64, OperandType::OPR_VGPR, reinterpret_cast<const OpEncoding *>(inst)->vdst),
-      src0(64, OperandType::OPR_SRC_NOLIT, reinterpret_cast<const OpEncoding *>(inst)->src0),
-      src1(64, OperandType::OPR_SRC_SIMPLE, reinterpret_cast<const OpEncoding *>(inst)->src1) {
+      src0(64, OperandType::OPR_SRC_VGPR_OR_ACCVGPR,
+           reinterpret_cast<const OpEncoding *>(inst)->src0),
+      src1(64, OperandType::OPR_SRC_VGPR_OR_ACCVGPR,
+           reinterpret_cast<const OpEncoding *>(inst)->src1) {
   dst_operands_[0] = &vdst;
   src_operands_[0] = &src0;
   src_operands_[1] = &src1;

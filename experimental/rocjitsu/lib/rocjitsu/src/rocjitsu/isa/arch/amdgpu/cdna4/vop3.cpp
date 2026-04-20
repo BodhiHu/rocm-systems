@@ -8767,7 +8767,7 @@ void VCmpxFF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     (void)lane;
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -8803,7 +8803,7 @@ void VCmpxLtF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -8839,7 +8839,7 @@ void VCmpxEqF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 == s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -8875,7 +8875,7 @@ void VCmpxLeF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 <= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -8911,7 +8911,7 @@ void VCmpxGtF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -8947,7 +8947,7 @@ void VCmpxLgF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1 || s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -8983,7 +8983,7 @@ void VCmpxGeF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 >= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9019,7 +9019,7 @@ void VCmpxOF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!std::isnan(s0) && !std::isnan(s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9055,7 +9055,7 @@ void VCmpxUF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (std::isnan(s0) || std::isnan(s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9091,7 +9091,7 @@ void VCmpxNgeF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 >= s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9127,7 +9127,7 @@ void VCmpxNlgF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 < s1 || s0 > s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9163,7 +9163,7 @@ void VCmpxNgtF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 > s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9199,7 +9199,7 @@ void VCmpxNleF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 <= s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9235,7 +9235,7 @@ void VCmpxNeqF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 != s1 || std::isnan(s0) || std::isnan(s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9271,7 +9271,7 @@ void VCmpxNltF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 < s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9296,7 +9296,7 @@ void VCmpxTruF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9884,7 +9884,7 @@ void VCmpxFF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     (void)lane;
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9920,7 +9920,7 @@ void VCmpxLtF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9956,7 +9956,7 @@ void VCmpxEqF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 == s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -9992,7 +9992,7 @@ void VCmpxLeF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 <= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10028,7 +10028,7 @@ void VCmpxGtF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10064,7 +10064,7 @@ void VCmpxLgF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1 || s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10100,7 +10100,7 @@ void VCmpxGeF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 >= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10136,7 +10136,7 @@ void VCmpxOF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!std::isnan(s0) && !std::isnan(s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10172,7 +10172,7 @@ void VCmpxUF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (std::isnan(s0) || std::isnan(s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10208,7 +10208,7 @@ void VCmpxNgeF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 >= s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10244,7 +10244,7 @@ void VCmpxNlgF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 < s1 || s0 > s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10280,7 +10280,7 @@ void VCmpxNgtF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 > s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10316,7 +10316,7 @@ void VCmpxNleF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 <= s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10352,7 +10352,7 @@ void VCmpxNeqF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 != s1 || std::isnan(s0) || std::isnan(s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10388,7 +10388,7 @@ void VCmpxNltF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 < s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10413,7 +10413,7 @@ void VCmpxTruF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10721,7 +10721,7 @@ void VCmpxFF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     (void)lane;
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10757,7 +10757,7 @@ void VCmpxLtF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10793,7 +10793,7 @@ void VCmpxEqF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 == s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10829,7 +10829,7 @@ void VCmpxLeF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 <= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10865,7 +10865,7 @@ void VCmpxGtF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10901,7 +10901,7 @@ void VCmpxLgF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1 || s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10937,7 +10937,7 @@ void VCmpxGeF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 >= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -10973,7 +10973,7 @@ void VCmpxOF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!std::isnan(s0) && !std::isnan(s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11009,7 +11009,7 @@ void VCmpxUF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (std::isnan(s0) || std::isnan(s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11045,7 +11045,7 @@ void VCmpxNgeF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 >= s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11081,7 +11081,7 @@ void VCmpxNlgF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 < s1 || s0 > s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11117,7 +11117,7 @@ void VCmpxNgtF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 > s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11153,7 +11153,7 @@ void VCmpxNleF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 <= s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11189,7 +11189,7 @@ void VCmpxNeqF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 != s1 || std::isnan(s0) || std::isnan(s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11225,7 +11225,7 @@ void VCmpxNltF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(s0 < s1))
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11250,7 +11250,7 @@ void VCmpxTruF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11687,7 +11687,7 @@ void VCmpxFI16Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     (void)lane;
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11715,7 +11715,7 @@ void VCmpxLtI16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11743,7 +11743,7 @@ void VCmpxEqI16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 == s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11771,7 +11771,7 @@ void VCmpxLeI16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 <= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11799,7 +11799,7 @@ void VCmpxGtI16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11827,7 +11827,7 @@ void VCmpxNeI16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 != s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11855,7 +11855,7 @@ void VCmpxGeI16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 >= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11880,7 +11880,7 @@ void VCmpxTI16Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11905,7 +11905,7 @@ void VCmpxFU16Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     (void)lane;
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11933,7 +11933,7 @@ void VCmpxLtU16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11961,7 +11961,7 @@ void VCmpxEqU16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 == s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -11989,7 +11989,7 @@ void VCmpxLeU16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 <= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12017,7 +12017,7 @@ void VCmpxGtU16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12045,7 +12045,7 @@ void VCmpxNeU16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 != s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12073,7 +12073,7 @@ void VCmpxGeU16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 >= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12098,7 +12098,7 @@ void VCmpxTU16Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12563,7 +12563,7 @@ void VCmpxFI32Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     (void)lane;
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12591,7 +12591,7 @@ void VCmpxLtI32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12619,7 +12619,7 @@ void VCmpxEqI32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 == s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12647,7 +12647,7 @@ void VCmpxLeI32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 <= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12675,7 +12675,7 @@ void VCmpxGtI32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12703,7 +12703,7 @@ void VCmpxNeI32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 != s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12731,7 +12731,7 @@ void VCmpxGeI32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 >= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12756,7 +12756,7 @@ void VCmpxTI32Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12781,7 +12781,7 @@ void VCmpxFU32Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     (void)lane;
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12809,7 +12809,7 @@ void VCmpxLtU32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12837,7 +12837,7 @@ void VCmpxEqU32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 == s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12865,7 +12865,7 @@ void VCmpxLeU32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 <= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12893,7 +12893,7 @@ void VCmpxGtU32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12921,7 +12921,7 @@ void VCmpxNeU32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 != s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12949,7 +12949,7 @@ void VCmpxGeU32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 >= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -12974,7 +12974,7 @@ void VCmpxTU32Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13295,7 +13295,7 @@ void VCmpxFI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     (void)lane;
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13323,7 +13323,7 @@ void VCmpxLtI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13351,7 +13351,7 @@ void VCmpxEqI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 == s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13379,7 +13379,7 @@ void VCmpxLeI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 <= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13407,7 +13407,7 @@ void VCmpxGtI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13435,7 +13435,7 @@ void VCmpxNeI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 != s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13463,7 +13463,7 @@ void VCmpxGeI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 >= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13488,7 +13488,7 @@ void VCmpxTI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13513,7 +13513,7 @@ void VCmpxFU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     (void)lane;
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13541,7 +13541,7 @@ void VCmpxLtU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 < s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13569,7 +13569,7 @@ void VCmpxEqU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 == s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13597,7 +13597,7 @@ void VCmpxLeU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 <= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13625,7 +13625,7 @@ void VCmpxGtU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 > s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13653,7 +13653,7 @@ void VCmpxNeU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 != s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13681,7 +13681,7 @@ void VCmpxGeU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (s0 >= s1)
       result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 
@@ -13706,7 +13706,7 @@ void VCmpxTU64Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     result |= (1ULL << lane);
   }
-  wf.set_vcc(result);
+  vdst.write_scalar64(wf, result);
   wf.set_exec(result);
 }
 

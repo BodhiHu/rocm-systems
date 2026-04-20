@@ -13,13 +13,6 @@ namespace rocjitsu {
 namespace amdgpu {
 
 void L2Cache::send_backing(uint64_t addr, uint8_t *data, uint32_t size, simdojo::MessageOp op) {
-  // One-shot trace for addresses in the output tensor range.
-  if (addr >= 0x4d00c00000ULL && addr < 0x4d00e00000ULL) {
-    static uint64_t out_count = 0;
-    if (++out_count <= 3)
-      util::Logger::vm("L2::send_backing OUTPUT #", out_count, " addr=0x", std::hex, addr, std::dec,
-                       " op=", (int)op, " size=", size);
-  }
   // In functional mode, always use direct GpuMemory writeback when available.
   // The req_port_ link may exist but point to a component (MSC) that doesn't
   // handle messages in functional mode. Direct write ensures data reaches

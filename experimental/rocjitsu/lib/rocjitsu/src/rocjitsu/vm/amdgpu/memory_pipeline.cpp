@@ -97,11 +97,16 @@ void vector_complete(VectorMemState &d, ComputeUnitCore &cu) {
     for (uint32_t i = 0; i < vgpr_count; ++i) {
       uint32_t val = 0;
       uint32_t data_offset = lane * stride + i * 4;
-      // For atomics (8-byte element split across 2 VGPRs): copy 4 then 4.
-      // For regular loads (one element per VGPR): always copy elem_size bytes.
       uint32_t copy_size =
           is_atomic ? std::min(d.elem_size - i * 4, 4u) : std::min(d.elem_size, 4u);
       std::memcpy(&val, &d.response_data[data_offset], copy_size);
+      if (copy_size <= 2 && (d.d16_hi || d.d16_lo)) {
+        uint32_t old = cu.read_vgpr(d.dst_reg_base + i, lane);
+        if (d.d16_hi)
+          val = (old & 0xFFFF) | (val << 16);
+        else
+          val = (old & 0xFFFF0000) | (val & 0xFFFF);
+      }
       cu.write_vgpr(d.dst_reg_base + i, lane, val);
     }
   }

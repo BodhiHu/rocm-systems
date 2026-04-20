@@ -443,7 +443,7 @@ inline void execute_s_ashr_i32_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]
 template <typename Inst>
 inline void execute_s_ashr_i64_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   int64_t s0 = static_cast<int64_t>(inst.ssrc0.read_scalar64(wf));
-  uint32_t s1 = inst.ssrc1.read_scalar(wf);
+  int64_t s1 = static_cast<int64_t>(inst.ssrc1.read_scalar64(wf));
   int64_t result = s0 >> (s1 & 63);
   inst.sdst.write_scalar64(wf, static_cast<uint64_t>(result));
   wf.write_scc(result != 0);
@@ -1194,7 +1194,7 @@ inline void execute_s_lshl_b32_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]
 template <typename Inst>
 inline void execute_s_lshl_b64_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   uint64_t s0 = inst.ssrc0.read_scalar64(wf);
-  uint32_t s1 = inst.ssrc1.read_scalar(wf);
+  uint64_t s1 = inst.ssrc1.read_scalar64(wf);
   uint64_t result = s0 << (s1 & 63u);
   inst.sdst.write_scalar64(wf, result);
   wf.write_scc(result != 0);
@@ -1212,7 +1212,7 @@ inline void execute_s_lshr_b32_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]
 template <typename Inst>
 inline void execute_s_lshr_b64_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   uint64_t s0 = inst.ssrc0.read_scalar64(wf);
-  uint32_t s1 = inst.ssrc1.read_scalar(wf);
+  uint64_t s1 = inst.ssrc1.read_scalar64(wf);
   uint64_t result = s0 >> (s1 & 63u);
   inst.sdst.write_scalar64(wf, result);
   wf.write_scc(result != 0);
@@ -12243,6 +12243,38 @@ inline void execute_v_pk_add_f16_vop3p([[maybe_unused]] Inst &inst,
 }
 
 template <typename Inst>
+inline void execute_v_pk_add_f32_vop3p([[maybe_unused]] Inst &inst,
+                                       [[maybe_unused]] Wavefront &wf) {
+  uint64_t exec = wf.exec();
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint64_t raw0 = inst.src0.read_lane64(wf, lane);
+    uint64_t raw1 = inst.src1.read_lane64(wf, lane);
+    bool sel0_lo = (inst.inst_.op_sel >> 0) & 1;
+    bool sel1_lo = (inst.inst_.op_sel >> 1) & 1;
+    bool sel0_hi = (inst.inst_.op_sel_hi >> 0) & 1;
+    bool sel1_hi = (inst.inst_.op_sel_hi >> 1) & 1;
+    float a_lo = std::bit_cast<float>(static_cast<uint32_t>(sel0_lo ? (raw0 >> 32) : raw0));
+    float a_hi = std::bit_cast<float>(static_cast<uint32_t>(sel0_hi ? (raw0 >> 32) : raw0));
+    float b_lo = std::bit_cast<float>(static_cast<uint32_t>(sel1_lo ? (raw1 >> 32) : raw1));
+    float b_hi = std::bit_cast<float>(static_cast<uint32_t>(sel1_hi ? (raw1 >> 32) : raw1));
+    if (inst.inst_.neg & 1)
+      a_lo = -a_lo;
+    if (inst.inst_.neg & 2)
+      b_lo = -b_lo;
+    if (inst.inst_.neg_hi & 1)
+      a_hi = -a_hi;
+    if (inst.inst_.neg_hi & 2)
+      b_hi = -b_hi;
+    uint32_t rlo = std::bit_cast<uint32_t>(a_lo + b_lo);
+    uint32_t rhi = std::bit_cast<uint32_t>(a_hi + b_hi);
+    inst.vdst.write_lane64(wf, lane,
+                           static_cast<uint64_t>(rlo) | (static_cast<uint64_t>(rhi) << 32));
+  }
+}
+
+template <typename Inst>
 inline void execute_v_pk_add_i16_vop3p([[maybe_unused]] Inst &inst,
                                        [[maybe_unused]] Wavefront &wf) {
   uint64_t exec = wf.exec();
@@ -12355,6 +12387,47 @@ inline void execute_v_pk_fma_f16_vop3p([[maybe_unused]] Inst &inst,
     float rhi = std::fma(a_hi, b_hi, c_hi);
     inst.vdst.write_lane(
         wf, lane, util::f32_to_f16(rlo) | (static_cast<uint32_t>(util::f32_to_f16(rhi)) << 16));
+  }
+}
+
+template <typename Inst>
+inline void execute_v_pk_fma_f32_vop3p([[maybe_unused]] Inst &inst,
+                                       [[maybe_unused]] Wavefront &wf) {
+  uint64_t exec = wf.exec();
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint64_t raw0 = inst.src0.read_lane64(wf, lane);
+    uint64_t raw1 = inst.src1.read_lane64(wf, lane);
+    uint64_t raw2 = inst.src2.read_lane64(wf, lane);
+    bool sel0_lo = (inst.inst_.op_sel >> 0) & 1;
+    bool sel1_lo = (inst.inst_.op_sel >> 1) & 1;
+    bool sel2_lo = (inst.inst_.op_sel >> 2) & 1;
+    bool sel0_hi = (inst.inst_.op_sel_hi >> 0) & 1;
+    bool sel1_hi = (inst.inst_.op_sel_hi >> 1) & 1;
+    bool sel2_hi = inst.inst_.op_sel_hi_2;
+    float a_lo = std::bit_cast<float>(static_cast<uint32_t>(sel0_lo ? (raw0 >> 32) : raw0));
+    float a_hi = std::bit_cast<float>(static_cast<uint32_t>(sel0_hi ? (raw0 >> 32) : raw0));
+    float b_lo = std::bit_cast<float>(static_cast<uint32_t>(sel1_lo ? (raw1 >> 32) : raw1));
+    float b_hi = std::bit_cast<float>(static_cast<uint32_t>(sel1_hi ? (raw1 >> 32) : raw1));
+    float c_lo = std::bit_cast<float>(static_cast<uint32_t>(sel2_lo ? (raw2 >> 32) : raw2));
+    float c_hi = std::bit_cast<float>(static_cast<uint32_t>(sel2_hi ? (raw2 >> 32) : raw2));
+    if (inst.inst_.neg & 1)
+      a_lo = -a_lo;
+    if (inst.inst_.neg & 2)
+      b_lo = -b_lo;
+    if (inst.inst_.neg & 4)
+      c_lo = -c_lo;
+    if (inst.inst_.neg_hi & 1)
+      a_hi = -a_hi;
+    if (inst.inst_.neg_hi & 2)
+      b_hi = -b_hi;
+    if (inst.inst_.neg_hi & 4)
+      c_hi = -c_hi;
+    uint32_t rlo = std::bit_cast<uint32_t>(std::fma(a_lo, b_lo, c_lo));
+    uint32_t rhi = std::bit_cast<uint32_t>(std::fma(a_hi, b_hi, c_hi));
+    inst.vdst.write_lane64(wf, lane,
+                           static_cast<uint64_t>(rlo) | (static_cast<uint64_t>(rhi) << 32));
   }
 }
 
@@ -12674,6 +12747,38 @@ inline void execute_v_pk_mul_f16_vop3p([[maybe_unused]] Inst &inst,
     float rhi = a_hi * b_hi;
     inst.vdst.write_lane(
         wf, lane, util::f32_to_f16(rlo) | (static_cast<uint32_t>(util::f32_to_f16(rhi)) << 16));
+  }
+}
+
+template <typename Inst>
+inline void execute_v_pk_mul_f32_vop3p([[maybe_unused]] Inst &inst,
+                                       [[maybe_unused]] Wavefront &wf) {
+  uint64_t exec = wf.exec();
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint64_t raw0 = inst.src0.read_lane64(wf, lane);
+    uint64_t raw1 = inst.src1.read_lane64(wf, lane);
+    bool sel0_lo = (inst.inst_.op_sel >> 0) & 1;
+    bool sel1_lo = (inst.inst_.op_sel >> 1) & 1;
+    bool sel0_hi = (inst.inst_.op_sel_hi >> 0) & 1;
+    bool sel1_hi = (inst.inst_.op_sel_hi >> 1) & 1;
+    float a_lo = std::bit_cast<float>(static_cast<uint32_t>(sel0_lo ? (raw0 >> 32) : raw0));
+    float a_hi = std::bit_cast<float>(static_cast<uint32_t>(sel0_hi ? (raw0 >> 32) : raw0));
+    float b_lo = std::bit_cast<float>(static_cast<uint32_t>(sel1_lo ? (raw1 >> 32) : raw1));
+    float b_hi = std::bit_cast<float>(static_cast<uint32_t>(sel1_hi ? (raw1 >> 32) : raw1));
+    if (inst.inst_.neg & 1)
+      a_lo = -a_lo;
+    if (inst.inst_.neg & 2)
+      b_lo = -b_lo;
+    if (inst.inst_.neg_hi & 1)
+      a_hi = -a_hi;
+    if (inst.inst_.neg_hi & 2)
+      b_hi = -b_hi;
+    uint32_t rlo = std::bit_cast<uint32_t>(a_lo * b_lo);
+    uint32_t rhi = std::bit_cast<uint32_t>(a_hi * b_hi);
+    inst.vdst.write_lane64(wf, lane,
+                           static_cast<uint64_t>(rlo) | (static_cast<uint64_t>(rhi) << 32));
   }
 }
 

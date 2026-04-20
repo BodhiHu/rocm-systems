@@ -80,6 +80,8 @@ struct VectorMemState : DynamicInstState {
   Mtype mtype = Mtype::RW;
   bool non_temporal = false;
   bool sign_extend = false;
+  bool d16_hi = false;                 ///< D16_HI load: write to upper 16 bits, preserve lower 16.
+  bool d16_lo = false;                 ///< D16 load: write to lower 16 bits, preserve upper 16.
   AtomicOp atomic_op = AtomicOp::NONE; ///< Atomic RMW operation (NONE for regular loads/stores).
   bool lds_dst = false;                ///< Buffer load with LDS bit: write to LDS, not VGPRs.
   uint32_t lds_base = 0;               ///< M0 value for LDS-destination buffer loads.
