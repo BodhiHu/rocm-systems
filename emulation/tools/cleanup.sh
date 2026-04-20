@@ -109,6 +109,33 @@ cleanup_containers() {
     done
 }
 
+cleanup_networks() {
+    local runtime
+    local network_ids
+    local network_id
+
+    for runtime in docker podman; do
+        if ! command -v "${runtime}" >/dev/null 2>&1; then
+            continue
+        fi
+
+        if ! network_ids="$("${runtime}" network ls -q --filter name=mirage- 2>/dev/null)"; then
+            log "unable to query ${runtime} networks"
+            continue
+        fi
+
+        [[ -z "${network_ids}" ]] && continue
+        log "removing Mirage networks with ${runtime}"
+
+        while IFS= read -r network_id; do
+            [[ -z "${network_id}" ]] && continue
+            if ! "${runtime}" network rm "${network_id}" >/dev/null 2>&1; then
+                log "failed to remove network ${network_id} with ${runtime}"
+            fi
+        done <<< "${network_ids}"
+    done
+}
+
 kill_processes() {
     local pids
     local pid
@@ -169,6 +196,7 @@ main() {
 
     shutdown_sessions "${socket_path}"
     cleanup_containers
+    cleanup_networks
     kill_processes
     cleanup_files "${runtime_dir}" "${socket_path}"
 
