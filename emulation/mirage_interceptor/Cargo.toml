@@ -11,6 +11,8 @@ mirage_schema = { workspace = true }
 mirage_remote = { workspace = true }
 mirage_uapi = { workspace = true }
 libc = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 mirage_real = { workspace = true }

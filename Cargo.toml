@@ -13,6 +13,8 @@ libc = { version = "0.2" }
 bytes = { version = "1" }
 clap = { version = "4.0", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "io-util", "io-std", "sync", "fs"] }
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 
 amdgpu_protocol = { path = "emulation/amdgpu_protocol" }

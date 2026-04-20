@@ -73,7 +73,7 @@ impl EmulatorServer {
             let emulator = Arc::clone(&self.emulator);
             thread::spawn(move || {
                 if let Err(e) = handle_client(emulator, stream) {
-                    eprintln!("mirage_remote connection failed: {e}");
+                    tracing::warn!(error = %e, "mirage_remote connection failed");
                 }
             });
         }

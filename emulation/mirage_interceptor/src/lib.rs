@@ -30,7 +30,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_long, c_ulong, c_void};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, Once, OnceLock};
 
 use libc::{O_CLOEXEC, size_t};
 
@@ -58,6 +58,7 @@ static REMOTE: OnceLock<Option<RemoteEmulator>> = OnceLock::new();
 fn remote() -> Option<&'static RemoteEmulator> {
     REMOTE
         .get_or_init(|| {
+            init_tracing();
             std::env::var_os(MIRAGE_SOCKET_ENV).map(|s| RemoteEmulator::new(PathBuf::from(s)))
         })
         .as_ref()
@@ -673,12 +674,12 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             if (args.flags & KFD_IOC_ALLOC_MEM_FLAGS_USERPTR) != 0 {
                 let handle = SYNTHETIC_HANDLE_COUNTER.fetch_add(1, Ordering::Relaxed);
                 args.handle = handle;
-                if std::env::var("MIRAGE_INTERCEPTOR_DEBUG").is_ok() {
-                    eprintln!(
-                        "[mirage_interceptor] ALLOC_MEMORY_OF_GPU USERPTR handled locally: va_addr=0x{:x} size={} handle=0x{:x}",
-                        args.va_addr, args.size, handle
-                    );
-                }
+                tracing::debug!(
+                    va_addr = format_args!("0x{:x}", args.va_addr),
+                    size = args.size,
+                    handle = format_args!("0x{:x}", handle),
+                    "ALLOC_MEMORY_OF_GPU USERPTR handled locally",
+                );
                 return 0;
             }
 
@@ -699,12 +700,14 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                     0
                 }
                 Err(err) => {
-                    if std::env::var("MIRAGE_INTERCEPTOR_DEBUG").is_ok() {
-                        eprintln!(
-                            "[mirage_interceptor] ALLOC_MEMORY_OF_GPU failed: va_addr=0x{:x} size={} gpu_id={} flags=0x{:x} err={:?}",
-                            args.va_addr, args.size, args.gpu_id, args.flags, err
-                        );
-                    }
+                    tracing::debug!(
+                        va_addr = format_args!("0x{:x}", args.va_addr),
+                        size = args.size,
+                        gpu_id = args.gpu_id,
+                        flags = format_args!("0x{:x}", args.flags),
+                        error = ?err,
+                        "ALLOC_MEMORY_OF_GPU failed",
+                    );
                     errno_to_rc(err.errno())
                 }
             }
@@ -817,14 +820,14 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             ) {
                 Ok(_) => 0,
                 Err(err) => {
-                    debug_log(&format!(
-                        "RUNTIME_ENABLE failed: {} (errno={}), r_debug={} mode_mask=0x{:x} caps=0x{:x}",
-                        err.name(),
-                        err.errno(),
-                        args.r_debug,
-                        args.mode_mask,
-                        args.capabilities_mask
-                    ));
+                    tracing::debug!(
+                        name = err.name(),
+                        errno = err.errno(),
+                        r_debug = args.r_debug,
+                        mode_mask = format_args!("0x{:x}", args.mode_mask),
+                        caps = format_args!("0x{:x}", args.capabilities_mask),
+                        "RUNTIME_ENABLE failed",
+                    );
                     errno_to_rc(err.errno())
                 }
             }
@@ -910,9 +913,12 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             }
         }
         _ => {
-            debug_log(&format!(
-                "passthrough kfd ioctl nr=0x{nr:02x} size={size} -> host_fd={host_fd}"
-            ));
+            tracing::debug!(
+                nr = format_args!("0x{nr:02x}"),
+                size,
+                host_fd,
+                "passthrough kfd ioctl",
+            );
             passthrough_ioctl(host_fd, cmd, arg)
         }
     }
@@ -1013,15 +1019,15 @@ fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                 },
             ) {
                 Ok(resp) => {
-                    debug_log(&format!(
-                        "drm_amdgpu_info ok query={} sub=({}, {}, {}) size={} returned={}",
-                        args.query,
+                    tracing::debug!(
+                        query = args.query,
                         sub_query,
                         sub_query2,
                         sub_query3,
-                        args.return_size,
-                        resp.raw_data.len()
-                    ));
+                        size = args.return_size,
+                        returned = resp.raw_data.len(),
+                        "drm_amdgpu_info ok",
+                    );
                     unsafe {
                         copy_u8_slice(
                             args.return_pointer as usize as *mut u8,
@@ -1032,23 +1038,26 @@ fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                     0
                 }
                 Err(err) => {
-                    debug_log(&format!(
-                        "drm_amdgpu_info err query={} sub=({}, {}, {}) size={} errno={}",
-                        args.query,
+                    tracing::debug!(
+                        query = args.query,
                         sub_query,
                         sub_query2,
                         sub_query3,
-                        args.return_size,
-                        err.errno()
-                    ));
+                        size = args.return_size,
+                        errno = err.errno(),
+                        "drm_amdgpu_info err",
+                    );
                     errno_to_rc(err.errno())
                 }
             }
         }
         _ => {
-            debug_log(&format!(
-                "passthrough drm ioctl nr=0x{nr:02x} size={size} -> host_fd={host_fd}"
-            ));
+            tracing::debug!(
+                nr = format_args!("0x{nr:02x}"),
+                size,
+                host_fd,
+                "passthrough drm ioctl",
+            );
             passthrough_ioctl(host_fd, cmd, arg)
         }
     }
@@ -1088,14 +1097,14 @@ fn passthrough_ioctl(host_fd: c_int, cmd: u32, arg: *mut c_void) -> c_int {
     real(host_fd, cmd as libc::c_ulong, arg)
 }
 
-fn debug_enabled() -> bool {
-    std::env::var_os("MIRAGE_INTERCEPTOR_DEBUG").is_some()
-}
-
-fn debug_log(message: &str) {
-    if debug_enabled() {
-        eprintln!("[mirage_interceptor] {message}");
-    }
+fn init_tracing() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_target(false)
+            .init();
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1132,20 +1141,20 @@ pub fn dispatch_tracked_ioctl(kind: DeviceKind, fd: c_int, cmd: u32, arg: *mut c
     let host_fd = lookup_entry(fd)
         .filter(|e| !e.synthetic_host)
         .map_or(-1, |e| e.host_fd);
-    debug_log(&format!(
-        "dispatch kind={:?} ty=0x{:02x} nr=0x{:02x} size={}",
-        kind,
-        ioc::ty(cmd),
-        ioc::nr(cmd),
-        ioc::size(cmd)
-    ));
+    tracing::debug!(
+        ?kind,
+        ty = format_args!("0x{:02x}", ioc::ty(cmd)),
+        nr = format_args!("0x{:02x}", ioc::nr(cmd)),
+        size = ioc::size(cmd),
+        "dispatch",
+    );
     let rc = dispatch_ioctl_with(remote, kind, cmd, arg, host_fd);
-    debug_log(&format!(
-        "dispatch result kind={:?} nr=0x{:02x} rc={}",
-        kind,
-        ioc::nr(cmd),
-        rc
-    ));
+    tracing::debug!(
+        ?kind,
+        nr = format_args!("0x{:02x}", ioc::nr(cmd)),
+        rc,
+        "dispatch result",
+    );
     rc
 }
 
@@ -1287,7 +1296,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
     if let Some(p) = cstr_to_path(path) {
         let ps = p.to_str().unwrap_or("");
         if ps.contains("dri") || ps.contains("kfd") || ps.contains("render") || ps.contains("gpu") {
-            debug_log(&format!("open ALL path={}", p.display()));
+            tracing::debug!(path = %p.display(), "open ALL");
         }
         // Serve topology files from cached Topology instead of hitting
         // the filesystem or forwarding to the daemon.
@@ -1303,7 +1312,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
         if let Some(kind) = DeviceKind::classify(&p)
             && let Some(remote) = remote()
         {
-            debug_log(&format!("open path={} kind={kind:?}", p.display()));
+            tracing::debug!(path = %p.display(), ?kind, "open");
             let (host_fd, synthetic_host) = open_host_path_or_memfd(path, flags, mode);
             if host_fd < 0 {
                 return host_fd;
@@ -1377,7 +1386,7 @@ pub unsafe extern "C" fn openat(
     if let Some(p) = cstr_to_path(path) {
         let ps = p.to_str().unwrap_or("");
         if ps.contains("dri") || ps.contains("kfd") || ps.contains("render") || ps.contains("gpu") {
-            debug_log(&format!("openat ALL dirfd={dirfd} path={}", p.display()));
+            tracing::debug!(dirfd, path = %p.display(), "openat ALL");
         }
         // Serve topology files from cached Topology.
         if dirfd == libc::AT_FDCWD && is_topology_path(ps) {
@@ -1394,7 +1403,7 @@ pub unsafe extern "C" fn openat(
         && let Some(kind) = DeviceKind::classify(&p)
         && let Some(remote) = remote()
     {
-        debug_log(&format!("openat path={} kind={kind:?}", p.display()));
+        tracing::debug!(path = %p.display(), ?kind, "openat");
         let (host_fd, synthetic_host) = openat_host_path_or_memfd(dirfd, path, flags, mode);
         if host_fd < 0 {
             return host_fd;
@@ -1496,10 +1505,13 @@ pub unsafe extern "C" fn __openat64_2(dirfd: c_int, path: *const c_char, flags: 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn close(fd: c_int) -> c_int {
     if let Some(entry) = lookup_entry(fd) {
-        debug_log(&format!(
-            "close cookie_fd={} remote_fd={} host_fd={} kind={:?}",
-            entry.cookie_fd, entry.remote_fd, entry.host_fd, entry.kind
-        ));
+        tracing::debug!(
+            cookie_fd = entry.cookie_fd,
+            remote_fd = entry.remote_fd,
+            host_fd = entry.host_fd,
+            kind = ?entry.kind,
+            "close",
+        );
         if entry.remote_fd >= 0
             && !has_other_aliases(entry.remote_fd, fd)
             && let Some(remote) = remote()
@@ -1589,13 +1601,13 @@ pub unsafe extern "C" fn drmCommandWrite(
     data: *mut c_void,
     size: c_ulong,
 ) -> c_int {
-    debug_log(&format!(
-        "drmCommandWrite fd={} index={} size={} tracked={:?}",
+    tracing::debug!(
         fd,
-        drm_command_index,
+        index = drm_command_index,
         size,
-        lookup_fd(fd)
-    ));
+        tracked = ?lookup_fd(fd),
+        "drmCommandWrite",
+    );
     if let Some(DeviceKind::DrmRender) = lookup_fd(fd) {
         let cmd = uapi_ioc::iow(
             uapi_ioc::DRM_MAGIC,
@@ -1619,10 +1631,13 @@ fn register_alias(new_fd: c_int, source_fd: c_int) {
     let Some(mut entry) = lookup_entry(source_fd) else {
         return;
     };
-    debug_log(&format!(
-        "alias source_fd={} -> new_fd={} remote_fd={} kind={:?}",
-        source_fd, new_fd, entry.remote_fd, entry.kind
-    ));
+    tracing::debug!(
+        source_fd,
+        new_fd,
+        remote_fd = entry.remote_fd,
+        kind = ?entry.kind,
+        "alias",
+    );
     if entry.remote_fd >= 0
         && let Some(remote) = remote()
     {
@@ -1723,10 +1738,13 @@ pub unsafe extern "C" fn access(path: *const c_char, mode: c_int) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: size_t) -> libc::ssize_t {
     if let Some(entry) = lookup_entry(fd) {
-        debug_log(&format!(
-            "read fd={} remote_fd={} host_fd={} count={}",
-            fd, entry.remote_fd, entry.host_fd, count
-        ));
+        tracing::debug!(
+            fd,
+            remote_fd = entry.remote_fd,
+            host_fd = entry.host_fd,
+            count,
+            "read",
+        );
         if entry.host_fd >= 0 {
             let Some(real) =
                 next_fn!(read : fn(f: c_int, b: *mut c_void, c: size_t) -> libc::ssize_t)
@@ -1779,10 +1797,17 @@ pub unsafe extern "C" fn mmap(
     offset: libc::off_t,
 ) -> *mut c_void {
     if let Some(entry) = lookup_entry(fd) {
-        debug_log(&format!(
-            "mmap fd={} remote_fd={} host_fd={} synthetic={} len={} prot=0x{:x} flags=0x{:x} off={}",
-            fd, entry.remote_fd, entry.host_fd, entry.synthetic_host, length, prot, flags, offset
-        ));
+        tracing::debug!(
+            fd,
+            remote_fd = entry.remote_fd,
+            host_fd = entry.host_fd,
+            synthetic = entry.synthetic_host,
+            len = length,
+            prot = format_args!("0x{:x}", prot),
+            flags = format_args!("0x{:x}", flags),
+            offset,
+            "mmap",
+        );
         let Some(real) = next_fn!(mmap : fn(a: *mut c_void, l: size_t, p: c_int, f: c_int, d: c_int, o: libc::off_t) -> *mut c_void)
         else {
             errno_to_rc(libc::ENOSYS);
@@ -1807,7 +1832,7 @@ pub unsafe extern "C" fn mmap(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn munmap(addr: *mut c_void, length: size_t) -> c_int {
-    debug_log(&format!("munmap addr={:?} len={}", addr, length));
+    tracing::debug!(?addr, len = length, "munmap");
     let Some(real) = next_fn!(munmap : fn(a: *mut c_void, l: size_t) -> c_int) else {
         return errno_to_rc(libc::ENOSYS);
     };

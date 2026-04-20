@@ -245,7 +245,7 @@ impl MirageDaemonServer {
             let daemon = Arc::clone(&self.daemon);
             tokio::spawn(async move {
                 if let Err(error) = Self::handle_client(daemon, stream).await {
-                    eprintln!("mirage daemon connection failed: {error}");
+                    tracing::warn!(%error, "mirage daemon connection failed");
                 }
             });
         }

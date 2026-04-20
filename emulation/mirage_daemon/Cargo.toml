@@ -11,6 +11,8 @@ mirage_real = { path = "../mirage_real" }
 mirage_remote = { path = "../mirage_remote" }
 mirage_schema = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
