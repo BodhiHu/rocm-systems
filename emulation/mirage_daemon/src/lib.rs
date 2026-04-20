@@ -666,6 +666,7 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
         request: BootRequest,
     ) -> MirageDaemonResult<BootReply> {
         let session = Self::session_from_parts(request.name, request.profile, request.image);
+        let extra_volumes = request.volumes;
         if session.name.trim().is_empty() {
             return Ok(BootReply {
                 ok: false,
@@ -817,6 +818,25 @@ impl MirageDaemonBoot for InMemoryMirageDaemon {
 
         // Pull the image (ignore errors for locally available images).
         let _ = runtime.pull_image(&session.image, None).await;
+
+        // Append user-supplied extra volumes.
+        for vol in &extra_volumes {
+            let parts: Vec<&str> = vol.splitn(3, ':').collect();
+            if parts.len() < 2 {
+                return Ok(BootReply {
+                    ok: false,
+                    error: Some(format!("invalid volume spec '{vol}': expected host:container[:ro]")),
+                    container_id: None,
+                    container_ids: vec![],
+                });
+            }
+            let readonly = parts.get(2).map_or(false, |opt| *opt == "ro");
+            base_mounts.push(BindMount {
+                host_path: parts[0].to_string(),
+                container_path: parts[1].to_string(),
+                readonly,
+            });
+        }
 
         let num_nodes = profile.num_nodes.max(1);
         let multi_node = num_nodes > 1;
@@ -1185,6 +1205,7 @@ mod tests {
             name: session.name,
             profile: session.profile,
             image: session.image,
+            volumes: vec![],
         }
     }
 

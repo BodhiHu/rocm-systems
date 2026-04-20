@@ -344,6 +344,9 @@ pub mod daemon {
         profile: String,
         /// Container image to boot.
         image: String,
+        /// Extra bind-mount volumes (`host:container[:ro]`).
+        #[arg(long = "volume", short = 'v')]
+        volumes: Vec<String>,
     }) -> {
         /// Whether the session boot completed successfully.
         ok: bool,

@@ -261,7 +261,15 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         wait_for_unix_socket(socket_path, args.daemon_start_timeout_s)
 
         ctl.run(["create-profile", "--name", args.profile_name, "--simulator", "rocjitsu", "--gpu", args.gpu, "--mode", "functional", "--gpus-per-node", str(args.gpus_per_node), "--nodes", str(args.nodes)])
-        ctl.run(["boot", "--name", args.session_name, "--profile", args.profile_name, "--image", args.image])
+        boot_cmd = ["boot", "--name", args.session_name, "--profile", args.profile_name, "--image", args.image]
+        volumes = list(args.volumes)
+        if not args.no_hf_cache:
+            hf_cache = os.environ.get("HF_HOME", os.path.join(Path.home(), ".cache", "huggingface"))
+            os.makedirs(hf_cache, exist_ok=True)
+            volumes.append(f"{hf_cache}:/root/.cache/huggingface")
+        for vol in volumes:
+            boot_cmd.extend(["--volume", vol])
+        ctl.run(boot_cmd)
 
         ready_script = (
             "import json, torch, vllm; "
@@ -340,6 +348,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--daemon-start-timeout-s", type=float, default=8.0)
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--output-json", default=None)
+    parser.add_argument(
+        "--volume", "-v", action="append", default=[], dest="volumes",
+        help="Extra bind-mount volumes (host:container[:ro]). "
+             "Repeat for multiple mounts.",
+    )
+    parser.add_argument(
+        "--no-hf-cache", action="store_true",
+        help="Do not auto-mount the Hugging Face cache into the container.",
+    )
     return parser.parse_args(argv)
 
 
