@@ -1117,6 +1117,7 @@ mod tests {
                 devices: vec![],
                 resource_limits_json: Some("{\"cpu\":\"4\",\"memory\":\"16Gi\"}".to_string()),
                 network: None,
+                labels: BTreeMap::new(),
             },
         }
     }

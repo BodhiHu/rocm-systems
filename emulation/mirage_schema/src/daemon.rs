@@ -609,9 +609,7 @@ mod tests {
             _request: crate::ctl::daemon::ExecRequest,
         ) -> MirageDaemonResult<crate::ctl::daemon::ExecReply> {
             Ok(crate::ctl::daemon::ExecReply {
-                exit_code: 0,
-                stdout: b"ok\n".to_vec(),
-                stderr: vec![],
+                exec_id: "mock-exec-id".to_string(),
             })
         }
     }

@@ -497,6 +497,7 @@ mod tests {
                 devices: vec![],
                 resource_limits_json: None,
                 network: None,
+                labels: BTreeMap::new(),
             },
         }
     }
