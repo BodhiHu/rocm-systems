@@ -23,6 +23,13 @@
 
 #include <fstream>
 #include <limits>
+
+#ifdef _WIN32
+#include "device/rocm/rocd3d10interop.hpp"
+#include "device/rocm/rocd3d11interop.hpp"
+#include "platform/interop_d3d10.hpp"
+#include "platform/interop_d3d11.hpp"
+#endif
 #include <memory>
 #include <string>
 #include <thread>
@@ -4641,6 +4648,22 @@ void VirtualGPU::submitAcquireExtObjects(amd::AcquireExtObjectsCommand& vcmd) {
 
   profilingBegin(vcmd);
   addSystemScope();
+
+  for (auto& mem : vcmd.getMemList()) {
+    amd::InteropObject* interop = mem->getInteropObj();
+    if (!interop) continue;
+    // Copy data from the original D3D resource to the shared intermediate resource
+    // (no-op for GL and for resources that are already directly shared)
+    interop->copyOrigToShared();
+#ifdef _WIN32
+    if (auto* d3d11Obj = interop->asD3D11Object()) {
+      D3D11Interop::Acquire(&dev(), d3d11Obj->getD3D11Resource());
+    } else if (auto* d3d10Obj = interop->asD3D10Object()) {
+      D3D10Interop::Acquire(&dev(), d3d10Obj->getD3D10Resource());
+    }
+#endif
+  }
+
   profilingEnd();
 }
 
@@ -4649,6 +4672,21 @@ void VirtualGPU::submitReleaseExtObjects(amd::ReleaseExtObjectsCommand& vcmd) {
   // Make sure VirtualGPU has an exclusive access to the resources
   std::scoped_lock lock(execution());
   profilingBegin(vcmd);
+
+  for (auto& mem : vcmd.getMemList()) {
+    amd::InteropObject* interop = mem->getInteropObj();
+    if (!interop) continue;
+#ifdef _WIN32
+    if (auto* d3d11Obj = interop->asD3D11Object()) {
+      D3D11Interop::Release(&dev(), d3d11Obj->getD3D11Resource());
+    } else if (auto* d3d10Obj = interop->asD3D10Object()) {
+      D3D10Interop::Release(&dev(), d3d10Obj->getD3D10Resource());
+    }
+#endif
+    // Copy data from the shared intermediate resource back to the original D3D resource
+    interop->copySharedToOrig();
+  }
+
   profilingEnd();
 }
 
