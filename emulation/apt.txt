@@ -1,2 +1,3 @@
 flatbuffers-compiler 
 libflatbuffers-dev
+libclang-common-18-dev
