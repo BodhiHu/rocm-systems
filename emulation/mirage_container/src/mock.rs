@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use mirage_schema::container::{
     ContainerHandle, ContainerInspection, ContainerLogs, ContainerRuntime, ContainerRuntimeError,
     ContainerRuntimeEvent, ContainerRuntimeOperation, ContainerRuntimeProgressSender,
-    ContainerState, ExecRequest, ExecResult, ResolvedPortMapping, Result, StartContainerRequest,
-    StartedContainer,
+    ContainerState, ExecRequest, ExecResult, ListedContainer, ResolvedPortMapping, Result,
+    StartContainerRequest, StartedContainer,
 };
 
 fn emit_status(
@@ -79,6 +79,7 @@ struct MockContainer {
     inspection: ContainerInspection,
     logs: ContainerLogs,
     next_exec_results: VecDeque<ExecResult>,
+    labels: BTreeMap<String, String>,
 }
 
 impl Default for MockContainerRuntime {
@@ -235,17 +236,19 @@ impl ContainerRuntime for MockContainerRuntime {
 
         let inspection = ContainerInspection {
             handle: handle.clone(),
-            image: request.container.image,
+            image: request.container.image.clone(),
             state: ContainerState::Running,
             exit_code: None,
             ports,
         };
+        let labels = request.container.labels.clone();
         state.containers.insert(
             handle.id.clone(),
             MockContainer {
                 inspection: inspection.clone(),
                 logs: ContainerLogs::default(),
                 next_exec_results: VecDeque::new(),
+                labels,
             },
         );
 
@@ -426,6 +429,29 @@ impl ContainerRuntime for MockContainerRuntime {
         let mut state = self.state.lock().unwrap();
         state.networks.retain(|n| n != name);
         Ok(())
+    }
+
+    async fn list_containers(
+        &self,
+        labels: &BTreeMap<String, String>,
+        _progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<Vec<ListedContainer>> {
+        let state = self.state.lock().unwrap();
+        let mut result = Vec::new();
+        for container in state.containers.values() {
+            let matches = labels
+                .iter()
+                .all(|(k, v)| container.labels.get(k).map_or(false, |cv| cv == v));
+            if matches {
+                result.push(ListedContainer {
+                    handle: container.inspection.handle.clone(),
+                    image: container.inspection.image.clone(),
+                    state: container.inspection.state,
+                    labels: container.labels.clone(),
+                });
+            }
+        }
+        Ok(result)
     }
 }
 

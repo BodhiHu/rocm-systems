@@ -16,8 +16,8 @@ use tokio::process::Command;
 use mirage_schema::container::{
     ContainerHandle, ContainerInspection, ContainerLogs, ContainerRuntime, ContainerRuntimeError,
     ContainerRuntimeEvent, ContainerRuntimeOperation, ContainerRuntimeProgressSender,
-    ContainerState, ExecRequest, ExecResult, InjectedFile, Protocol, ResolvedPortMapping, Result,
-    StartContainerRequest, StartedContainer,
+    ContainerState, ExecRequest, ExecResult, InjectedFile, ListedContainer, Protocol,
+    ResolvedPortMapping, Result, StartContainerRequest, StartedContainer,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -457,6 +457,11 @@ where
             args.push(network.clone());
         }
 
+        for (key, value) in &request.container.labels {
+            args.push("--label".to_string());
+            args.push(format!("{key}={value}"));
+        }
+
         args.push("--entrypoint".to_string());
         args.push(request.container.entrypoint.command.clone());
         args.push(request.container.image.clone());
@@ -806,6 +811,80 @@ where
         )
         .await?;
         Ok(())
+    }
+
+    async fn list_containers(
+        &self,
+        labels: &BTreeMap<String, String>,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<Vec<ListedContainer>> {
+        let mut args = vec![
+            "ps".to_string(),
+            "-a".to_string(),
+            "--no-trunc".to_string(),
+            "--format".to_string(),
+            "{{json .}}".to_string(),
+        ];
+        for (key, value) in labels {
+            args.push("--filter".to_string());
+            args.push(format!("label={key}={value}"));
+        }
+
+        let output = self
+            .run_checked(
+                &args,
+                ContainerRuntimeOperation::InspectContainer,
+                progress.as_ref(),
+            )
+            .await?;
+
+        let mut containers = Vec::new();
+        let stdout_str = String::from_utf8_lossy(&output.stdout);
+        for line in stdout_str.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            let value: Value = serde_json::from_str(line)?;
+            let id = value["ID"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let name = value["Names"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let image = value["Image"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let state_str = value["State"]
+                .as_str()
+                .unwrap_or("unknown");
+            let state = match state_str {
+                "running" => ContainerState::Running,
+                "created" => ContainerState::Created,
+                "exited" => ContainerState::Exited,
+                _ => ContainerState::Dead,
+            };
+
+            // Parse labels from the "Labels" field (comma-separated key=value).
+            let mut parsed_labels = BTreeMap::new();
+            if let Some(label_str) = value["Labels"].as_str() {
+                for pair in label_str.split(',') {
+                    if let Some((k, v)) = pair.split_once('=') {
+                        parsed_labels.insert(k.to_string(), v.to_string());
+                    }
+                }
+            }
+
+            containers.push(ListedContainer {
+                handle: ContainerHandle { id, name },
+                image,
+                state,
+                labels: parsed_labels,
+            });
+        }
+        Ok(containers)
     }
 }
 

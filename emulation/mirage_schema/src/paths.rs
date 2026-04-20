@@ -83,6 +83,48 @@ pub fn config_path() -> PathBuf {
     config_dir().join(CONFIG_FILE)
 }
 
+/// Returns the directory where profiles are stored on disk.
+///
+/// `$XDG_CONFIG_HOME/mirage/profile/`
+pub fn profile_dir() -> PathBuf {
+    config_dir().join("profile")
+}
+
+/// Returns the on-disk path for one profile.
+///
+/// `$XDG_CONFIG_HOME/mirage/profile/<name>.json`
+pub fn profile_path(name: &str) -> PathBuf {
+    profile_dir().join(format!("{name}.json"))
+}
+
+/// Returns the per-session runtime directory.
+///
+/// `$XDG_RUNTIME_DIR/mirage/session/<session>/`
+pub fn session_dir(session: &str) -> PathBuf {
+    runtime_dir().join("session").join(session)
+}
+
+/// Returns the exec runtime directory for one exec inside a session.
+///
+/// `$XDG_RUNTIME_DIR/mirage/session/<session>/exec/<exec_id>/node/0/`
+pub fn exec_io_dir(session: &str, exec_id: &str) -> PathBuf {
+    session_dir(session)
+        .join("exec")
+        .join(exec_id)
+        .join("node")
+        .join("0")
+}
+
+/// Returns the metadata file for one exec inside a session.
+///
+/// `$XDG_RUNTIME_DIR/mirage/session/<session>/exec/<exec_id>/meta.json`
+pub fn exec_meta_path(session: &str, exec_id: &str) -> PathBuf {
+    session_dir(session)
+        .join("exec")
+        .join(exec_id)
+        .join("meta.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

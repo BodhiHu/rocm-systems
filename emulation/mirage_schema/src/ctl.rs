@@ -332,23 +332,28 @@ pub mod daemon {
         container_ids: Vec<String>,
     };
 
-    /// Run one command inside an already booted session.
+    /// Launch a command inside an already booted session and return an exec
+    /// identifier that can be attached to later.
+    ///
+    /// When `interactive` is `true`, I/O is channelled through FIFOs so a
+    /// client can stream stdin/stdout/stderr via the `attach` endpoint.
+    /// When `false`, stdout and stderr are written to regular files on disk
+    /// and stdin is closed immediately.
     exec({
         /// Session that should execute the command.
         session_name: String,
+        /// Run the exec in interactive mode (FIFO-backed I/O).
+        #[arg(long)]
+        interactive: bool,
         /// Program and arguments to run inside the session container.
         ///
         /// Pass the command after `--`, for example:
-        /// `mirage-ctl exec-in-session --session-name demo -- python -c 'print(1)'`.
+        /// `mirage-ctl exec --session-name demo -- python -c 'print(1)'`.
         #[arg(last = true, required = true)]
         command: Vec<String>,
     }) -> {
-        /// Process exit code.
-        exit_code: i32,
-        /// Captured stdout bytes.
-        stdout: Vec<u8>,
-        /// Captured stderr bytes.
-        stderr: Vec<u8>,
+        /// Unique identifier for the exec, usable with `attach`.
+        exec_id: String,
     };
 
     /// Stop a booted session and clean up its backing resources.

@@ -9,6 +9,7 @@
 //! Docker, Podman, or any other OCI-compatible runtime without the
 //! simulator ever knowing which runtime is in use.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
@@ -213,6 +214,13 @@ pub struct ContainerDef {
     /// sessions where containers need to reach each other by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
+
+    /// OCI labels applied to the container (`--label key=value`).
+    ///
+    /// Used by the daemon to tag containers with session metadata so
+    /// running sessions can be rediscovered after a daemon restart.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +337,18 @@ pub trait ContainerRuntime: Send + Sync {
         name: &str,
         progress: Option<ContainerRuntimeProgressSender>,
     ) -> Result<()>;
+
+    /// List running containers that match **all** of the given label
+    /// key=value pairs.
+    ///
+    /// Returns a lightweight summary for each match.  This is used by the
+    /// daemon to rediscover sessions from Docker state instead of keeping
+    /// them in memory.
+    async fn list_containers(
+        &self,
+        labels: &BTreeMap<String, String>,
+        progress: Option<ContainerRuntimeProgressSender>,
+    ) -> Result<Vec<ListedContainer>>;
 }
 
 /// Container start request resolved by the simulator and consumed by a runtime.
@@ -377,6 +397,15 @@ pub struct ContainerInspection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartedContainer {
     pub inspection: ContainerInspection,
+}
+
+/// Lightweight summary returned by [`ContainerRuntime::list_containers`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedContainer {
+    pub handle: ContainerHandle,
+    pub image: String,
+    pub state: ContainerState,
+    pub labels: BTreeMap<String, String>,
 }
 
 /// Captured container logs.
