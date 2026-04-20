@@ -281,32 +281,6 @@ pub mod daemon {
         sessions: Vec<SessionSummary>,
     };
 
-    /// Create a session record without booting containers.
-    create_session({
-        /// Unique session name.
-        name: String,
-        /// Profile used for the session.
-        profile: String,
-        /// Container image associated with the session.
-        image: String,
-    }) -> {
-        /// Whether the session record was created successfully.
-        ok: bool,
-        /// Human-readable creation error when `ok` is `false`.
-        error: String = None,
-    };
-
-    /// Delete an unbooted session record.
-    delete_session({
-        /// Session name to delete.
-        name: String,
-    }) -> {
-        /// Whether the session record was deleted successfully.
-        ok: bool,
-        /// Human-readable deletion error when `ok` is `false`.
-        error: String = None,
-    };
-
     /// Fetch the full dashboard detail view for one session.
     status({
         /// Session name to inspect.

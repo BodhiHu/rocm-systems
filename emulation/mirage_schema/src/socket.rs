@@ -7,9 +7,9 @@
 pub use crate::ctl::{SessionSummary, SimulatorSummary, WorkloadSummary};
 pub use crate::ctl::daemon::{
     AttachInput, AttachOutput, AttachReply, AttachRequest, BootReply, BootRequest,
-    CreateProfileReply, CreateProfileRequest, CreateSessionReply, CreateSessionRequest,
+    CreateProfileReply, CreateProfileRequest,
     CreateWorkloadReply, CreateWorkloadRequest, DeleteProfileReply, DeleteProfileRequest,
-    DeleteSessionReply, DeleteSessionRequest, DeleteWorkloadReply, DeleteWorkloadRequest,
+    DeleteWorkloadReply, DeleteWorkloadRequest,
     ExecReply, ExecRequest, GetOverviewReply, GetOverviewRequest,
     HealthReply, HealthRequest, ListProfilesReply,
     ListProfilesRequest, ListSessionsReply, ListSessionsRequest, ListSimulatorsReply,
@@ -19,11 +19,4 @@ pub use crate::ctl::daemon::{
     StatusReply, StatusRequest, TimeReply, TimeRequest,
 };
 
-/// Backward-compatible alias for the pre-refactor session-creation request.
-pub type DashboardCreateSessionRequest = CreateSessionRequest;
-/// Backward-compatible alias for the pre-refactor session-creation reply.
-pub type DashboardCreateSessionReply = CreateSessionReply;
-/// Backward-compatible alias for the pre-refactor session-deletion request.
-pub type DashboardDeleteSessionRequest = DeleteSessionRequest;
-/// Backward-compatible alias for the pre-refactor session-deletion reply.
-pub type DashboardDeleteSessionReply = DeleteSessionReply;
+

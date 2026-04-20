@@ -17,8 +17,8 @@ use mirage_schema::common::{
 use mirage_schema::config::DaemonDef;
 use mirage_schema::container::{BindMount, ContainerDef};
 use mirage_schema::daemon::{
-    MirageDaemonAttach, MirageDaemonBoot, MirageDaemonCreateProfile, MirageDaemonCreateSession,
-    MirageDaemonCreateWorkload, MirageDaemonDeleteProfile, MirageDaemonDeleteSession,
+    MirageDaemonAttach, MirageDaemonBoot, MirageDaemonCreateProfile,
+    MirageDaemonCreateWorkload, MirageDaemonDeleteProfile,
     MirageDaemonDeleteWorkload, MirageDaemonExec, MirageDaemonStatus,
     MirageDaemonShowSimulator, MirageDaemonShowWorkload, MirageDaemonHealth,
     MirageDaemonListProfiles, MirageDaemonListSessions, MirageDaemonListSimulators,
@@ -28,9 +28,9 @@ use mirage_schema::daemon::{
 use mirage_schema::simulator::SimulatorInfo;
 use mirage_schema::socket::{
     AttachInput, AttachOutput, AttachReply, AttachRequest, BootReply, BootRequest,
-    CreateProfileReply, CreateProfileRequest, CreateSessionReply, CreateSessionRequest,
+    CreateProfileReply, CreateProfileRequest,
     CreateWorkloadReply, CreateWorkloadRequest, DeleteProfileReply, DeleteProfileRequest,
-    DeleteSessionReply, DeleteSessionRequest, DeleteWorkloadReply, DeleteWorkloadRequest,
+    DeleteWorkloadReply, DeleteWorkloadRequest,
     ExecReply, ExecRequest, GetOverviewReply, GetOverviewRequest,
     HealthReply, HealthRequest, ListProfilesReply,
     ListProfilesRequest, ListSessionsReply, ListSessionsRequest, ListSimulatorsReply,
@@ -539,99 +539,6 @@ impl MirageDaemonListSessions for InMemoryMirageDaemon {
             })
             .collect();
         Ok(ListSessionsReply { sessions })
-    }
-}
-
-#[async_trait]
-impl MirageDaemonCreateSession for InMemoryMirageDaemon {
-    async fn create_session(
-        &self,
-        request: CreateSessionRequest,
-    ) -> MirageDaemonResult<CreateSessionReply> {
-        let session = Self::session_from_parts(request.name, request.profile, request.image);
-        if session.name.trim().is_empty() {
-            return Ok(CreateSessionReply {
-                ok: false,
-                error: Some("session name must not be empty".to_string()),
-            });
-        }
-
-        let mut state = self.state.write().await;
-        if state.sessions.contains_key(&session.name) {
-            return Ok(CreateSessionReply {
-                ok: false,
-                error: Some(format!("session '{}' already exists", session.name)),
-            });
-        }
-
-        let Some(profile) = state.profiles.get(&session.profile).cloned() else {
-            return Ok(CreateSessionReply {
-                ok: false,
-                error: Some(format!("profile '{}' does not exist", session.profile)),
-            });
-        };
-
-        if !state.simulators.contains_key(&profile.simulator) {
-            return Ok(CreateSessionReply {
-                ok: false,
-                error: Some(format!(
-                    "simulator '{}' is not registered",
-                    profile.simulator
-                )),
-            });
-        }
-
-        let detail = StatusReply {
-            name: Some(session.name.clone()),
-            profile: Some(profile.clone()),
-            simulator: Some(profile.simulator.clone()),
-            image: Some(session.image.clone()),
-            health: HealthStatus::Healthy,
-            uptime: None,
-            error_message: None,
-            ticks: 0,
-            ipc: 0.0,
-            simulation_speed: 0.0,
-            active_contexts: 0,
-        };
-
-        state.sessions.insert(
-            session.name.clone(),
-            SessionRecord {
-                session,
-                detail,
-                container_handles: vec![],
-                emulator_socket_container: None,
-                interceptor_path_container: None,
-                network_name: None,
-            },
-        );
-
-        Ok(CreateSessionReply {
-            ok: true,
-            error: None,
-        })
-    }
-}
-
-#[async_trait]
-impl MirageDaemonDeleteSession for InMemoryMirageDaemon {
-    async fn delete_session(
-        &self,
-        request: DeleteSessionRequest,
-    ) -> MirageDaemonResult<DeleteSessionReply> {
-        let mut state = self.state.write().await;
-        if state.sessions.remove(&request.name).is_none() {
-            return Ok(DeleteSessionReply {
-                ok: false,
-                error: Some(format!("session '{}' does not exist", request.name)),
-            });
-        }
-
-        Ok(DeleteSessionReply {
-            ok: true,
-            error: None,
-        })
     }
 }
 
@@ -1192,14 +1099,6 @@ mod tests {
         }
     }
 
-    fn create_session_request(session: SessionDef) -> CreateSessionRequest {
-        CreateSessionRequest {
-            name: session.name,
-            profile: session.profile,
-            image: session.image,
-        }
-    }
-
     fn boot_request(session: SessionDef) -> BootRequest {
         BootRequest {
             name: session.name,
@@ -1269,22 +1168,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn creates_and_lists_sessions() {
-        let daemon = InMemoryMirageDaemon::new();
-        daemon
-            .create_profile(create_profile_request(ProfileDef {
-                name: "mi300x".to_string(),
-                simulator: "rocjitsu".to_string(),
-                mode: SimulatorMode::Functional,
-                gpu: "MI300X".to_string(),
-                num_gpus: 1,
-                num_nodes: 1,
-            }))
-            .await
-            .unwrap();
+    async fn boots_and_lists_sessions() {
+        let (daemon, _mock) = daemon_with_mock_runtime().await;
 
         let reply = daemon
-            .create_session(create_session_request(SessionDef {
+            .boot(boot_request(SessionDef {
                 name: "session-a".to_string(),
                 profile: "mi300x".to_string(),
                 image: "ghcr.io/example/image:latest".to_string(),

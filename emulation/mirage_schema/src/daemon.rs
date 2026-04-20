@@ -23,9 +23,9 @@ pub use crate::ctl::{
 };
 pub use crate::ctl::daemon::{
     AttachInput, AttachOutput, AttachReply, AttachRequest, BootReply, BootRequest,
-    CreateProfileReply, CreateProfileRequest, CreateSessionReply, CreateSessionRequest,
+    CreateProfileReply, CreateProfileRequest,
     CreateWorkloadReply, CreateWorkloadRequest, DeleteProfileReply, DeleteProfileRequest,
-    DeleteSessionReply, DeleteSessionRequest, DeleteWorkloadReply, DeleteWorkloadRequest,
+    DeleteWorkloadReply, DeleteWorkloadRequest,
     ExecReply, ExecRequest, GetOverviewReply, GetOverviewRequest,
     HealthReply, HealthRequest, ListProfilesReply,
     ListProfilesRequest, ListSessionsReply, ListSessionsRequest, ListSimulatorsReply,
@@ -38,10 +38,8 @@ pub use crate::ctl::daemon::{
     DaemonCli as MirageDaemonCli, DaemonCommand as MirageDaemonCommand,
     DaemonImpl as MirageDaemon, ImplAttach as MirageDaemonAttach,
     ImplBoot as MirageDaemonBoot, ImplCreateProfile as MirageDaemonCreateProfile,
-    ImplCreateSession as MirageDaemonCreateSession,
     ImplCreateWorkload as MirageDaemonCreateWorkload,
     ImplDeleteProfile as MirageDaemonDeleteProfile,
-    ImplDeleteSession as MirageDaemonDeleteSession,
     ImplDeleteWorkload as MirageDaemonDeleteWorkload,
     ImplExec as MirageDaemonExec, ImplGetOverview as MirageDaemonOverview,
     ImplStatus as MirageDaemonStatus,
@@ -564,32 +562,6 @@ mod tests {
             _request: ListSessionsRequest,
         ) -> MirageDaemonResult<ListSessionsReply> {
             Ok(ListSessionsReply { sessions: vec![] })
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl MirageDaemonCreateSession for FixedDaemon {
-        async fn create_session(
-            &self,
-            _request: CreateSessionRequest,
-        ) -> MirageDaemonResult<CreateSessionReply> {
-            Ok(CreateSessionReply {
-                ok: true,
-                error: None,
-            })
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl MirageDaemonDeleteSession for FixedDaemon {
-        async fn delete_session(
-            &self,
-            _request: DeleteSessionRequest,
-        ) -> MirageDaemonResult<DeleteSessionReply> {
-            Ok(DeleteSessionReply {
-                ok: true,
-                error: None,
-            })
         }
     }
 
