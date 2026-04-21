@@ -495,9 +495,36 @@ fn event_data_from_schema(event: &amdgpu::KfdEventData, raw: &mut KfdEventDataRa
 }
 
 fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_int) -> c_int {
-    let ctx = current_ctx();
     let nr = ioc::nr(cmd);
     let size = ioc::size(cmd) as usize;
+
+    // When real hardware is present, route KFD ioctls through the local
+    // /dev/kfd fd so that kernel-allocated handles and mmap offsets are
+    // valid in this process's address space. Without this, handles and
+    // offsets returned by the daemon would refer to the daemon's kernel
+    // context and be unusable for local mmap calls.
+    if host_fd >= 0 {
+        if nr == (amdgpu::AMDKFD_IOC_ACQUIRE_VM & 0xff) {
+            // ACQUIRE_VM carries a DRM render fd that must be translated
+            // from the application's cookie fd to the real local fd.
+            if check_size::<kfd::kfd_ioctl_acquire_vm_args>(size).is_err() {
+                return errno_to_rc(libc::EINVAL);
+            }
+            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_acquire_vm_args) };
+            let saved_drm_fd = args.drm_fd;
+            if let Some(entry) = lookup_entry(args.drm_fd as c_int) {
+                if entry.host_fd >= 0 {
+                    args.drm_fd = entry.host_fd as u32;
+                }
+            }
+            let rc = passthrough_ioctl(host_fd, cmd, arg);
+            args.drm_fd = saved_drm_fd;
+            return rc;
+        }
+        return passthrough_ioctl(host_fd, cmd, arg);
+    }
+
+    let ctx = current_ctx();
 
     match nr {
         x if x == (amdgpu::AMDKFD_IOC_GET_VERSION & 0xff) => {
@@ -1019,15 +1046,6 @@ fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                 },
             ) {
                 Ok(resp) => {
-                    tracing::debug!(
-                        query = args.query,
-                        sub_query,
-                        sub_query2,
-                        sub_query3,
-                        size = args.return_size,
-                        returned = resp.raw_data.len(),
-                        "drm_amdgpu_info ok",
-                    );
                     unsafe {
                         copy_u8_slice(
                             args.return_pointer as usize as *mut u8,
@@ -1037,18 +1055,7 @@ fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                     }
                     0
                 }
-                Err(err) => {
-                    tracing::debug!(
-                        query = args.query,
-                        sub_query,
-                        sub_query2,
-                        sub_query3,
-                        size = args.return_size,
-                        errno = err.errno(),
-                        "drm_amdgpu_info err",
-                    );
-                    errno_to_rc(err.errno())
-                }
+                Err(err) => errno_to_rc(err.errno())
             }
         }
         _ => {

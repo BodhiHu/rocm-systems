@@ -192,7 +192,6 @@ fn rocminfo_smoke_reaches_real_backed_daemon() {
 }
 
 #[test]
-#[ignore = "enable once mirage_interceptor marshals the rocminfo ioctl/fs surface end-to-end"]
 fn rocminfo_matches_when_hardware_present() {
     let Some(runs) = collect_runs() else {
         return;
