@@ -1062,7 +1062,8 @@ class CodeGenerator:
         if cls in ('vector_cvt_pk_u8_f32', 'vector_cvt_pknorm',
                     'vector_cvt_pkrtz_f16_f32', 'vector_cvt_pk',
                     'vector_cvt_pk_f16_f32', 'vector_cvt_pk_bf16_f32',
-                    'vector_cvt_sr_f16_f32', 'vector_cvt_sr_bf16_f32'):
+                    'vector_cvt_sr_f16_f32', 'vector_cvt_sr_bf16_f32',
+                    'vector_pack_b32_f16'):
             return self._gen_vector_cvt_pk(dst_ops, src_ops, cls, op)
 
         if cls == 'vector_dot2c_bf16':
@@ -1743,6 +1744,10 @@ class CodeGenerator:
             L.append(f'    uint32_t lo = util::f32_to_bf16(s0);')
             L.append(f'    uint32_t hi = util::f32_to_bf16(s1);')
             L.append(f'    {dst[0]}.write_lane(wf, lane, lo | (hi << 16));')
+        elif cls == 'vector_pack_b32_f16':
+            L.append(f'    uint32_t s0 = {src[0]}.read_lane(wf, lane) & 0xFFFF;')
+            L.append(f'    uint32_t s1 = {src[1]}.read_lane(wf, lane) & 0xFFFF;')
+            L.append(f'    {dst[0]}.write_lane(wf, lane, s0 | (s1 << 16));')
         elif cls == 'vector_cvt_sr_f16_f32':
             # Stochastic rounding: use src1 as random bits for rounding
             L.append(f'    float s0 = std::bit_cast<float>({src[0]}.read_lane(wf, lane));')
@@ -4665,13 +4670,16 @@ class CodeGenerator:
             if info.semantic_class in self._NON_SHAREABLE_CLASSES:
                 return False
             return arch in info.isa_names and len(info.isa_names) >= 2
-        # Check family_shared
+        # Check family_shared — a mnemonic may appear in multiple families
+        # (e.g., gfx9 and gfx10) with different encoding layouts. Search
+        # all families for the one that includes the current ISA.
         for fam_insts in self.shared_plan.family_shared.values():
             if mnemonic in fam_insts:
                 info = fam_insts[mnemonic]
                 if info.semantic_class in self._NON_SHAREABLE_CLASSES:
                     return False
-                return arch in info.isa_names and len(info.isa_names) >= 2
+                if arch in info.isa_names and len(info.isa_names) >= 2:
+                    return True
         return False
 
     def gen_insts(self) -> None:

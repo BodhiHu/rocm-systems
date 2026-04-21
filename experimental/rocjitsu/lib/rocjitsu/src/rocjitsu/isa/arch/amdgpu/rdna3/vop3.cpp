@@ -3274,7 +3274,9 @@ VPackB32F16Vop3::VPackB32F16Vop3(const MachineInst *inst)
   num_dst_ = 1;
 }
 
-void VPackB32F16Vop3::execute_impl(amdgpu::Wavefront &wf) { (void)wf; }
+void VPackB32F16Vop3::execute_impl(amdgpu::Wavefront &wf) {
+  amdgpu::execute_v_pack_b32_f16_vop3(*this, wf);
+}
 
 VCvtPkNormI16F16Vop3::VCvtPkNormI16F16Vop3(const MachineInst *inst)
     : Vop3("v_cvt_pk_norm_i16_f16", reinterpret_cast<const OpEncoding *>(inst),

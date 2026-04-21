@@ -233,10 +233,16 @@ class CrossIsaAnalyzer:
 
     @staticmethod
     def _classify_family(isas: set[str]) -> str:
-        """Return a family name for a set of ISAs."""
-        if isas <= CDNA_ISAS:
-            return 'cdna'
-        if isas <= RDNA_ISAS:
-            return 'rdna'
-        # Mixed — use a descriptive name.
-        return '_'.join(sorted(isas))
+        """Return the tightest-fitting family name for a set of ISAs.
+
+        Picks the smallest family from _FAMILIES that contains all ISAs
+        in the set. This avoids collisions where e.g. {rdna1,rdna2} and
+        {rdna3,rdna3_5} both map to 'rdna' and overwrite each other.
+        """
+        best_name = '_'.join(sorted(isas))
+        best_size = float('inf')
+        for name, members in _FAMILIES:
+            if isas <= members and len(members) < best_size:
+                best_name = name
+                best_size = len(members)
+        return best_name

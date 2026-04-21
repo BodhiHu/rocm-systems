@@ -907,12 +907,16 @@ def _derive_vop3(name: str) -> InstructionSemantics | None:
                 'V_PERMLANE16_VAR_B32', 'V_PERMLANEX16_VAR_B32'):
         return InstructionSemantics(name, 'nop')
 
+    if name == 'V_PACK_B32_F16':
+        sem = InstructionSemantics(name, 'vector_pack_b32_f16')
+        sem.semantic_class = 'vector_pack_b32_f16'
+        return sem
+
     # FP8/BF8 pack/convert (non-scaled, CDNA3/4)
     _FP8_PATTERNS = (
         'V_CVT_PK_FP8_F32', 'V_CVT_PK_BF8_F32',
         'V_CVT_SR_FP8_F32', 'V_CVT_SR_BF8_F32',
         'V_CVT_PKNORM_I16_F16', 'V_CVT_PKNORM_U16_F16',
-        'V_PACK_B32_F16',
     )
     if name in _FP8_PATTERNS:
         return InstructionSemantics(name, 'nop')
