@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -94,6 +94,15 @@ struct RocminfoRuns {
     intercepted_norm: Vec<String>,
 }
 
+/// Cache the result so both tests share one daemon + rocminfo session,
+/// avoiding concurrent `/dev/kfd` access that causes
+/// `HSA_STATUS_ERROR_OUT_OF_RESOURCES`.
+static CACHED_RUNS: OnceLock<Option<RocminfoRuns>> = OnceLock::new();
+
+fn cached_runs() -> &'static Option<RocminfoRuns> {
+    CACHED_RUNS.get_or_init(collect_runs)
+}
+
 fn collect_runs() -> Option<RocminfoRuns> {
     if !RealEmulator::hardware_available() {
         eprintln!("rocminfo test: no /dev/kfd on this host - skipping");
@@ -166,7 +175,7 @@ fn collect_runs() -> Option<RocminfoRuns> {
 
 #[test]
 fn rocminfo_smoke_reaches_real_backed_daemon() {
-    let Some(runs) = collect_runs() else {
+    let Some(runs) = cached_runs() else {
         return;
     };
 
@@ -193,7 +202,7 @@ fn rocminfo_smoke_reaches_real_backed_daemon() {
 
 #[test]
 fn rocminfo_matches_when_hardware_present() {
-    let Some(runs) = collect_runs() else {
+    let Some(runs) = cached_runs() else {
         return;
     };
 

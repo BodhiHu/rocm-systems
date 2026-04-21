@@ -494,37 +494,14 @@ fn event_data_from_schema(event: &amdgpu::KfdEventData, raw: &mut KfdEventDataRa
     }
 }
 
-fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_int) -> c_int {
+fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, _host_fd: c_int) -> c_int {
+    let ctx = current_ctx();
     let nr = ioc::nr(cmd);
     let size = ioc::size(cmd) as usize;
 
-    // When real hardware is present, route KFD ioctls through the local
-    // /dev/kfd fd so that kernel-allocated handles and mmap offsets are
-    // valid in this process's address space. Without this, handles and
-    // offsets returned by the daemon would refer to the daemon's kernel
-    // context and be unusable for local mmap calls.
-    if host_fd >= 0 {
-        if nr == (amdgpu::AMDKFD_IOC_ACQUIRE_VM & 0xff) {
-            // ACQUIRE_VM carries a DRM render fd that must be translated
-            // from the application's cookie fd to the real local fd.
-            if check_size::<kfd::kfd_ioctl_acquire_vm_args>(size).is_err() {
-                return errno_to_rc(libc::EINVAL);
-            }
-            let args = unsafe { &mut *(arg as *mut kfd::kfd_ioctl_acquire_vm_args) };
-            let saved_drm_fd = args.drm_fd;
-            if let Some(entry) = lookup_entry(args.drm_fd as c_int) {
-                if entry.host_fd >= 0 {
-                    args.drm_fd = entry.host_fd as u32;
-                }
-            }
-            let rc = passthrough_ioctl(host_fd, cmd, arg);
-            args.drm_fd = saved_drm_fd;
-            return rc;
-        }
-        return passthrough_ioctl(host_fd, cmd, arg);
-    }
-
-    let ctx = current_ctx();
+    // Every KFD ioctl is forwarded to the daemon. The interceptor never
+    // talks to /dev/kfd directly — all kernel interactions are the
+    // daemon's responsibility.
 
     match nr {
         x if x == (amdgpu::AMDKFD_IOC_GET_VERSION & 0xff) => {
@@ -940,13 +917,12 @@ fn dispatch_kfd(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
             }
         }
         _ => {
-            tracing::debug!(
+            tracing::warn!(
                 nr = format_args!("0x{nr:02x}"),
                 size,
-                host_fd,
-                "passthrough kfd ioctl",
+                "unhandled kfd ioctl (not forwarded to daemon)",
             );
-            passthrough_ioctl(host_fd, cmd, arg)
+            errno_to_rc(libc::ENOSYS)
         }
     }
 }
@@ -1214,16 +1190,30 @@ fn create_cookie_fd() -> c_int {
 /// Attempt to open the real device node.  Returns `(fd, synthetic)` where
 /// `synthetic == true` means the real device was absent so a memfd
 /// placeholder was created instead.
-fn open_host_path_or_memfd(path: *const c_char, flags: c_int, mode: libc::mode_t) -> (c_int, bool) {
-    if let Some(real) = next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int) {
-        let fd = unsafe { real(path, flags, mode) };
-        if fd >= 0 {
-            return (fd, false);
+///
+/// For KFD devices the interceptor never opens the real `/dev/kfd`;
+/// all KFD kernel interactions are the daemon's responsibility.  A
+/// synthetic memfd is always used so that mmaps produce anonymous
+/// pages rather than requiring device-backed offsets.
+fn open_host_path_or_memfd(
+    path: *const c_char,
+    flags: c_int,
+    mode: libc::mode_t,
+    kind: DeviceKind,
+) -> (c_int, bool) {
+    // KFD fds are always synthetic — the daemon owns /dev/kfd.
+    if kind != DeviceKind::Kfd {
+        if let Some(real) = next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int) {
+            let fd = unsafe { real(path, flags, mode) };
+            if fd >= 0 {
+                return (fd, false);
+            }
         }
     }
-    // Real device not available — create a memfd placeholder so that the
-    // rest of the interceptor pipeline (cookie fd, remote emulator) still
-    // works.  mmap on this fd will use MAP_ANONYMOUS instead.
+    // Real device not available or deliberately skipped — create a memfd
+    // placeholder so the rest of the interceptor pipeline (cookie fd,
+    // remote emulator) still works.  mmap on this fd will use
+    // MAP_ANONYMOUS instead.
     let name = CString::new("mirage-hostfd").unwrap();
     let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC as u32) };
     (fd, true)
@@ -1234,13 +1224,17 @@ fn openat_host_path_or_memfd(
     path: *const c_char,
     flags: c_int,
     mode: libc::mode_t,
+    kind: DeviceKind,
 ) -> (c_int, bool) {
-    if let Some(real) =
-        next_fn!(openat : fn(d: c_int, p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
-    {
-        let fd = unsafe { real(dirfd, path, flags, mode) };
-        if fd >= 0 {
-            return (fd, false);
+    // KFD fds are always synthetic — the daemon owns /dev/kfd.
+    if kind != DeviceKind::Kfd {
+        if let Some(real) =
+            next_fn!(openat : fn(d: c_int, p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
+        {
+            let fd = unsafe { real(dirfd, path, flags, mode) };
+            if fd >= 0 {
+                return (fd, false);
+            }
         }
     }
     let name = CString::new("mirage-hostfd").unwrap();
@@ -1320,7 +1314,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
             && let Some(remote) = remote()
         {
             tracing::debug!(path = %p.display(), ?kind, "open");
-            let (host_fd, synthetic_host) = open_host_path_or_memfd(path, flags, mode);
+            let (host_fd, synthetic_host) = open_host_path_or_memfd(path, flags, mode, kind);
             if host_fd < 0 {
                 return host_fd;
             }
@@ -1411,7 +1405,7 @@ pub unsafe extern "C" fn openat(
         && let Some(remote) = remote()
     {
         tracing::debug!(path = %p.display(), ?kind, "openat");
-        let (host_fd, synthetic_host) = openat_host_path_or_memfd(dirfd, path, flags, mode);
+        let (host_fd, synthetic_host) = openat_host_path_or_memfd(dirfd, path, flags, mode, kind);
         if host_fd < 0 {
             return host_fd;
         }
@@ -1820,9 +1814,13 @@ pub unsafe extern "C" fn mmap(
             errno_to_rc(libc::ENOSYS);
             return libc::MAP_FAILED;
         };
-        if entry.synthetic_host {
-            // No real GPU — allocate anonymous memory so the application
-            // gets a valid mapping even without hardware.
+        // When a daemon is present (remote_fd >= 0) the interceptor
+        // never owns kernel resources directly — handles and mmap
+        // offsets belong to the daemon's process context.  Provide
+        // anonymous memory so the application gets a valid, writable
+        // mapping.  The daemon is responsible for the actual
+        // device-backed mapping on its side.
+        if entry.remote_fd >= 0 || entry.synthetic_host {
             return unsafe { real(addr, length, prot, flags | libc::MAP_ANONYMOUS, -1, 0) };
         }
         if entry.host_fd >= 0 {
