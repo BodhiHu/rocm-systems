@@ -24,7 +24,6 @@
 from __future__ import absolute_import
 
 import numpy as np
-import pandas as pd
 
 
 def stochastic_assert(df, df_condition_selection, max_failing_samples=30):
