@@ -190,6 +190,7 @@ public:
   uint32_t allocate_lds(uint32_t size_bytes) {
     uint32_t base = next_lds_alloc_;
     uint32_t aligned = (size_bytes + 255u) & ~255u;
+    lds_.zero_range(base, aligned);
     next_lds_alloc_ += aligned;
     return base;
   }

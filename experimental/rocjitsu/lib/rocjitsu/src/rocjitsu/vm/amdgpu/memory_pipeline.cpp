@@ -79,11 +79,14 @@ void vector_complete(VectorMemState &d, ComputeUnitCore &cu) {
   uint64_t exec = d.exec_mask;
   uint64_t oob_mask = exec & ~d.lane_mask; // exec-active but OOB
   if (oob_mask) {
-    static uint64_t oob_count = 0;
-    if (++oob_count <= 10)
-      util::Logger::vm(d.cu_path, " wg[", d.wg_id, "] wf[", d.wf_id,
-                       "] OOB zeroing: exec=", std::hex, d.exec_mask, " lane=", d.lane_mask,
-                       " oob=", oob_mask, std::dec, " dst=", d.dst_reg_base, " vgprs=", vgpr_count);
+    util::Logger::vm([&](auto &os) {
+      static uint64_t oob_count = 0;
+      if (++oob_count > 10)
+        return;
+      os << d.cu_path << " wg[" << d.wg_id << "] wf[" << d.wf_id
+         << "] OOB zeroing: exec=" << std::hex << d.exec_mask << " lane=" << d.lane_mask
+         << " oob=" << oob_mask << std::dec << " dst=" << d.dst_reg_base << " vgprs=" << vgpr_count;
+    });
     for (uint32_t lane = 0; lane < d.wf_size; ++lane) {
       if (!(oob_mask & (1ULL << lane)))
         continue;
@@ -110,22 +113,6 @@ void vector_complete(VectorMemState &d, ComputeUnitCore &cu) {
       cu.write_vgpr(d.dst_reg_base + i, lane, val);
     }
   }
-  // Per-lane VGPR writeback trace: log first 4 active lanes with addresses
-  // and loaded values so we can verify the buffer_load -> VGPR data path.
-  util::Logger::vm([&](auto &os) {
-    static thread_local uint64_t vcomp_trace = 0;
-    if (++vcomp_trace > 80)
-      return;
-    os << std::format("{} wg[{}] wf[{}] VMEM complete: dst_v={} esz={} nelm={} stride={}",
-                      d.cu_path, d.wg_id, d.wf_id, d.dst_reg_base, d.elem_size, d.num_elems,
-                      stride);
-    for (uint32_t ln = 0; ln < d.wf_size; ++ln) {
-      if (!(d.lane_mask & (1ULL << ln)))
-        continue;
-      uint32_t v0 = cu.read_vgpr(d.dst_reg_base, ln);
-      os << std::format(" L{}:@{:#x}={:#x}", ln, d.per_lane_addr[ln], v0);
-    }
-  });
 }
 
 } // namespace
@@ -425,14 +412,15 @@ void LocalMemPipeline::initiate_access(Instruction &inst, Wavefront &wf) {
         if (!(d.lane_mask & (1ULL << ln)))
           continue;
         uint32_t v = 0;
-        if (stride >= 4)
-          std::memcpy(&v, &d.response_data[ln * stride], 4);
+        uint32_t read_size = std::min(stride, 4u);
+        if (d.response_data.size() >= ln * stride + read_size)
+          std::memcpy(&v, &d.response_data[ln * stride], read_size);
         os << std::format(" L{}:lds[{:#x}]={:#x}", ln, static_cast<uint32_t>(d.per_lane_addr[ln]),
                           v);
         if (d.ds2_active) {
           uint32_t v2 = 0;
-          if (stride >= 4)
-            std::memcpy(&v2, &d.ds2_response_data[ln * stride], 4);
+          if (d.ds2_response_data.size() >= ln * stride + read_size)
+            std::memcpy(&v2, &d.ds2_response_data[ln * stride], read_size);
           os << std::format(",lds2[{:#x}]={:#x}", static_cast<uint32_t>(d.ds2_per_lane_addr[ln]),
                             v2);
         }
@@ -459,8 +447,9 @@ void LocalMemPipeline::initiate_access(Instruction &inst, Wavefront &wf) {
         for (uint32_t e = 0; e < d.num_elems; ++e) {
           uint32_t v = 0;
           uint32_t off = ln * stride + e * d.elem_size;
-          if (d.elem_size >= 4 && d.store_data.size() >= off + 4)
-            std::memcpy(&v, &d.store_data[off], 4);
+          uint32_t copy_bytes = std::min(d.elem_size, 4u);
+          if (d.store_data.size() >= off + copy_bytes)
+            std::memcpy(&v, &d.store_data[off], copy_bytes);
           os << std::format("{}{:#x}", e ? "," : "", v);
         }
         if (d.ds2_active) {

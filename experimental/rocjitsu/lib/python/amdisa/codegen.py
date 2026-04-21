@@ -4193,7 +4193,6 @@ class CodeGenerator:
         L.append(f'  d->mtype = {self._mtype_expr()};')
         L.append(f'  d->non_temporal = {nt};')
         L.append('  flat_calculate_addresses(inst_, wf, *d);')
-        # Counter increment handled by MemoryPipeline::issue().
         L.append('  set_data(std::move(d));')
         return '\n'.join(L)
 
@@ -4468,7 +4467,6 @@ class CodeGenerator:
         if sem.d16_lo:
             L.append('  d->d16_lo = true;')
         L.append('  ds_calculate_addresses(inst_, wf, *d);')
-        # Counter increment handled by MemoryPipeline::issue().
         L.append('  set_data(std::move(d));')
         return '\n'.join(L)
 

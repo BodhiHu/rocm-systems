@@ -93,44 +93,56 @@ void CommandProcessor::init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf,
   }
 
   // System SGPRs: workgroup_id_{x,y,z} placed sequentially after user SGPRs.
-  // When the kernel enables workgroup_id_y/z, the SPI decomposes the flat WG
-  // index into (x,y,z). When neither is enabled, workgroup_id_x receives the
-  // flat serial index — the kernel is responsible for its own decomposition
-  // (Tensile GEMM kernels do this via kernarg constants).
+  // Only the IDs whose enable bits are set in compute_pgm_rsrc2 are written.
+  // When kernel_code_properties is 0 (internal test dispatches), always write
+  // workgroup_id_x as a fallback since internal kernels expect it.
   uint32_t sys_idx = pkt.num_user_sgprs;
-  if (pkt.enable_wg_id_y || pkt.enable_wg_id_z) {
+  {
     uint32_t gx = pkt.grid_wgs_x > 0 ? pkt.grid_wgs_x : 1;
     uint32_t gy = pkt.grid_wgs_y > 0 ? pkt.grid_wgs_y : 1;
-    cu->write_sgpr(sbase + sys_idx++, global_wg_id % gx);
+    bool kcp_zero = (pkt.kernel_code_properties == 0);
+    if (pkt.enable_wg_id_x || kcp_zero) {
+      uint32_t wg_x = (pkt.enable_wg_id_y || pkt.enable_wg_id_z) ? global_wg_id % gx : global_wg_id;
+      cu->write_sgpr(sbase + sys_idx++, wg_x);
+    }
     if (pkt.enable_wg_id_y)
       cu->write_sgpr(sbase + sys_idx++, (global_wg_id / gx) % gy);
     if (pkt.enable_wg_id_z)
       cu->write_sgpr(sbase + sys_idx++, global_wg_id / (gx * gy));
-  } else {
-    cu->write_sgpr(sbase + sys_idx, global_wg_id);
   }
 
   util::Logger::vm([&](auto &os) {
     static thread_local uint64_t init_count = 0;
     if (++init_count <= 200 && wf_index_in_wg == 0)
       os << std::format("CP: init_wf #{} cu={} global_wg={} s[{}]=({},{},{})"
-                        " grid_wgs=({},{},{}) enable_y={} enable_z={}",
+                        " grid_wgs=({},{},{}) enable_x={} enable_y={} enable_z={}",
                         init_count, cu->name(), global_wg_id, pkt.num_user_sgprs,
                         cu->read_sgpr(sbase + pkt.num_user_sgprs),
                         pkt.enable_wg_id_y ? cu->read_sgpr(sbase + pkt.num_user_sgprs + 1) : 0u,
                         pkt.enable_wg_id_z ? cu->read_sgpr(sbase + pkt.num_user_sgprs + 2) : 0u,
-                        pkt.grid_wgs_x, pkt.grid_wgs_y, pkt.grid_wgs_z, pkt.enable_wg_id_y,
-                        pkt.enable_wg_id_z);
+                        pkt.grid_wgs_x, pkt.grid_wgs_y, pkt.grid_wgs_z, pkt.enable_wg_id_x,
+                        pkt.enable_wg_id_y, pkt.enable_wg_id_z);
   });
 
-  // Workitem ID: v0 = workitem_id_x within the workgroup.
-  // For multi-wavefront workgroups, each wavefront covers a different range:
-  // wf0: 0..wf_size-1, wf1: wf_size..2*wf_size-1, etc.
+  // Workitem IDs per AMDHSA ABI. The SPI decomposes the flat thread index
+  // into (x, y, z) using the AQL packet's workgroup dimensions and writes
+  // the requested components to VGPRs based on enable_vgpr_workitem_id:
+  //   0 = v0 only (workitem_id_x)
+  //   1 = v0 + v1 (workitem_id_x, workitem_id_y)
+  //   2 = v0 + v1 + v2 (workitem_id_x, workitem_id_y, workitem_id_z)
   uint32_t vbase = wf->vgpr_alloc().base;
   uint32_t sbase_dbg = wf->sgpr_alloc().base;
   uint32_t workitem_base = wf_index_in_wg * cu->wf_size();
-  for (uint32_t lane = 0; lane < cu->wf_size(); ++lane)
-    cu->write_vgpr(vbase, lane, workitem_base + lane);
+  uint32_t wg_x = pkt.workgroup_size_x > 0 ? pkt.workgroup_size_x : 1;
+  uint32_t wg_y = pkt.workgroup_size_y > 0 ? pkt.workgroup_size_y : 1;
+  for (uint32_t lane = 0; lane < cu->wf_size(); ++lane) {
+    uint32_t flat_id = workitem_base + lane;
+    cu->write_vgpr(vbase, lane, flat_id % wg_x);
+    if (pkt.enable_vgpr_workitem_id >= 1)
+      cu->write_vgpr(vbase + 1, lane, (flat_id / wg_x) % wg_y);
+    if (pkt.enable_vgpr_workitem_id >= 2)
+      cu->write_vgpr(vbase + 2, lane, flat_id / (wg_x * wg_y));
+  }
   util::Logger::vm([&](auto &os) {
     os << std::format("{} wg[{}] wf[{}] init: wf_idx_in_wg={} vbase={} sbase={} workitem_base={}",
                       cu->full_path(), global_wg_id, wf->wf_id(), wf_index_in_wg, vbase, sbase_dbg,
@@ -675,10 +687,17 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
   dp.grid_wgs_x = (num_dims <= 1) ? total_wgs : grid_wgs_x;
   dp.grid_wgs_y = (num_dims >= 2) ? grid_wgs_y : 1;
   dp.grid_wgs_z = (num_dims >= 3) ? grid_wgs_z : 1;
+  dp.enable_wg_id_x =
+      AMDHSA_BITS_GET(kd.compute_pgm_rsrc2, COMPUTE_PGM_RSRC2_ENABLE_SGPR_WORKGROUP_ID_X);
   dp.enable_wg_id_y =
       AMDHSA_BITS_GET(kd.compute_pgm_rsrc2, COMPUTE_PGM_RSRC2_ENABLE_SGPR_WORKGROUP_ID_Y);
   dp.enable_wg_id_z =
       AMDHSA_BITS_GET(kd.compute_pgm_rsrc2, COMPUTE_PGM_RSRC2_ENABLE_SGPR_WORKGROUP_ID_Z);
+  dp.enable_vgpr_workitem_id = static_cast<uint8_t>(
+      AMDHSA_BITS_GET(kd.compute_pgm_rsrc2, COMPUTE_PGM_RSRC2_ENABLE_VGPR_WORKITEM_ID));
+  dp.workgroup_size_x = pkt.workgroup_size_x;
+  dp.workgroup_size_y = pkt.workgroup_size_y;
+  dp.workgroup_size_z = pkt.workgroup_size_z;
   dp.completion_signal = pkt.completion_signal.handle;
   dp.host_signal = host_accessible;
   dp.ordered = host_accessible;
