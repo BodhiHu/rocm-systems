@@ -8,6 +8,7 @@ import {
 } from "../api/client";
 import type { SessionSummary, ProfileDef } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
+import { PhaseBadge } from "../components/PhaseBadge";
 
 export function SessionListPage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -21,6 +22,16 @@ export function SessionListPage() {
   }, []);
 
   useEffect(refresh, [refresh]);
+
+  // Poll for updates while any session is still booting.
+  useEffect(() => {
+    const booting = sessions.some(
+      (s) => s.phase === "Pulling" || s.phase === "Starting",
+    );
+    if (!booting) return;
+    const h = setInterval(refresh, 1000);
+    return () => clearInterval(h);
+  }, [sessions, refresh]);
 
   useEffect(() => {
     listProfiles().then(setProfiles).catch(() => {});
@@ -108,6 +119,7 @@ export function SessionListPage() {
               <th>Profile</th>
               <th>Simulator</th>
               <th>Image</th>
+              <th>Phase</th>
               <th>Health</th>
               <th></th>
             </tr>
@@ -124,6 +136,12 @@ export function SessionListPage() {
                 <td>{s.simulator}</td>
                 <td>
                   <code>{s.image}</code>
+                </td>
+                <td>
+                  <PhaseBadge
+                    phase={s.phase}
+                    message={s.progress_message}
+                  />
                 </td>
                 <td>
                   <StatusBadge status={s.health_status} />

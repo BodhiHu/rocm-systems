@@ -431,6 +431,10 @@ pub enum SessionPhase {
     Running,
     /// Boot failed; consult the error message for details.
     Failed,
+    /// Leftover state was found on disk but no containers are running.
+    /// A stale session can be removed via `shutdown` to clean up the state
+    /// directory.
+    Stale,
 }
 
 // ---------------------------------------------------------------------------

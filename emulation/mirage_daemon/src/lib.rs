@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
@@ -12,8 +12,8 @@ use mirage_container::{
     ContainerHandle, ContainerRuntime, ExecRequest as ContainerExecRequest, StartContainerRequest,
 };
 use mirage_schema::common::{
-    ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SetEnv, SimulatorMode, Time,
-    WorkloadDef,
+    ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SessionPhase, SetEnv, SimulatorMode,
+    Time, WorkloadDef,
 };
 use mirage_schema::container::{BindMount, ContainerDef};
 use mirage_schema::daemon::{
@@ -95,7 +95,7 @@ pub struct ExecMeta {
 ///   I/O channels under `$XDG_RUNTIME_DIR/mirage/session/<session>/exec/`.
 pub struct MirageDaemon {
     /// Registered simulators (in memory — they connect at runtime).
-    state: RwLock<State>,
+    state: Arc<RwLock<State>>,
     /// Container runtime used for Docker operations.
     container_runtime: Option<Arc<dyn ContainerRuntime>>,
     /// Monotonic exec counter used to generate unique exec ids.
@@ -103,6 +103,10 @@ pub struct MirageDaemon {
     /// Root directory for on-disk configuration (profiles, workloads).
     /// Defaults to `paths::config_dir()` in production.
     config_root: PathBuf,
+    /// Root directory for per-session runtime state (exec FIFOs, metadata).
+    /// Defaults to `paths::runtime_dir()` in production; tests override it
+    /// to isolate state between runs.
+    runtime_root: PathBuf,
 }
 
 impl fmt::Debug for MirageDaemon {
@@ -126,6 +130,22 @@ struct State {
     /// Maps session name → opaque emulator session id so the daemon can
     /// detect when a simulator process crashes and taint associated sessions.
     emulator_sessions: BTreeMap<String, String>,
+    /// Sessions currently being booted (image pull + container start) or
+    /// that finished in a failed state. Successfully booted sessions are
+    /// removed from this map and discovered via the container runtime.
+    pending_sessions: BTreeMap<String, PendingSession>,
+}
+
+/// In-memory record describing a session that has been accepted for boot
+/// but whose containers are not yet running.
+#[derive(Debug, Clone)]
+struct PendingSession {
+    profile: String,
+    simulator: String,
+    image: String,
+    phase: SessionPhase,
+    progress_message: Option<String>,
+    error_message: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +245,39 @@ impl MirageDaemon {
         }
     }
 
+    /// Block until a session started by [`boot`](MirageDaemonBoot::boot) is
+    /// no longer in the pending map — i.e. either its containers are up
+    /// (removed from the map) or the boot has entered the `Failed` state.
+    ///
+    /// Returns the final phase observed: [`SessionPhase::Running`] when the
+    /// pending entry has been consumed, or [`SessionPhase::Failed`] on
+    /// failure. Times out after the provided duration, returning
+    /// [`SessionPhase::Pulling`]/[`SessionPhase::Starting`] in that case.
+    pub async fn wait_for_boot(
+        &self,
+        session_name: &str,
+        timeout: std::time::Duration,
+    ) -> SessionPhase {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            {
+                let state = self.state.read().await;
+                match state.pending_sessions.get(session_name) {
+                    None => return SessionPhase::Running,
+                    Some(p) if p.phase == SessionPhase::Failed => {
+                        return SessionPhase::Failed;
+                    }
+                    Some(p) => {
+                        if std::time::Instant::now() >= deadline {
+                            return p.phase;
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
     /// Clear all transient daemon state: profiles on disk, known sessions
     /// in memory, and any containers owned by this daemon.
     ///
@@ -236,10 +289,11 @@ impl MirageDaemon {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
-        // Clear in-memory emulator-session mapping.
+        // Clear in-memory state.
         {
             let mut state = self.state.write().await;
             state.emulator_sessions.clear();
+            state.pending_sessions.clear();
         }
         // Tear down any containers the runtime knows about.
         if let Some(runtime) = &self.container_runtime {
@@ -263,9 +317,8 @@ impl MirageDaemon {
 /// Create the directory tree and I/O nodes for an exec.
 ///
 /// Interactive execs get FIFOs; non-interactive execs get regular files.
-fn create_exec_io(session: &str, exec_id: &str, interactive: bool) -> std::io::Result<PathBuf> {
-    let dir = paths::exec_io_dir(session, exec_id);
-    std::fs::create_dir_all(&dir)?;
+fn create_exec_io(dir: &Path, interactive: bool) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
 
     if interactive {
         // Create named pipes (FIFOs) for stdin/stdout/stderr.
@@ -288,11 +341,10 @@ fn create_exec_io(session: &str, exec_id: &str, interactive: bool) -> std::io::R
         }
     }
 
-    Ok(dir)
+    Ok(())
 }
 
-fn save_exec_meta(session: &str, exec_id: &str, meta: &ExecMeta) -> std::io::Result<()> {
-    let path = paths::exec_meta_path(session, exec_id);
+fn save_exec_meta(path: &Path, meta: &ExecMeta) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -308,25 +360,27 @@ fn save_exec_meta(session: &str, exec_id: &str, meta: &ExecMeta) -> std::io::Res
 impl MirageDaemon {
     pub fn new() -> Self {
         Self {
-            state: RwLock::new(State {
+            state: Arc::new(RwLock::new(State {
                 simulators: builtin_simulators(),
                 ..State::default()
-            }),
+            })),
             container_runtime: None,
             next_exec_id: AtomicU64::new(1),
             config_root: paths::config_dir(),
+            runtime_root: paths::runtime_dir(),
         }
     }
 
     pub fn with_container_runtime(runtime: Arc<dyn ContainerRuntime>) -> Self {
         Self {
-            state: RwLock::new(State {
+            state: Arc::new(RwLock::new(State {
                 simulators: builtin_simulators(),
                 ..State::default()
-            }),
+            })),
             container_runtime: Some(runtime),
             next_exec_id: AtomicU64::new(1),
             config_root: paths::config_dir(),
+            runtime_root: paths::runtime_dir(),
         }
     }
 
@@ -370,6 +424,55 @@ impl MirageDaemon {
                     e.to_string(),
                 ))
             })
+    }
+
+    /// Scan the per-session state directory tree on disk and return the
+    /// session names found there. These correspond to sessions that at some
+    /// point booted (or attempted to boot) on this host; if a name is not
+    /// also represented by a running container or an in-flight pending
+    /// boot, the session is considered [`SessionPhase::Stale`].
+    fn list_session_state_dirs(&self) -> Vec<String> {
+        let root = self.sessions_root();
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            return Vec::new();
+        };
+        let mut names = Vec::new();
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            if let Some(name) = entry.file_name().to_str() {
+                names.push(name.to_string());
+            }
+        }
+        names
+    }
+
+    /// Directory under which each session has its own state subdirectory.
+    fn sessions_root(&self) -> PathBuf {
+        self.runtime_root.join("session")
+    }
+
+    /// Per-session state directory.
+    fn session_dir(&self, session: &str) -> PathBuf {
+        self.sessions_root().join(session)
+    }
+
+    /// Per-exec I/O directory under a session.
+    fn exec_io_dir(&self, session: &str, exec_id: &str) -> PathBuf {
+        self.session_dir(session)
+            .join("exec")
+            .join(exec_id)
+            .join("node")
+            .join("0")
+    }
+
+    /// Per-exec metadata file under a session.
+    fn exec_meta_path(&self, session: &str, exec_id: &str) -> PathBuf {
+        self.session_dir(session)
+            .join("exec")
+            .join(exec_id)
+            .join("meta.json")
     }
 
     fn simulator_summary(_state: &State, info: &SimulatorInfo, active: u32) -> SimulatorSummary {
@@ -572,12 +675,20 @@ impl MirageDaemonOverview for MirageDaemon {
         let state = self.state.read().await;
         let profiles = self.load_profiles_from_disk();
         let containers = self.list_session_containers().await?;
-        // Count unique sessions from containers.
-        let mut session_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        // Count unique sessions from containers plus any pending sessions
+        // that do not yet have a backing container.
+        let mut session_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for c in &containers {
             if let Some(name) = c.labels.get(LABEL_SESSION) {
-                session_names.insert(name.as_str());
+                session_names.insert(name.clone());
             }
+        }
+        for name in state.pending_sessions.keys() {
+            session_names.insert(name.clone());
+        }
+        for name in self.list_session_state_dirs() {
+            session_names.insert(name);
         }
         Ok(GetOverviewReply {
             simulator_count: state.simulators.len() as u32,
@@ -817,8 +928,54 @@ impl MirageDaemonListSessions for MirageDaemon {
                     simulator: c.labels.get(LABEL_SIMULATOR).cloned(),
                     image: c.labels.get(LABEL_IMAGE).cloned(),
                     health_status: HealthStatus::Healthy,
+                    phase: SessionPhase::Running,
+                    progress_message: None,
                 }
             });
+        }
+        // Merge pending sessions (still booting or boot-failed) that have
+        // no backing container yet.
+        {
+            let state = self.state.read().await;
+            for (name, pending) in &state.pending_sessions {
+                if let Some(filter) = &request.profile {
+                    if pending.profile != *filter {
+                        continue;
+                    }
+                }
+                seen.entry(name.clone()).or_insert_with(|| SessionSummary {
+                    name: Some(name.clone()),
+                    profile: Some(pending.profile.clone()),
+                    simulator: Some(pending.simulator.clone()),
+                    image: Some(pending.image.clone()),
+                    health_status: if pending.phase == SessionPhase::Failed {
+                        HealthStatus::Unhealthy
+                    } else {
+                        HealthStatus::Unknown
+                    },
+                    phase: pending.phase,
+                    progress_message: pending.progress_message.clone(),
+                });
+            }
+        }
+        // Surface stale sessions: state directories left over on disk for
+        // which no container is running and no boot is in flight. These
+        // typically come from a prior daemon crash or a killed docker
+        // process; the caller can clean them up via `shutdown`.
+        if request.profile.is_none() {
+            for name in self.list_session_state_dirs() {
+                seen.entry(name.clone()).or_insert_with(|| SessionSummary {
+                    name: Some(name),
+                    profile: None,
+                    simulator: None,
+                    image: None,
+                    health_status: HealthStatus::Unknown,
+                    phase: SessionPhase::Stale,
+                    progress_message: Some(
+                        "state directory present but no running container".to_string(),
+                    ),
+                });
+            }
         }
         Ok(ListSessionsReply {
             sessions: seen.into_values().collect(),
@@ -829,6 +986,33 @@ impl MirageDaemonListSessions for MirageDaemon {
 #[async_trait]
 impl MirageDaemonStatus for MirageDaemon {
     async fn status(&self, request: StatusRequest) -> MirageDaemonResult<StatusReply> {
+        // Check pending sessions first — they have no backing container yet.
+        {
+            let state = self.state.read().await;
+            if let Some(pending) = state.pending_sessions.get(&request.name) {
+                let profile = self.load_profiles_from_disk().remove(&pending.profile);
+                return Ok(StatusReply {
+                    name: Some(request.name),
+                    profile,
+                    simulator: Some(pending.simulator.clone()),
+                    image: Some(pending.image.clone()),
+                    health: if pending.phase == SessionPhase::Failed {
+                        HealthStatus::Unhealthy
+                    } else {
+                        HealthStatus::Unknown
+                    },
+                    uptime: None,
+                    error_message: pending.error_message.clone(),
+                    ticks: 0,
+                    ipc: 0.0,
+                    simulation_speed: 0.0,
+                    active_contexts: 0,
+                    phase: pending.phase,
+                    progress_message: pending.progress_message.clone(),
+                });
+            }
+        }
+
         let containers = self.list_session_containers().await?;
         let session_containers: Vec<_> = containers
             .iter()
@@ -840,6 +1024,26 @@ impl MirageDaemonStatus for MirageDaemon {
             .collect();
 
         if session_containers.is_empty() {
+            // Fall back to checking for a stale state directory on disk.
+            if self.session_dir(&request.name).is_dir() {
+                return Ok(StatusReply {
+                    name: Some(request.name),
+                    profile: None,
+                    simulator: None,
+                    image: None,
+                    health: HealthStatus::Unknown,
+                    uptime: None,
+                    error_message: None,
+                    ticks: 0,
+                    ipc: 0.0,
+                    simulation_speed: 0.0,
+                    active_contexts: 0,
+                    phase: SessionPhase::Stale,
+                    progress_message: Some(
+                        "state directory present but no running container".to_string(),
+                    ),
+                });
+            }
             return Err(mirage_schema::daemon::MirageDaemonError::Remote(format!(
                 "session '{}' does not exist",
                 request.name
@@ -862,6 +1066,8 @@ impl MirageDaemonStatus for MirageDaemon {
             ipc: 0.0,
             simulation_speed: 0.0,
             active_contexts: 0,
+            phase: SessionPhase::Running,
+            progress_message: None,
         })
     }
 }
@@ -887,151 +1093,8 @@ impl MirageDaemonBoot for MirageDaemon {
             });
         }
 
-        // Check if session already exists in Docker.
-        let containers = self.list_session_containers().await?;
-        let already_exists = containers.iter().any(|c| {
-            c.labels
-                .get(LABEL_SESSION)
-                .map_or(false, |s| *s == session_name)
-        });
-        if already_exists {
-            return Ok(BootReply {
-                ok: false,
-                error: Some(format!("session '{session_name}' already exists")),
-                container_id: None,
-                container_ids: vec![],
-            });
-        }
-
-        let profiles = self.load_profiles_from_disk();
-        let Some(profile) = profiles.get(&profile_name).cloned() else {
-            return Ok(BootReply {
-                ok: false,
-                error: Some(format!("profile '{profile_name}' does not exist")),
-                container_id: None,
-                container_ids: vec![],
-            });
-        };
-
-        let state = self.state.read().await;
-        if !state.simulators.contains_key(&profile.simulator) {
-            return Ok(BootReply {
-                ok: false,
-                error: Some(format!(
-                    "simulator '{}' is not registered",
-                    profile.simulator
-                )),
-                container_id: None,
-                container_ids: vec![],
-            });
-        }
-        drop(state);
-
-        let Some(runtime) = &self.container_runtime else {
-            return Ok(BootReply {
-                ok: false,
-                error: Some("no container runtime configured".to_string()),
-                container_id: None,
-                container_ids: vec![],
-            });
-        };
-
-        // Generate an emulator session id for crash-recovery labelling.
-        let emulator_session_id = Self::new_emulator_session_id(&session_name);
-
-        // --- Emulator + interceptor setup ---
-        let interceptor_so = find_interceptor_so();
-        let mut base_mounts = Vec::new();
-        let mut base_env = vec![SetEnv {
-            key: "MIRAGE_SESSION".to_string(),
-            value: session_name.clone(),
-        }];
-        let devices = Vec::new();
-
-        if let Some(ref so_path) = interceptor_so {
-            if mirage_real::RealEmulator::hardware_available() {
-                if let Ok(Some(real)) = mirage_real::RealEmulator::detect() {
-                    use mirage_schema::topology::ProvideTopology;
-                    let topology = real.get_topology().ok();
-
-                    let socket_path = unique_emulator_socket(&session_name);
-                    let server = mirage_remote::EmulatorServer::new(socket_path.clone(), real);
-                    let listener = match server.bind() {
-                        Ok(l) => l,
-                        Err(e) => {
-                            return Ok(BootReply {
-                                ok: false,
-                                error: Some(format!("failed to bind emulator socket: {e}")),
-                                container_id: None,
-                                container_ids: vec![],
-                            });
-                        }
-                    };
-                    thread::spawn(move || {
-                        let _ = server.serve_on(listener);
-                    });
-
-                    let container_so = "/opt/mirage/libmirage_interceptor.so".to_string();
-                    let container_sock = "/opt/mirage/emulator.sock".to_string();
-
-                    base_mounts.push(BindMount {
-                        host_path: so_path.to_string_lossy().to_string(),
-                        container_path: container_so.clone(),
-                        readonly: true,
-                    });
-                    base_mounts.push(BindMount {
-                        host_path: socket_path.to_string_lossy().to_string(),
-                        container_path: container_sock.clone(),
-                        readonly: false,
-                    });
-
-                    if let Some(ref topo) = topology {
-                        if let Ok(topo_dir) = create_synthetic_topology(&session_name, topo) {
-                            base_mounts.push(BindMount {
-                                host_path: topo_dir
-                                    .join("sys/class/kfd")
-                                    .to_string_lossy()
-                                    .to_string(),
-                                container_path: "/sys/class/kfd".to_string(),
-                                readonly: true,
-                            });
-                            base_mounts.push(BindMount {
-                                host_path: topo_dir
-                                    .join("sys/class/kfd/kfd/topology")
-                                    .to_string_lossy()
-                                    .to_string(),
-                                container_path: "/sys/devices/virtual/kfd/kfd/topology".to_string(),
-                                readonly: true,
-                            });
-                            base_mounts.push(BindMount {
-                                host_path: topo_dir.join("dev/dri").to_string_lossy().to_string(),
-                                container_path: "/dev/dri".to_string(),
-                                readonly: true,
-                            });
-                            base_mounts.push(BindMount {
-                                host_path: topo_dir.join("dev/kfd").to_string_lossy().to_string(),
-                                container_path: "/dev/kfd".to_string(),
-                                readonly: true,
-                            });
-                        }
-                    }
-
-                    base_env.push(SetEnv {
-                        key: "LD_PRELOAD".to_string(),
-                        value: container_so.clone(),
-                    });
-                    base_env.push(SetEnv {
-                        key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
-                        value: container_sock,
-                    });
-                }
-            }
-        }
-
-        // Pull the image (ignore errors for locally available images).
-        let _ = runtime.pull_image(&image, None).await;
-
-        // Append user-supplied extra volumes.
+        // Validate extra volume syntax up-front so the caller gets a
+        // synchronous error rather than a failed async boot.
         for vol in &extra_volumes {
             let parts: Vec<&str> = vol.splitn(3, ':').collect();
             if parts.len() < 2 {
@@ -1044,147 +1107,392 @@ impl MirageDaemonBoot for MirageDaemon {
                     container_ids: vec![],
                 });
             }
-            let readonly = parts.get(2).map_or(false, |opt| *opt == "ro");
-            base_mounts.push(BindMount {
-                host_path: parts[0].to_string(),
-                container_path: parts[1].to_string(),
-                readonly,
-            });
         }
 
-        let num_nodes = profile.num_nodes.max(1);
-        let multi_node = num_nodes > 1;
-        let head_container_name = if multi_node {
-            format!("mirage-{session_name}-node0")
-        } else {
-            format!("mirage-{session_name}")
-        };
-
-        // Create a Docker network for multi-node sessions.
-        let network_name = if multi_node {
-            let name = format!("mirage-{session_name}");
-            if let Err(err) = runtime.create_network(&name, None).await {
+        // Reject duplicates — check both running containers and any pending
+        // (not-yet-started or failed) session bookkeeping.
+        let containers = self.list_session_containers().await?;
+        let already_running = containers.iter().any(|c| {
+            c.labels
+                .get(LABEL_SESSION)
+                .map_or(false, |s| *s == session_name)
+        });
+        if already_running {
+            return Ok(BootReply {
+                ok: false,
+                error: Some(format!("session '{session_name}' already exists")),
+                container_id: None,
+                container_ids: vec![],
+            });
+        }
+        {
+            let state = self.state.read().await;
+            if state.pending_sessions.contains_key(&session_name) {
                 return Ok(BootReply {
                     ok: false,
-                    error: Some(format!("failed to create network: {err}")),
+                    error: Some(format!("session '{session_name}' already exists")),
                     container_id: None,
                     container_ids: vec![],
                 });
             }
-            Some(name)
-        } else {
-            None
+        }
+
+        let profiles = self.load_profiles_from_disk();
+        let Some(profile) = profiles.get(&profile_name).cloned() else {
+            return Ok(BootReply {
+                ok: false,
+                error: Some(format!("profile '{profile_name}' does not exist")),
+                container_id: None,
+                container_ids: vec![],
+            });
         };
 
-        let mut container_handles: Vec<ContainerHandle> = Vec::with_capacity(num_nodes as usize);
-        let mut container_ids: Vec<String> = Vec::with_capacity(num_nodes as usize);
-
-        for node_index in 0..num_nodes {
-            let container_name = if multi_node {
-                format!("mirage-{session_name}-node{node_index}")
-            } else {
-                format!("mirage-{session_name}")
-            };
-
-            let mut node_env = base_env.clone();
-            if multi_node {
-                node_env.push(SetEnv {
-                    key: "MIRAGE_NUM_NODES".to_string(),
-                    value: num_nodes.to_string(),
-                });
-                node_env.push(SetEnv {
-                    key: "MIRAGE_NODE_RANK".to_string(),
-                    value: node_index.to_string(),
-                });
-                node_env.push(SetEnv {
-                    key: "MIRAGE_HEAD_ADDR".to_string(),
-                    value: head_container_name.clone(),
-                });
-                node_env.push(SetEnv {
-                    key: "MIRAGE_HEAD_PORT".to_string(),
-                    value: MIRAGE_HEAD_PORT.to_string(),
+        {
+            let state = self.state.read().await;
+            if !state.simulators.contains_key(&profile.simulator) {
+                return Ok(BootReply {
+                    ok: false,
+                    error: Some(format!(
+                        "simulator '{}' is not registered",
+                        profile.simulator
+                    )),
+                    container_id: None,
+                    container_ids: vec![],
                 });
             }
-
-            let labels = Self::session_labels(
-                &session_name,
-                &profile_name,
-                &profile.simulator,
-                &image,
-                &emulator_session_id,
-                node_index,
-            );
-
-            let container_def = ContainerDef {
-                image: image.clone(),
-                mounts: base_mounts.clone(),
-                injected_files: vec![],
-                entrypoint: ExecArgs {
-                    command: "sleep".to_string(),
-                    args: vec!["infinity".to_string()],
-                    env: node_env,
-                },
-                working_dir: None,
-                ports: vec![],
-                devices: devices.clone(),
-                privileged: false,
-                resource_limits_json: None,
-                network: network_name.clone(),
-                labels,
-            };
-
-            let started = match runtime
-                .start_container(
-                    StartContainerRequest {
-                        name: container_name,
-                        container: container_def,
-                    },
-                    None,
-                )
-                .await
-            {
-                Ok(s) => s,
-                Err(err) => {
-                    // Clean up any containers we already started.
-                    for handle in &container_handles {
-                        let _ = runtime.stop_container(handle, 5, None).await;
-                        let _ = runtime.remove_container(handle, true, None).await;
-                    }
-                    if let Some(ref net) = network_name {
-                        let _ = runtime.remove_network(net, None).await;
-                    }
-                    return Ok(BootReply {
-                        ok: false,
-                        error: Some(format!("failed to start container: {err}")),
-                        container_id: None,
-                        container_ids: vec![],
-                    });
-                }
-            };
-
-            container_ids.push(started.inspection.handle.id.clone());
-            container_handles.push(started.inspection.handle);
         }
 
-        // Record the emulator session mapping in memory.
+        let Some(runtime) = self.container_runtime.clone() else {
+            return Ok(BootReply {
+                ok: false,
+                error: Some("no container runtime configured".to_string()),
+                container_id: None,
+                container_ids: vec![],
+            });
+        };
+
+        // Mark the session as pending so list_sessions/status surface it
+        // while the background boot task runs.
         {
             let mut state = self.state.write().await;
-            state
-                .emulator_sessions
-                .insert(session_name.clone(), emulator_session_id);
+            state.pending_sessions.insert(
+                session_name.clone(),
+                PendingSession {
+                    profile: profile_name.clone(),
+                    simulator: profile.simulator.clone(),
+                    image: image.clone(),
+                    phase: SessionPhase::Pulling,
+                    progress_message: Some(format!("pulling image {image}")),
+                    error_message: None,
+                },
+            );
         }
 
-        // Create the session runtime directory.
-        let _ = std::fs::create_dir_all(paths::session_dir(&session_name));
+        // Create the session runtime directory up-front so exec can write
+        // into it without racing the boot task.
+        let _ = std::fs::create_dir_all(self.session_dir(&session_name));
 
-        let head_container_id = container_ids.first().cloned();
+        // Spawn the long-running boot work (image pull, container start).
+        let state = self.state.clone();
+        let boot_session = session_name.clone();
+        let boot_profile_name = profile_name.clone();
+        let boot_image = image.clone();
+        tokio::spawn(async move {
+            let result = boot_session_task(
+                state.clone(),
+                runtime,
+                boot_session.clone(),
+                boot_profile_name,
+                profile,
+                boot_image,
+                extra_volumes,
+            )
+            .await;
+            match result {
+                Ok(emulator_session_id) => {
+                    let mut st = state.write().await;
+                    st.emulator_sessions
+                        .insert(boot_session.clone(), emulator_session_id);
+                    // On success, drop the pending entry; the session is now
+                    // discoverable via the container runtime.
+                    st.pending_sessions.remove(&boot_session);
+                }
+                Err(message) => {
+                    let mut st = state.write().await;
+                    if let Some(p) = st.pending_sessions.get_mut(&boot_session) {
+                        p.phase = SessionPhase::Failed;
+                        p.progress_message = None;
+                        p.error_message = Some(message);
+                    }
+                }
+            }
+        });
+
+        // Return immediately; the dashboard polls list_sessions/status to
+        // observe the boot progressing.
         Ok(BootReply {
             ok: true,
             error: None,
-            container_id: head_container_id,
-            container_ids,
+            container_id: None,
+            container_ids: vec![],
         })
     }
+}
+
+/// Perform the actual boot work: image pull, container start, optional
+/// network creation. Runs as a background task spawned by `boot()`.
+async fn boot_session_task(
+    state: Arc<RwLock<State>>,
+    runtime: Arc<dyn ContainerRuntime>,
+    session_name: String,
+    profile_name: String,
+    profile: ProfileDef,
+    image: String,
+    extra_volumes: Vec<String>,
+) -> Result<String, String> {
+    let emulator_session_id = MirageDaemon::new_emulator_session_id(&session_name);
+
+    // --- Emulator + interceptor setup ---
+    let interceptor_so = find_interceptor_so();
+    let mut base_mounts = Vec::new();
+    let mut base_env = vec![SetEnv {
+        key: "MIRAGE_SESSION".to_string(),
+        value: session_name.clone(),
+    }];
+    let devices = Vec::new();
+
+    if let Some(ref so_path) = interceptor_so {
+        if mirage_real::RealEmulator::hardware_available() {
+            if let Ok(Some(real)) = mirage_real::RealEmulator::detect() {
+                use mirage_schema::topology::ProvideTopology;
+                let topology = real.get_topology().ok();
+
+                let socket_path = unique_emulator_socket(&session_name);
+                let server = mirage_remote::EmulatorServer::new(socket_path.clone(), real);
+                let listener = server
+                    .bind()
+                    .map_err(|e| format!("failed to bind emulator socket: {e}"))?;
+                thread::spawn(move || {
+                    let _ = server.serve_on(listener);
+                });
+
+                let container_so = "/opt/mirage/libmirage_interceptor.so".to_string();
+                let container_sock = "/opt/mirage/emulator.sock".to_string();
+
+                base_mounts.push(BindMount {
+                    host_path: so_path.to_string_lossy().to_string(),
+                    container_path: container_so.clone(),
+                    readonly: true,
+                });
+                base_mounts.push(BindMount {
+                    host_path: socket_path.to_string_lossy().to_string(),
+                    container_path: container_sock.clone(),
+                    readonly: false,
+                });
+
+                if let Some(ref topo) = topology {
+                    if let Ok(topo_dir) = create_synthetic_topology(&session_name, topo) {
+                        base_mounts.push(BindMount {
+                            host_path: topo_dir
+                                .join("sys/class/kfd")
+                                .to_string_lossy()
+                                .to_string(),
+                            container_path: "/sys/class/kfd".to_string(),
+                            readonly: true,
+                        });
+                        base_mounts.push(BindMount {
+                            host_path: topo_dir
+                                .join("sys/class/kfd/kfd/topology")
+                                .to_string_lossy()
+                                .to_string(),
+                            container_path: "/sys/devices/virtual/kfd/kfd/topology".to_string(),
+                            readonly: true,
+                        });
+                        base_mounts.push(BindMount {
+                            host_path: topo_dir.join("dev/dri").to_string_lossy().to_string(),
+                            container_path: "/dev/dri".to_string(),
+                            readonly: true,
+                        });
+                        base_mounts.push(BindMount {
+                            host_path: topo_dir.join("dev/kfd").to_string_lossy().to_string(),
+                            container_path: "/dev/kfd".to_string(),
+                            readonly: true,
+                        });
+                    }
+                }
+
+                base_env.push(SetEnv {
+                    key: "LD_PRELOAD".to_string(),
+                    value: container_so,
+                });
+                base_env.push(SetEnv {
+                    key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
+                    value: container_sock,
+                });
+            }
+        }
+    }
+
+    // --- Image pull with progress streaming ---
+    let (progress_tx, mut progress_rx) = mirage_schema::container::container_runtime_progress_channel();
+    {
+        // Forward the latest status message into the pending session record
+        // so the dashboard can surface pull progress.
+        let state = state.clone();
+        let session_name = session_name.clone();
+        tokio::spawn(async move {
+            while let Some(event) = progress_rx.recv().await {
+                use mirage_schema::container::ContainerRuntimeEvent;
+                let message = match event {
+                    ContainerRuntimeEvent::Status { message, .. } => Some(message),
+                    ContainerRuntimeEvent::Stdout { chunk, .. }
+                    | ContainerRuntimeEvent::Stderr { chunk, .. } => {
+                        String::from_utf8(chunk).ok().and_then(|s| {
+                            s.lines().last().map(|line| line.trim().to_string())
+                        })
+                    }
+                };
+                if let Some(message) = message
+                    && !message.is_empty()
+                {
+                    let mut st = state.write().await;
+                    if let Some(p) = st.pending_sessions.get_mut(&session_name) {
+                        p.progress_message = Some(message);
+                    }
+                }
+            }
+        });
+    }
+
+    if let Err(e) = runtime.pull_image(&image, Some(progress_tx)).await {
+        // Pull errors are non-fatal for locally-cached images; surface as a
+        // warning by keeping progress, but continue the boot.
+        tracing::warn!(%e, "image pull returned error; continuing");
+    }
+
+    // Transition to "starting" phase.
+    {
+        let mut st = state.write().await;
+        if let Some(p) = st.pending_sessions.get_mut(&session_name) {
+            p.phase = SessionPhase::Starting;
+            p.progress_message = Some("starting containers".to_string());
+        }
+    }
+
+    // Append user-supplied extra volumes (syntax was validated by boot()).
+    for vol in &extra_volumes {
+        let parts: Vec<&str> = vol.splitn(3, ':').collect();
+        let readonly = parts.get(2).map_or(false, |opt| *opt == "ro");
+        base_mounts.push(BindMount {
+            host_path: parts[0].to_string(),
+            container_path: parts[1].to_string(),
+            readonly,
+        });
+    }
+
+    let num_nodes = profile.num_nodes.max(1);
+    let multi_node = num_nodes > 1;
+    let head_container_name = if multi_node {
+        format!("mirage-{session_name}-node0")
+    } else {
+        format!("mirage-{session_name}")
+    };
+
+    let network_name = if multi_node {
+        let name = format!("mirage-{session_name}");
+        runtime
+            .create_network(&name, None)
+            .await
+            .map_err(|e| format!("failed to create network: {e}"))?;
+        Some(name)
+    } else {
+        None
+    };
+
+    let mut container_handles: Vec<ContainerHandle> = Vec::with_capacity(num_nodes as usize);
+
+    for node_index in 0..num_nodes {
+        let container_name = if multi_node {
+            format!("mirage-{session_name}-node{node_index}")
+        } else {
+            format!("mirage-{session_name}")
+        };
+
+        let mut node_env = base_env.clone();
+        if multi_node {
+            node_env.push(SetEnv {
+                key: "MIRAGE_NUM_NODES".to_string(),
+                value: num_nodes.to_string(),
+            });
+            node_env.push(SetEnv {
+                key: "MIRAGE_NODE_RANK".to_string(),
+                value: node_index.to_string(),
+            });
+            node_env.push(SetEnv {
+                key: "MIRAGE_HEAD_ADDR".to_string(),
+                value: head_container_name.clone(),
+            });
+            node_env.push(SetEnv {
+                key: "MIRAGE_HEAD_PORT".to_string(),
+                value: MIRAGE_HEAD_PORT.to_string(),
+            });
+        }
+
+        let labels = MirageDaemon::session_labels(
+            &session_name,
+            &profile_name,
+            &profile.simulator,
+            &image,
+            &emulator_session_id,
+            node_index,
+        );
+
+        let container_def = ContainerDef {
+            image: image.clone(),
+            mounts: base_mounts.clone(),
+            injected_files: vec![],
+            entrypoint: ExecArgs {
+                command: "sleep".to_string(),
+                args: vec!["infinity".to_string()],
+                env: node_env,
+            },
+            working_dir: None,
+            ports: vec![],
+            devices: devices.clone(),
+            privileged: false,
+            resource_limits_json: None,
+            network: network_name.clone(),
+            labels,
+        };
+
+        let started = match runtime
+            .start_container(
+                StartContainerRequest {
+                    name: container_name,
+                    container: container_def,
+                },
+                None,
+            )
+            .await
+        {
+            Ok(s) => s,
+            Err(err) => {
+                // Clean up any containers we already started.
+                for handle in &container_handles {
+                    let _ = runtime.stop_container(handle, 5, None).await;
+                    let _ = runtime.remove_container(handle, true, None).await;
+                }
+                if let Some(ref net) = network_name {
+                    let _ = runtime.remove_network(net, None).await;
+                }
+                return Err(format!("failed to start container: {err}"));
+            }
+        };
+
+        container_handles.push(started.inspection.handle);
+    }
+
+    Ok(emulator_session_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -1226,7 +1534,8 @@ impl MirageDaemonExec for MirageDaemon {
         let exec_id = self.next_exec_id();
 
         // Prepare I/O paths.
-        if let Err(e) = create_exec_io(&request.session_name, &exec_id, request.interactive) {
+        let io_dir = self.exec_io_dir(&request.session_name, &exec_id);
+        if let Err(e) = create_exec_io(&io_dir, request.interactive) {
             return Err(mirage_schema::daemon::MirageDaemonError::Remote(format!(
                 "failed to create exec I/O: {e}"
             )));
@@ -1245,7 +1554,10 @@ impl MirageDaemonExec for MirageDaemon {
             interactive: request.interactive,
             emulator_session,
         };
-        if let Err(e) = save_exec_meta(&request.session_name, &exec_id, &meta) {
+        if let Err(e) = save_exec_meta(
+            &self.exec_meta_path(&request.session_name, &exec_id),
+            &meta,
+        ) {
             tracing::warn!(%e, "failed to persist exec metadata");
         }
 
@@ -1281,22 +1593,21 @@ impl MirageDaemonExec for MirageDaemon {
             let session_name = request.session_name.clone();
             let eid = exec_id.clone();
             let rt = Arc::clone(runtime);
+            let async_io_dir = self.exec_io_dir(&session_name, &eid);
             tokio::spawn(async move {
                 match rt.exec(exec_request, None).await {
                     Ok(result) => {
-                        let io_dir = paths::exec_io_dir(&session_name, &eid);
-                        let _ = std::fs::write(io_dir.join("stdout"), &result.stdout);
-                        let _ = std::fs::write(io_dir.join("stderr"), &result.stderr);
+                        let _ = std::fs::write(async_io_dir.join("stdout"), &result.stdout);
+                        let _ = std::fs::write(async_io_dir.join("stderr"), &result.stderr);
                         let _ = std::fs::write(
-                            io_dir.join("exit_code"),
+                            async_io_dir.join("exit_code"),
                             result.exit_code.to_string().as_bytes(),
                         );
                     }
                     Err(e) => {
                         tracing::warn!(%e, "non-interactive exec failed");
-                        let io_dir = paths::exec_io_dir(&session_name, &eid);
-                        let _ = std::fs::write(io_dir.join("stderr"), e.to_string().as_bytes());
-                        let _ = std::fs::write(io_dir.join("exit_code"), b"-1");
+                        let _ = std::fs::write(async_io_dir.join("stderr"), e.to_string().as_bytes());
+                        let _ = std::fs::write(async_io_dir.join("exit_code"), b"-1");
                     }
                 }
             });
@@ -1323,7 +1634,21 @@ impl MirageDaemonShutdown for MirageDaemon {
             })
             .collect();
 
-        if session_containers.is_empty() {
+        // A session may be pending (still booting or boot-failed) and have
+        // no containers yet — drop it from the pending map so the caller can
+        // clean up a stuck or failed boot.
+        let was_pending = {
+            let mut state = self.state.write().await;
+            state.pending_sessions.remove(&request.name).is_some()
+        };
+
+        // A session may also be stale: no containers, not in the pending
+        // map, but a leftover state directory is sitting on disk. Removing
+        // the directory is the cleanup for that case.
+        let session_dir = self.session_dir(&request.name);
+        let was_stale = session_dir.is_dir();
+
+        if session_containers.is_empty() && !was_pending && !was_stale {
             return Ok(ShutdownReply {
                 ok: false,
                 error: Some(format!("session '{}' does not exist", request.name)),
@@ -1349,8 +1674,7 @@ impl MirageDaemonShutdown for MirageDaemon {
         }
 
         // Clean up session runtime directory.
-        let session_dir = paths::session_dir(&request.name);
-        let _ = std::fs::remove_dir_all(session_dir);
+        let _ = std::fs::remove_dir_all(&session_dir);
 
         Ok(ShutdownReply {
             ok: true,
@@ -1639,28 +1963,43 @@ mod tests {
         dir
     }
 
+    /// Per-daemon runtime root so state directories don't leak between
+    /// tests and trigger spurious stale-session detections.
+    fn test_runtime_root() -> PathBuf {
+        let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let dir = std::env::temp_dir()
+            .join("mirage-test-runtime")
+            .join(format!("{pid}-{id}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
     impl MirageDaemon {
         fn new_test() -> Self {
             Self {
-                state: RwLock::new(State {
+                state: Arc::new(RwLock::new(State {
                     simulators: builtin_simulators(),
                     ..State::default()
-                }),
+                })),
                 container_runtime: None,
                 next_exec_id: AtomicU64::new(1),
                 config_root: test_config_root(),
+                runtime_root: test_runtime_root(),
             }
         }
 
         fn with_container_runtime_test(runtime: Arc<dyn ContainerRuntime>) -> Self {
             Self {
-                state: RwLock::new(State {
+                state: Arc::new(RwLock::new(State {
                     simulators: builtin_simulators(),
                     ..State::default()
-                }),
+                })),
                 container_runtime: Some(runtime),
                 next_exec_id: AtomicU64::new(1),
                 config_root: test_config_root(),
+                runtime_root: test_runtime_root(),
             }
         }
     }
@@ -1683,6 +2022,42 @@ mod tests {
             image: session.image,
             volumes: vec![],
         }
+    }
+
+    /// Test helper: call boot, wait for the background boot task to
+    /// finish, and assert that the session reached `Running`.
+    async fn boot_and_wait(daemon: &MirageDaemon, req: BootRequest) -> BootReply {
+        let name = req.name.clone();
+        let reply = daemon.boot(req).await.unwrap();
+        assert!(reply.ok, "boot should succeed: {:?}", reply.error);
+        let phase = daemon
+            .wait_for_boot(&name, std::time::Duration::from_secs(5))
+            .await;
+        assert_eq!(
+            phase,
+            SessionPhase::Running,
+            "boot did not reach Running"
+        );
+        reply
+    }
+
+    /// Look up the head-node container handle for a session via the
+    /// container runtime.
+    async fn handle_for_session(
+        mock: &mirage_container::MockContainerRuntime,
+        session: &str,
+    ) -> mirage_container::ContainerHandle {
+        let mut labels = BTreeMap::new();
+        labels.insert(LABEL_SESSION.to_string(), session.to_string());
+        let containers = mock
+            .list_containers(&labels, None)
+            .await
+            .expect("list_containers should succeed");
+        containers
+            .first()
+            .expect("session should have at least one container")
+            .handle
+            .clone()
     }
 
     fn exec_request(session_name: impl Into<String>, exec: ExecArgs) -> ExecRequest {
@@ -1749,15 +2124,15 @@ mod tests {
     async fn boots_and_lists_sessions() {
         let (daemon, _mock) = daemon_with_mock_runtime().await;
 
-        let reply = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            &daemon,
+            boot_request(SessionDef {
                 name: "session-a".to_string(),
                 profile: "mi300x".to_string(),
                 image: "ghcr.io/example/image:latest".to_string(),
-            }))
-            .await
-            .unwrap();
-        assert!(reply.ok);
+            }),
+        )
+        .await;
 
         let sessions = daemon
             .list_sessions(ListSessionsRequest::default())
@@ -1793,17 +2168,15 @@ mod tests {
     async fn boot_creates_session_and_starts_container() {
         let (daemon, mock) = daemon_with_mock_runtime().await;
 
-        let reply = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            &daemon,
+            boot_request(SessionDef {
                 name: "vllm-test".to_string(),
                 profile: "mi300x".to_string(),
                 image: "ghcr.io/rocm/vllm:latest".to_string(),
-            }))
-            .await
-            .unwrap();
-
-        assert!(reply.ok, "boot should succeed: {:?}", reply.error);
-        assert!(reply.container_id.is_some());
+            }),
+        )
+        .await;
 
         // The session should be listed.
         let sessions = daemon
@@ -1842,22 +2215,18 @@ mod tests {
         let (daemon, mock) = daemon_with_mock_runtime().await;
 
         // Boot first.
-        let boot = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            &daemon,
+            boot_request(SessionDef {
                 name: "exec-test".to_string(),
                 profile: "mi300x".to_string(),
                 image: "img:latest".to_string(),
-            }))
-            .await
-            .unwrap();
-        assert!(boot.ok);
+            }),
+        )
+        .await;
 
         // Queue a mock exec result.
-        let starts = mock.start_requests().await;
-        let handle = mirage_container::ContainerHandle {
-            id: boot.container_id.clone().unwrap(),
-            name: starts[0].name.clone(),
-        };
+        let handle = handle_for_session(&mock, "exec-test").await;
         mock.queue_exec_result(
             &handle,
             mirage_container::ExecResult {
@@ -1910,15 +2279,15 @@ mod tests {
         let (daemon, _mock) = daemon_with_mock_runtime().await;
 
         // Boot.
-        let boot = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            &daemon,
+            boot_request(SessionDef {
                 name: "shutdown-test".to_string(),
                 profile: "mi300x".to_string(),
                 image: "img:latest".to_string(),
-            }))
-            .await
-            .unwrap();
-        assert!(boot.ok);
+            }),
+        )
+        .await;
 
         // Session should exist.
         let sessions = daemon
@@ -1958,27 +2327,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_session_on_disk_is_listed_as_stale() {
+        let (daemon, _mock) = daemon_with_mock_runtime().await;
+        // Simulate a crashed daemon: the state directory exists on disk
+        // but no container is running and no boot is in flight.
+        let stale_dir = daemon.session_dir("abandoned");
+        std::fs::create_dir_all(&stale_dir).unwrap();
+
+        let reply = daemon
+            .list_sessions(ListSessionsRequest::default())
+            .await
+            .unwrap();
+        let stale = reply
+            .sessions
+            .iter()
+            .find(|s| s.name.as_deref() == Some("abandoned"))
+            .expect("abandoned session should be listed");
+        assert_eq!(stale.phase, SessionPhase::Stale);
+    }
+
+    #[tokio::test]
+    async fn stale_session_status_reports_stale_phase() {
+        let (daemon, _mock) = daemon_with_mock_runtime().await;
+        let stale_dir = daemon.session_dir("ghost");
+        std::fs::create_dir_all(&stale_dir).unwrap();
+
+        let reply = daemon
+            .status(StatusRequest {
+                name: "ghost".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(reply.phase, SessionPhase::Stale);
+    }
+
+    #[tokio::test]
+    async fn shutdown_removes_stale_session_state_directory() {
+        let (daemon, _mock) = daemon_with_mock_runtime().await;
+        let stale_dir = daemon.session_dir("leftover");
+        std::fs::create_dir_all(&stale_dir).unwrap();
+        assert!(stale_dir.is_dir());
+
+        let reply = daemon
+            .shutdown(ShutdownRequest {
+                name: "leftover".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(reply.ok, "shutdown should clean up stale session: {:?}", reply.error);
+        assert!(!stale_dir.exists(), "state directory should be removed");
+
+        // A second shutdown on the same (now gone) session should fail.
+        let reply2 = daemon
+            .shutdown(ShutdownRequest {
+                name: "leftover".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(!reply2.ok);
+    }
+
+    #[tokio::test]
     async fn boot_exec_shutdown_e2e() {
         let (daemon, mock) = daemon_with_mock_runtime().await;
 
         // 1. Boot a vLLM session.
-        let boot = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            &daemon,
+            boot_request(SessionDef {
                 name: "vllm-e2e".to_string(),
                 profile: "mi300x".to_string(),
                 image: "ghcr.io/rocm/vllm:latest".to_string(),
-            }))
-            .await
-            .unwrap();
-        assert!(boot.ok);
-        let container_id = boot.container_id.unwrap();
+            }),
+        )
+        .await;
 
         // 2. Exec a health check.
-        let starts = mock.start_requests().await;
-        let handle = mirage_container::ContainerHandle {
-            id: container_id.clone(),
-            name: starts[0].name.clone(),
-        };
+        let handle = handle_for_session(&mock, "vllm-e2e").await;
         mock.queue_exec_result(
             &handle,
             mirage_container::ExecResult {
@@ -2045,26 +2470,19 @@ mod tests {
     async fn boot_multinode_starts_multiple_containers_with_network() {
         let (daemon, mock) = daemon_with_multinode_profile().await;
 
-        let reply = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            &daemon,
+            boot_request(SessionDef {
                 name: "multi-test".to_string(),
                 profile: "mi300x-2node".to_string(),
                 image: "ghcr.io/rocm/vllm:latest".to_string(),
-            }))
-            .await
-            .unwrap();
-
-        assert!(reply.ok, "boot should succeed: {:?}", reply.error);
-        assert_eq!(reply.container_ids.len(), 2, "should have 2 containers");
-        assert_eq!(
-            reply.container_id,
-            Some(reply.container_ids[0].clone()),
-            "container_id should be head node"
-        );
+            }),
+        )
+        .await;
 
         // Verify two start_container calls were made.
         let starts = mock.start_requests().await;
-        assert_eq!(starts.len(), 2);
+        assert_eq!(starts.len(), 2, "should have 2 containers");
         assert_eq!(starts[0].name, "mirage-multi-test-node0");
         assert_eq!(starts[1].name, "mirage-multi-test-node1");
 
@@ -2128,15 +2546,15 @@ mod tests {
     async fn shutdown_multinode_cleans_up_all_containers_and_network() {
         let (daemon, mock) = daemon_with_multinode_profile().await;
 
-        let boot = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            &daemon,
+            boot_request(SessionDef {
                 name: "multi-shutdown".to_string(),
                 profile: "mi300x-2node".to_string(),
                 image: "img:latest".to_string(),
-            }))
-            .await
-            .unwrap();
-        assert!(boot.ok);
+            }),
+        )
+        .await;
 
         let shutdown = daemon
             .shutdown(ShutdownRequest {
@@ -2458,23 +2876,18 @@ mod tests {
         daemon: &MirageDaemon,
         mock: &Arc<mirage_container::MockContainerRuntime>,
     ) -> (String, mirage_container::ContainerHandle) {
-        let boot = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            daemon,
+            boot_request(SessionDef {
                 name: "mnist-test".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
-            }))
-            .await
-            .unwrap();
-        assert!(boot.ok, "MNIST boot failed: {:?}", boot.error);
+            }),
+        )
+        .await;
 
-        let container_id = boot.container_id.clone().unwrap();
-        let starts = mock.start_requests().await;
-        let handle = mirage_container::ContainerHandle {
-            id: container_id.clone(),
-            name: starts.last().unwrap().name.clone(),
-        };
-        (container_id, handle)
+        let handle = handle_for_session(mock, "mnist-test").await;
+        (handle.id.clone(), handle)
     }
 
     #[tokio::test]
@@ -2529,17 +2942,15 @@ mod tests {
     async fn mnist_boot_session_starts_container() {
         let (daemon, mock) = mnist_daemon_with_mock().await;
 
-        let boot = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            &daemon,
+            boot_request(SessionDef {
                 name: "mnist-boot".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
-            }))
-            .await
-            .unwrap();
-
-        assert!(boot.ok, "boot should succeed: {:?}", boot.error);
-        assert!(boot.container_id.is_some());
+            }),
+        )
+        .await;
 
         let sessions = daemon
             .list_sessions(ListSessionsRequest::default())
@@ -2727,21 +3138,16 @@ mod tests {
         let (daemon, mock) = mnist_daemon_with_mock().await;
 
         // 1. Boot session.
-        let boot = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            &daemon,
+            boot_request(SessionDef {
                 name: "mnist-e2e".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
-            }))
-            .await
-            .unwrap();
-        assert!(boot.ok);
-        let container_id = boot.container_id.unwrap();
-        let starts = mock.start_requests().await;
-        let handle = mirage_container::ContainerHandle {
-            id: container_id,
-            name: starts[0].name.clone(),
-        };
+            }),
+        )
+        .await;
+        let handle = handle_for_session(&mock, "mnist-e2e").await;
 
         // 2. Pre-flight: Python version.
         mock.queue_exec_result(
@@ -3218,15 +3624,15 @@ mod tests {
     async fn mnist_container_image_passed_correctly() {
         let (daemon, mock) = mnist_daemon_with_mock().await;
 
-        let boot = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            &daemon,
+            boot_request(SessionDef {
                 name: "mnist-image-check".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
-            }))
-            .await
-            .unwrap();
-        assert!(boot.ok);
+            }),
+        )
+        .await;
 
         let starts = mock.start_requests().await;
         assert_eq!(starts[0].container.image, MNIST_IMAGE);
@@ -3248,15 +3654,15 @@ mod tests {
             .unwrap();
         let session_count_before = overview_before.session_count;
 
-        let boot = daemon
-            .boot(boot_request(SessionDef {
+        boot_and_wait(
+            &daemon,
+            boot_request(SessionDef {
                 name: "mnist-overview".to_string(),
                 profile: "mi300x-mnist".to_string(),
                 image: MNIST_IMAGE.to_string(),
-            }))
-            .await
-            .unwrap();
-        assert!(boot.ok);
+            }),
+        )
+        .await;
 
         let overview_after = daemon
             .get_overview(GetOverviewRequest::default())

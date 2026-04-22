@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { getSessionDetail, getSessionLog } from "../api/client";
 import type { SessionDetail } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
+import { PhaseBadge } from "../components/PhaseBadge";
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -31,18 +32,21 @@ export function SessionDetailPage() {
   const [logStatus, setLogStatus] = useState("");
   const logRef = useRef<HTMLPreElement>(null);
 
-  // Poll session detail
+  // Poll session detail (fast during pulling/starting)
   useEffect(() => {
     if (!name) return;
     getSessionDetail(name)
       .then(setDetail)
       .catch((e) => setError(String(e)));
 
+    const booting =
+      detail?.phase === "Pulling" || detail?.phase === "Starting";
+    const interval = booting ? 1000 : 5000;
     const id = setInterval(() => {
       getSessionDetail(name).then(setDetail).catch(() => {});
-    }, 5000);
+    }, interval);
     return () => clearInterval(id);
-  }, [name]);
+  }, [name, detail?.phase]);
 
   // Poll session log (fast while pulling, slow once ready)
   useEffect(() => {
@@ -86,6 +90,7 @@ export function SessionDetailPage() {
       </Link>
       <div className="page-header">
         <h2>{detail.name}</h2>
+        <PhaseBadge phase={detail.phase} message={detail.progress_message} />
         <StatusBadge status={detail.health} />
       </div>
 

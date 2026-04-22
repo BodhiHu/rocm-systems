@@ -9,6 +9,13 @@ export type SimulatorMode = "Functional" | "Clocked" | "CycleAccurate";
 
 export type HealthStatus = "Unknown" | "Healthy" | "Unhealthy";
 
+export type SessionPhase =
+  | "Pulling"
+  | "Starting"
+  | "Running"
+  | "Failed"
+  | "Stale";
+
 // ── Core types (from common.fbs) ───────────────────────────────────────────
 
 export interface GpuDef {
@@ -62,6 +69,8 @@ export interface SessionSummary {
   simulator: string;
   image: string;
   health_status: HealthStatus;
+  phase: SessionPhase;
+  progress_message: string;
 }
 
 export interface SessionDetail {
@@ -76,6 +85,8 @@ export interface SessionDetail {
   ipc: number;
   simulation_speed: number;
   active_contexts: number;
+  phase: SessionPhase;
+  progress_message: string;
 }
 
 export interface ServiceResult {

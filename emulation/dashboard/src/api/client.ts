@@ -21,6 +21,7 @@ import type {
   GpuFamily,
   SimulatorMode,
   HealthStatus,
+  SessionPhase,
 } from "./types";
 
 // ── Transport ──────────────────────────────────────────────────────────────
@@ -69,6 +70,14 @@ const HEALTH_FROM_WIRE: Record<string, HealthStatus> = {
   unknown: "Unknown",
   healthy: "Healthy",
   unhealthy: "Unhealthy",
+};
+
+const PHASE_FROM_WIRE: Record<string, SessionPhase> = {
+  pulling: "Pulling",
+  starting: "Starting",
+  running: "Running",
+  failed: "Failed",
+  stale: "Stale",
 };
 
 interface WireGpuDef {
@@ -148,6 +157,8 @@ interface WireSessionSummary {
   simulator?: string;
   image?: string;
   health_status?: string;
+  phase?: string;
+  progress_message?: string;
 }
 
 function fromWireSessionSummary(s: WireSessionSummary): SessionSummary {
@@ -157,6 +168,8 @@ function fromWireSessionSummary(s: WireSessionSummary): SessionSummary {
     simulator: s.simulator ?? "",
     image: s.image ?? "",
     health_status: HEALTH_FROM_WIRE[s.health_status ?? "unknown"] ?? "Unknown",
+    phase: PHASE_FROM_WIRE[s.phase ?? "running"] ?? "Running",
+    progress_message: s.progress_message ?? "",
   };
 }
 
@@ -266,6 +279,8 @@ interface WireStatus {
   ipc: number;
   simulation_speed: number;
   active_contexts: number;
+  phase?: string;
+  progress_message?: string;
 }
 
 export async function getSessionDetail(
@@ -294,6 +309,8 @@ export async function getSessionDetail(
       ipc: r.ipc,
       simulation_speed: r.simulation_speed,
       active_contexts: r.active_contexts,
+      phase: PHASE_FROM_WIRE[r.phase ?? "running"] ?? "Running",
+      progress_message: r.progress_message ?? "",
     };
   } catch {
     return null;
