@@ -12,8 +12,8 @@ use mirage_container::{
     ContainerHandle, ContainerRuntime, ExecRequest as ContainerExecRequest, StartContainerRequest,
 };
 use mirage_schema::common::{
-    CleanupPolicy, ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SessionDef, SetEnv,
-    SimulatorMode, Time, WorkloadDef,
+    ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SetEnv, SimulatorMode, Time,
+    WorkloadDef,
 };
 use mirage_schema::container::{BindMount, ContainerDef};
 use mirage_schema::daemon::{
@@ -40,6 +40,8 @@ use mirage_schema::socket::{
     SimulatorSummary, StatusReply, StatusRequest, TimeReply, TimeRequest, WorkloadSummary,
 };
 use mirage_schema::paths;
+
+pub mod dashboard;
 
 // ---------------------------------------------------------------------------
 //  Docker label keys used to tag managed containers.
@@ -222,6 +224,36 @@ impl MirageDaemon {
             Err(e) => Err(e),
         }
     }
+
+    /// Clear all transient daemon state: profiles on disk, known sessions
+    /// in memory, and any containers owned by this daemon.
+    ///
+    /// Intended for use by end-to-end tests that need to reset between runs.
+    pub async fn reset_for_testing(&self) {
+        // Remove all profile JSON files.
+        if let Ok(entries) = std::fs::read_dir(self.profile_dir()) {
+            for entry in entries.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        // Clear in-memory emulator-session mapping.
+        {
+            let mut state = self.state.write().await;
+            state.emulator_sessions.clear();
+        }
+        // Tear down any containers the runtime knows about.
+        if let Some(runtime) = &self.container_runtime {
+            if let Ok(containers) = runtime
+                .list_containers(&BTreeMap::new(), None)
+                .await
+            {
+                for c in containers {
+                    let _ = runtime.stop_container(&c.handle, 1, None).await;
+                    let _ = runtime.remove_container(&c.handle, true, None).await;
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -340,7 +372,7 @@ impl MirageDaemon {
             })
     }
 
-    fn simulator_summary(state: &State, info: &SimulatorInfo, active: u32) -> SimulatorSummary {
+    fn simulator_summary(_state: &State, info: &SimulatorInfo, active: u32) -> SimulatorSummary {
         SimulatorSummary {
             name: Some(info.name.clone()),
             version: Some(info.version.clone()),
@@ -484,14 +516,19 @@ impl MirageDaemonAttach for MirageDaemon {
     async fn attach(
         &self,
         _request: AttachRequest,
-        mut input: tokio::sync::mpsc::Receiver<AttachInput>,
-        _output: tokio::sync::mpsc::Sender<AttachOutput>,
+        _input: tokio::sync::mpsc::Receiver<AttachInput>,
+        output: tokio::sync::mpsc::Sender<AttachOutput>,
     ) -> MirageDaemonResult<AttachReply> {
-        // Drain input so the sender is not blocked.
-        while input.recv().await.is_some() {}
-        Err(mirage_schema::daemon::MirageDaemonError::Remote(
-            "attach is not yet implemented".to_string(),
-        ))
+        // The full attach implementation is future work; for now we emit a
+        // single stdout frame so REST clients can exercise the websocket
+        // dispatch wiring end-to-end, then return a clean exit.
+        let _ = output
+            .send(AttachOutput {
+                is_stdout: true,
+                output: b"attach not yet implemented\n".to_vec(),
+            })
+            .await;
+        Ok(AttachReply { exit_code: 0 })
     }
 }
 
@@ -910,8 +947,6 @@ impl MirageDaemonBoot for MirageDaemon {
             value: session_name.clone(),
         }];
         let devices = Vec::new();
-        let mut emu_socket_container: Option<String> = None;
-        let mut interceptor_container: Option<String> = None;
 
         if let Some(ref so_path) = interceptor_so {
             if mirage_real::RealEmulator::hardware_available() {
@@ -987,11 +1022,8 @@ impl MirageDaemonBoot for MirageDaemon {
                     });
                     base_env.push(SetEnv {
                         key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
-                        value: container_sock.clone(),
+                        value: container_sock,
                     });
-
-                    emu_socket_container = Some(container_sock);
-                    interceptor_container = Some(container_so);
                 }
             }
         }
@@ -1588,6 +1620,7 @@ fn create_synthetic_topology(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mirage_schema::common::SessionDef;
 
     use std::sync::atomic::AtomicU64;
 
@@ -3052,7 +3085,7 @@ mod tests {
             .await;
         }
 
-        for (i, (_desc, expected_output)) in steps.iter().enumerate() {
+        for (i, (_desc, _expected_output)) in steps.iter().enumerate() {
             let reply = daemon
                 .exec(exec_request(
                     "mnist-test",

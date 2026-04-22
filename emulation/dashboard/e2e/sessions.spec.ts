@@ -92,7 +92,8 @@ test.describe("Session CRUD", () => {
     // Should have docker output section
     await expect(page.locator("h3").filter({ hasText: "Docker Output" })).toBeVisible();
     await expect(page.locator(".session-log")).toBeVisible();
-    await expect(page.locator(".session-log")).toContainText("Session 'log-session' created");
+    await expect(page.locator(".session-log")).toContainText("Session 'log-session'");
+    await expect(page.locator(".session-log")).toContainText("Simulator: rocjitsu");
   });
 
   test("delete a session from the list", async ({ page }) => {

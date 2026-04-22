@@ -411,6 +411,28 @@ pub enum HealthStatus {
     Unhealthy,
 }
 
+/// Lifecycle phase of a session as it transitions from boot to teardown.
+///
+/// Sessions start in [`Pulling`](SessionPhase::Pulling) while the container
+/// image is being fetched, move to [`Starting`](SessionPhase::Starting) once
+/// the pull completes and containers are being created, and reach
+/// [`Running`](SessionPhase::Running) when all nodes are up. If any step
+/// fails the session enters [`Failed`](SessionPhase::Failed) and the error
+/// message is surfaced in `StatusReply::error_message`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionPhase {
+    /// The container image is currently being pulled.
+    #[default]
+    Pulling,
+    /// The image is available; containers are being created/started.
+    Starting,
+    /// All containers are running and the session is ready.
+    Running,
+    /// Boot failed; consult the error message for details.
+    Failed,
+}
+
 // ---------------------------------------------------------------------------
 //  Time
 // ---------------------------------------------------------------------------

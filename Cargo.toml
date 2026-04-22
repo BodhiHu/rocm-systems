@@ -16,6 +16,12 @@ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "io-uti
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 criterion = { version = "0.8", features = ["html_reports"] }
+axum = { version = "0.8" }
+tower = { version = "0.5" }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+futures-util = { version = "0.3" }
+rust-embed = { version = "8", features = ["mime-guess"] }
+mime_guess = { version = "2" }
 
 amdgpu_protocol = { path = "emulation/amdgpu_protocol" }
 mirage_schema = { path = "emulation/mirage_schema" }

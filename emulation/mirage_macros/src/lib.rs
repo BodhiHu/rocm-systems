@@ -183,6 +183,7 @@ struct ModuleOptions {
     shared_error: Option<Path>,
     protocol_error: Option<Path>,
     cli_name: Option<String>,
+    rest: bool,
 }
 
 #[derive(Default)]
@@ -222,6 +223,11 @@ fn split_module_attrs(attrs: Vec<Attribute>) -> Result<(Vec<Attribute>, ModuleOp
                     return Err(meta.error("duplicate `cli_name` option"));
                 }
                 options.cli_name = Some(meta.value()?.parse::<LitStr>()?.value());
+                return Ok(());
+            }
+
+            if meta.path.is_ident("rest") {
+                options.rest = true;
                 return Ok(());
             }
 
@@ -311,6 +317,8 @@ fn expand_ctl_module(module: CtlModule) -> Result<TokenStream2> {
     let mut input_kind_arms = Vec::new();
     let mut output_kind_arms = Vec::new();
     let mut reply_kind_arms = Vec::new();
+    let mut rest_routes = Vec::new();
+    let mut rest_handlers = Vec::new();
 
     for endpoint in &endpoints {
         let (endpoint_attrs, endpoint_options) = split_endpoint_attrs(&endpoint.attrs)?;
@@ -610,6 +618,126 @@ fn expand_ctl_module(module: CtlModule) -> Result<TokenStream2> {
                 #variant_name(#command_args_name),
             });
         }
+
+        if module_options.rest {
+            let route_path = format!("/{}", endpoint.ident);
+            let handler_name = format_ident!("rest_handler_{}", endpoint.ident);
+            let method_name = &endpoint.ident;
+            if endpoint.reply.is_some() {
+                // Streaming endpoint → WebSocket
+                let input_name_ref = input_name.as_ref().expect("streaming endpoint has input");
+                rest_handlers.push(quote! {
+                    async fn #handler_name<T>(
+                        ::axum::extract::State(ctl): ::axum::extract::State<::std::sync::Arc<T>>,
+                        ws: ::axum::extract::ws::WebSocketUpgrade,
+                        ::axum::extract::Query(request): ::axum::extract::Query<#request_name>,
+                    ) -> ::axum::response::Response
+                    where
+                        T: #impl_trait + 'static,
+                    {
+                        ws.on_upgrade(move |socket| async move {
+                            use ::axum::extract::ws::Message;
+                            use ::futures_util::{SinkExt, StreamExt};
+                            let (mut ws_tx, mut ws_rx) = socket.split();
+                            let (input_tx, input_rx) = ::tokio::sync::mpsc::channel::<#input_name_ref>(16);
+                            let (output_tx, mut output_rx) = ::tokio::sync::mpsc::channel::<#output_name>(16);
+
+                            // Run inbound ws frames → typed input channel as a detached
+                            // task so we can abort it when dispatch completes. Without
+                            // this, the handler would block waiting for the client to
+                            // close the connection before sending the final reply.
+                            let input_task = ::tokio::spawn(async move {
+                                while let Some(msg) = ws_rx.next().await {
+                                    let msg = match msg {
+                                        Ok(m) => m,
+                                        Err(_) => break,
+                                    };
+                                    match msg {
+                                        Message::Text(t) => {
+                                            if let Ok(value) = ::serde_json::from_str::<#input_name_ref>(&t) {
+                                                if input_tx.send(value).await.is_err() {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        Message::Binary(b) => {
+                                            if let Ok(value) = ::serde_json::from_slice::<#input_name_ref>(&b) {
+                                                if input_tx.send(value).await.is_err() {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        Message::Close(_) => break,
+                                        _ => {}
+                                    }
+                                }
+                            });
+
+                            let dispatch = ctl.#method_name(request, input_rx, output_tx);
+
+                            let forward_output = async {
+                                while let Some(output) = output_rx.recv().await {
+                                    let frame = ::serde_json::json!({
+                                        "type": "output",
+                                        "data": output,
+                                    });
+                                    if ws_tx
+                                        .send(Message::Text(frame.to_string().into()))
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                ws_tx
+                            };
+
+                            let (reply_res, mut ws_tx) = ::tokio::join!(dispatch, forward_output);
+                            input_task.abort();
+                            let final_frame = match reply_res {
+                                Ok(reply) => ::serde_json::json!({
+                                    "type": "reply",
+                                    "data": reply,
+                                }),
+                                Err(err) => ::serde_json::json!({
+                                    "type": "error",
+                                    "message": err.to_string(),
+                                }),
+                            };
+                            let _ = ws_tx
+                                .send(Message::Text(final_frame.to_string().into()))
+                                .await;
+                            let _ = ws_tx.close().await;
+                        })
+                    }
+                });
+                rest_routes.push(quote! {
+                    .route(#route_path, ::axum::routing::get(#handler_name::<T>))
+                });
+            } else {
+                // Unary endpoint → POST JSON
+                rest_handlers.push(quote! {
+                    async fn #handler_name<T>(
+                        ::axum::extract::State(ctl): ::axum::extract::State<::std::sync::Arc<T>>,
+                        ::axum::extract::Json(request): ::axum::extract::Json<#request_name>,
+                    ) -> ::std::result::Result<::axum::Json<#reply_name>, (::axum::http::StatusCode, String)>
+                    where
+                        T: #impl_trait + 'static,
+                    {
+                        match ctl.#method_name(request).await {
+                            Ok(reply) => Ok(::axum::Json(reply)),
+                            Err(err) => Err((
+                                ::axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                err.to_string(),
+                            )),
+                        }
+                    }
+                });
+                rest_routes.push(quote! {
+                    .route(#route_path, ::axum::routing::post(#handler_name::<T>))
+                });
+            }
+        }
     }
 
     let error_defs = error_defs.values().collect::<Vec<_>>();
@@ -632,6 +760,33 @@ fn expand_ctl_module(module: CtlModule) -> Result<TokenStream2> {
                 Other(String),
             }
         }
+    };
+
+    let rest_block = if module_options.rest {
+        quote! {
+            /// REST-over-HTTP router generated from the ctl protocol.
+            ///
+            /// Unary endpoints are served as `POST /<endpoint>` with a JSON request
+            /// body and a JSON reply body. Streaming endpoints are served as
+            /// `GET /<endpoint>` with a WebSocket upgrade; the request fields are
+            /// passed via query string, streaming input frames are sent as JSON
+            /// text messages, streaming output frames are sent as JSON text
+            /// messages with the shape `{"type":"output","data":...}`, and the
+            /// final reply is sent as `{"type":"reply","data":...}` (or
+            /// `{"type":"error","message":...}`) before the socket is closed.
+            pub fn axum_router<T>(ctl: ::std::sync::Arc<T>) -> ::axum::Router
+            where
+                T: #impl_trait + 'static,
+            {
+                ::axum::Router::new()
+                    #( #rest_routes )*
+                    .with_state(ctl)
+            }
+
+            #( #rest_handlers )*
+        }
+    } else {
+        TokenStream2::new()
     };
 
     Ok(quote! {
@@ -830,6 +985,8 @@ fn expand_ctl_module(module: CtlModule) -> Result<TokenStream2> {
                     Ok(())
                 }
             }
+
+            #rest_block
         }
     })
 }

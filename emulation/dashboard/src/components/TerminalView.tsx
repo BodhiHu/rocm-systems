@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { getTerminalExecId, terminalAttachUrl } from "../api/client";
 
 interface Props {
   terminalId: string;
@@ -9,32 +10,21 @@ interface Props {
   onDead?: () => void;
 }
 
-/** WebSocket terminal protocol (binary frames):
- *  Client → Server:
- *    byte[0]=0x00 + data       = PTY input
- *    byte[0]=0x01 + u16LE rows + u16LE cols  = resize
- *  Server → Client:
- *    byte[0]=0x00 + data       = PTY output
- *    byte[0]=0x01              = terminal exited
+/** WebSocket terminal protocol over the daemon's generated `attach` endpoint.
+ *
+ *  Frames are JSON text messages shaped exactly like the Rust
+ *  `AttachInput`/`AttachOutput`/`AttachReply` types.
+ *  Client → server: `{ "stream": <number[]> }` where the array is the
+ *  UTF-8 bytes of the keystroke(s).
+ *  Server → client:
+ *    `{ "type": "output", "data": { "is_stdout": bool, "output": <number[]> } }`
+ *    `{ "type": "reply",  "data": { "exit_code": <number> } }`
+ *    `{ "type": "error",  "message": <string> }`
  */
 
-const WS_BASE = `ws://${window.location.host}`;
-
-function buildInputFrame(data: string): ArrayBuffer {
-  const encoded = new TextEncoder().encode(data);
-  const buf = new Uint8Array(1 + encoded.length);
-  buf[0] = 0x00;
-  buf.set(encoded, 1);
-  return buf.buffer;
-}
-
-function buildResizeFrame(rows: number, cols: number): ArrayBuffer {
-  const buf = new ArrayBuffer(5);
-  const view = new DataView(buf);
-  view.setUint8(0, 0x01);
-  view.setUint16(1, rows, true); // little-endian
-  view.setUint16(3, cols, true);
-  return buf;
+function encodeInput(data: string): string {
+  const bytes = Array.from(new TextEncoder().encode(data));
+  return JSON.stringify({ stream: bytes });
 }
 
 export function TerminalView({ terminalId, onClose, onDead }: Props) {
@@ -68,30 +58,36 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
     termRef.current = term;
     fitRef.current = fit;
 
-    // ── WebSocket connection ─────────────────────────────────────────
-    const ws = new WebSocket(`${WS_BASE}/terminal/${terminalId}`);
-    ws.binaryType = "arraybuffer";
-    wsRef.current = ws;
+    const execId = getTerminalExecId(terminalId);
+    if (!execId) {
+      term.write(`\r\n\x1b[31m[unknown terminal '${terminalId}']\x1b[0m\r\n`);
+      return () => {
+        term.dispose();
+      };
+    }
 
-    ws.onopen = () => {
-      if (cancelled) { ws.close(); return; }
-      // Send initial resize
-      ws.send(buildResizeFrame(term.rows, term.cols));
-    };
+    const ws = new WebSocket(terminalAttachUrl(execId));
+    wsRef.current = ws;
 
     ws.onmessage = (ev) => {
       if (cancelled) return;
-      const data = new Uint8Array(ev.data as ArrayBuffer);
-      if (data.length === 0) return;
-      const type = data[0];
-      if (type === 0x00 && data.length > 1) {
-        // PTY output
-        const text = new TextDecoder().decode(data.subarray(1));
-        term.write(text);
-      } else if (type === 0x01) {
-        // Terminal exited
-        term.write("\r\n\x1b[31m[terminal exited]\x1b[0m\r\n");
-        onDead?.();
+      try {
+        const msg = JSON.parse(ev.data as string);
+        if (msg.type === "output") {
+          const bytes = msg.data?.output as number[] | undefined;
+          if (bytes && bytes.length) {
+            const text = new TextDecoder().decode(new Uint8Array(bytes));
+            term.write(text);
+          }
+        } else if (msg.type === "reply") {
+          term.write("\r\n\x1b[31m[terminal exited]\x1b[0m\r\n");
+          onDead?.();
+        } else if (msg.type === "error") {
+          term.write(`\r\n\x1b[31m[attach error: ${msg.message}]\x1b[0m\r\n`);
+          onDead?.();
+        }
+      } catch {
+        // malformed frame; ignore
       }
     };
 
@@ -101,25 +97,16 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
       onDead?.();
     };
 
-    // Send keystrokes over WebSocket
     term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(buildInputFrame(data));
+        ws.send(encodeInput(data));
       }
     });
 
-    // Handle window resize
     const onResize = () => {
       fit.fit();
     };
     window.addEventListener("resize", onResize);
-
-    // Send resize when terminal dimensions change
-    term.onResize(({ cols, rows }) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(buildResizeFrame(rows, cols));
-      }
-    });
 
     return () => {
       cancelled = true;

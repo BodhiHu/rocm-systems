@@ -15,7 +15,7 @@ use std::fmt;
 use std::io;
 
 use crate::common::{
-    CleanupPolicy, GpuDef, HealthStatus, ProfileDef, SimulatorMode, Time, WorkloadDef,
+    CleanupPolicy, GpuDef, HealthStatus, ProfileDef, SessionPhase, SimulatorMode, Time, WorkloadDef,
 };
 use crate::simulator::SimulatorInfo;
 
@@ -119,6 +119,12 @@ pub struct SessionSummary {
     /// Current health state for the session.
     #[serde(default)]
     pub health_status: HealthStatus,
+    /// Lifecycle phase (pulling, starting, running, failed).
+    #[serde(default)]
+    pub phase: SessionPhase,
+    /// Human-readable status line for in-progress operations (e.g. pull).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_message: Option<String>,
 }
 
 /// Compact workload information used by list views.
@@ -145,7 +151,8 @@ crate::ctl_dsl! {
 #[ctl(
     cli_name = "mirage-ctl",
     error = crate::ctl::MirageDaemonError,
-    protocol_error = crate::ctl::MirageDaemonError::protocol
+    protocol_error = crate::ctl::MirageDaemonError::protocol,
+    rest
 )]
 pub mod daemon {
     /// Query the daemon or a single session for its current health state.
@@ -308,6 +315,10 @@ pub mod daemon {
         simulation_speed: f64,
         /// Number of active simulated contexts.
         active_contexts: u32,
+        /// Lifecycle phase (pulling, starting, running, failed).
+        phase: SessionPhase,
+        /// Human-readable status line for in-progress operations.
+        progress_message: String = None,
     };
 
     /// Create a session record and boot its backing containers.
