@@ -7,8 +7,10 @@
 #ifndef ROCJITSU_ISA_AMDGPU_SHARED_EXECUTE_SHARED_H_
 #define ROCJITSU_ISA_AMDGPU_SHARED_EXECUTE_SHARED_H_
 
+#include "rocjitsu/isa/arch/amdgpu/shared/addr_calc_scalar.h"
 #include "rocjitsu/isa/arch/amdgpu/shared/transcendental.h"
 #include "rocjitsu/vm/amdgpu/compute_unit.h"
+#include "rocjitsu/vm/amdgpu/mem_state.h"
 #include "rocjitsu/vm/amdgpu/wavefront.h"
 #include "util/data_types.h"
 #include "util/except.h"
@@ -45,6 +47,35 @@ inline void execute_ds_bpermute_b32_ds([[maybe_unused]] Inst &inst,
 }
 
 template <typename Inst>
+inline void execute_ds_load_addtid_b32_ds([[maybe_unused]] Inst &inst,
+                                          [[maybe_unused]] Wavefront &wf) {
+  if (inst.inst_.gds)
+    throw util::UnimplementedInst(inst.mnemonic());
+  auto d = std::make_unique<amdgpu::VectorMemState>(amdgpu::LOCAL_MEM);
+  d->dst_reg_base = wf.vgpr_alloc().base + inst.inst_.vdst;
+  d->elem_size = 4;
+  d->num_elems = 1;
+  d->is_load = true;
+  {
+    uint64_t exec = wf.exec();
+    d->lane_mask = exec;
+    d->exec_mask = exec;
+    d->wg_id = wf.wg_id();
+    d->wf_id = wf.wf_id();
+    d->cu_path = wf.cu().full_path();
+    uint32_t offset = (static_cast<uint32_t>(inst.inst_.offset1) << 8) | inst.inst_.offset0;
+    uint32_t m0 = wf.m0();
+    uint32_t ds_stride_bytes = ((m0 >> 16) & 0x1FF) * 4;
+    for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+      if (!(exec & (1ULL << lane)))
+        continue;
+      d->per_lane_addr[lane] = lane * ds_stride_bytes + offset + wf.lds_base();
+    }
+  }
+  inst.set_data(std::move(d));
+}
+
+template <typename Inst>
 inline void execute_ds_permute_b32_ds([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   auto &cu = wf.cu();
   uint64_t exec = wf.exec();
@@ -66,6 +97,35 @@ inline void execute_ds_permute_b32_ds([[maybe_unused]] Inst &inst, [[maybe_unuse
     if (exec & (1ULL << i))
       cu.write_vgpr(vb + inst.inst_.vdst, i, tmp[i]);
   }
+}
+
+template <typename Inst>
+inline void execute_ds_read_addtid_b32_ds([[maybe_unused]] Inst &inst,
+                                          [[maybe_unused]] Wavefront &wf) {
+  if (inst.inst_.gds)
+    throw util::UnimplementedInst(inst.mnemonic());
+  auto d = std::make_unique<amdgpu::VectorMemState>(amdgpu::LOCAL_MEM);
+  d->dst_reg_base = wf.vgpr_alloc().base + inst.inst_.vdst;
+  d->elem_size = 4;
+  d->num_elems = 1;
+  d->is_load = true;
+  {
+    uint64_t exec = wf.exec();
+    d->lane_mask = exec;
+    d->exec_mask = exec;
+    d->wg_id = wf.wg_id();
+    d->wf_id = wf.wf_id();
+    d->cu_path = wf.cu().full_path();
+    uint32_t offset = (static_cast<uint32_t>(inst.inst_.offset1) << 8) | inst.inst_.offset0;
+    uint32_t m0 = wf.m0();
+    uint32_t ds_stride_bytes = ((m0 >> 16) & 0x1FF) * 4;
+    for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+      if (!(exec & (1ULL << lane)))
+        continue;
+      d->per_lane_addr[lane] = lane * ds_stride_bytes + offset + wf.lds_base();
+    }
+  }
+  inst.set_data(std::move(d));
 }
 
 template <typename Inst>
@@ -667,6 +727,26 @@ inline void execute_s_brev_b64_sop1([[maybe_unused]] Inst &inst, [[maybe_unused]
 }
 
 template <typename Inst>
+inline void execute_s_cbranch_cdbgsys_sopp([[maybe_unused]] Inst &inst,
+                                           [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_cbranch_cdbgsys_and_user_sopp([[maybe_unused]] Inst &inst,
+                                                    [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_cbranch_cdbgsys_or_user_sopp([[maybe_unused]] Inst &inst,
+                                                   [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_cbranch_cdbguser_sopp([[maybe_unused]] Inst &inst,
+                                            [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_cbranch_join_sop1([[maybe_unused]] Inst &inst,
+                                        [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
 inline void execute_s_ceil_f16_sop1([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   uint32_t val = inst.ssrc0.read_scalar(wf);
   float f = util::f16_to_f32(static_cast<uint16_t>(val & 0xFFFF));
@@ -682,6 +762,9 @@ inline void execute_s_ceil_f32_sop1([[maybe_unused]] Inst &inst, [[maybe_unused]
   inst.sdst.write_scalar(wf, result);
   wf.write_scc(result != 0);
 }
+
+template <typename Inst>
+inline void execute_s_clause_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
 
 template <typename Inst>
 inline void execute_s_cls_i32_sop1([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
@@ -937,6 +1020,9 @@ inline void execute_s_cmpk_lt_u32_sopk([[maybe_unused]] Inst &inst,
 }
 
 template <typename Inst>
+inline void execute_s_code_end_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
 inline void execute_s_cselect_b32_sop2([[maybe_unused]] Inst &inst,
                                        [[maybe_unused]] Wavefront &wf) {
   inst.sdst.write_scalar(wf,
@@ -1043,6 +1129,17 @@ inline void execute_s_cvt_u32_f32_sop1([[maybe_unused]] Inst &inst,
 }
 
 template <typename Inst>
+inline void execute_s_decperflevel_sopp([[maybe_unused]] Inst &inst,
+                                        [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_delay_alu_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_denorm_mode_sopp([[maybe_unused]] Inst &inst,
+                                       [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
 inline void execute_s_ff0_i32_b32_sop1([[maybe_unused]] Inst &inst,
                                        [[maybe_unused]] Wavefront &wf) {
   uint32_t val = inst.ssrc0.read_scalar(wf);
@@ -1141,6 +1238,19 @@ template <typename Inst>
 inline void execute_s_gl1_inv_smem([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   wf.cu().l1_vector().invalidate_all();
 }
+
+template <typename Inst>
+inline void execute_s_icache_inv_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
+
+}
+
+template <typename Inst>
+inline void execute_s_incperflevel_sopp([[maybe_unused]] Inst &inst,
+                                        [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_inst_prefetch_sopp([[maybe_unused]] Inst &inst,
+                                         [[maybe_unused]] Wavefront &wf) {}
 
 template <typename Inst>
 inline void execute_s_lshl1_add_u32_sop2([[maybe_unused]] Inst &inst,
@@ -1368,6 +1478,9 @@ inline void execute_s_nand_saveexec_b64_sop1([[maybe_unused]] Inst &inst,
   wf.set_exec(result);
   wf.write_scc(result != 0);
 }
+
+template <typename Inst>
+inline void execute_s_nop_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
 
 template <typename Inst>
 inline void execute_s_nor_b32_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
@@ -1668,6 +1781,9 @@ inline void execute_s_quadmask_b64_sop1([[maybe_unused]] Inst &inst,
 }
 
 template <typename Inst>
+inline void execute_s_rfe_b64_sop1([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
 inline void execute_s_rndne_f16_sop1([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   uint32_t val = inst.ssrc0.read_scalar(wf);
   float f = util::f16_to_f32(static_cast<uint16_t>(val & 0xFFFF));
@@ -1685,6 +1801,43 @@ inline void execute_s_rndne_f32_sop1([[maybe_unused]] Inst &inst, [[maybe_unused
 }
 
 template <typename Inst>
+inline void execute_s_round_mode_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
+
+}
+
+template <typename Inst>
+inline void execute_s_sendmsg_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_sendmsghalt_sopp([[maybe_unused]] Inst &inst,
+                                       [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_set_gpr_idx_idx_sop1([[maybe_unused]] Inst &inst,
+                                           [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_set_gpr_idx_mode_sopp([[maybe_unused]] Inst &inst,
+                                            [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_set_gpr_idx_off_sopp([[maybe_unused]] Inst &inst,
+                                           [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_set_inst_prefetch_distance_sopp([[maybe_unused]] Inst &inst,
+                                                      [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_sethalt_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_setkill_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_setprio_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
 inline void execute_s_sext_i32_i16_sop1([[maybe_unused]] Inst &inst,
                                         [[maybe_unused]] Wavefront &wf) {
   uint32_t val = inst.ssrc0.read_scalar(wf);
@@ -1699,6 +1852,9 @@ inline void execute_s_sext_i32_i8_sop1([[maybe_unused]] Inst &inst,
   uint32_t result = static_cast<uint32_t>(static_cast<int32_t>(static_cast<int8_t>(val & 0xFF)));
   inst.sdst.write_scalar(wf, result);
 }
+
+template <typename Inst>
+inline void execute_s_sleep_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
 
 template <typename Inst>
 inline void execute_s_sub_f16_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
@@ -1749,6 +1905,9 @@ inline void execute_s_subb_u32_sop2([[maybe_unused]] Inst &inst, [[maybe_unused]
 }
 
 template <typename Inst>
+inline void execute_s_trap_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
 inline void execute_s_trunc_f16_sop1([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   uint32_t val = inst.ssrc0.read_scalar(wf);
   float f = util::f16_to_f32(static_cast<uint16_t>(val & 0xFFFF));
@@ -1764,6 +1923,30 @@ inline void execute_s_trunc_f32_sop1([[maybe_unused]] Inst &inst, [[maybe_unused
   inst.sdst.write_scalar(wf, result);
   wf.write_scc(result != 0);
 }
+
+template <typename Inst>
+inline void execute_s_ttracedata_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
+
+}
+
+template <typename Inst>
+inline void execute_s_ttracedata_imm_sopp([[maybe_unused]] Inst &inst,
+                                          [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_wait_event_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
+
+}
+
+template <typename Inst>
+inline void execute_s_wait_idle_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_waitcnt_depctr_sopp([[maybe_unused]] Inst &inst,
+                                          [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_wakeup_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
 
 template <typename Inst>
 inline void execute_s_wqm_b32_sop1([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
@@ -2673,6 +2856,12 @@ inline void execute_v_ceil_f64_vop3([[maybe_unused]] Inst &inst, [[maybe_unused]
     inst.vdst.write_lane64(wf, lane, std::bit_cast<uint64_t>(result));
   }
 }
+
+template <typename Inst>
+inline void execute_v_clrexcp_vop1([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_v_clrexcp_vop3([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
 
 template <typename Inst>
 inline void execute_v_cls_i32_vop1([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
@@ -12225,6 +12414,12 @@ inline void execute_v_mul_u32_u24_vop3([[maybe_unused]] Inst &inst,
 }
 
 template <typename Inst>
+inline void execute_v_nop_vop1([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_v_nop_vop3([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
 inline void execute_v_not_b16_vop1([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   uint64_t exec = wf.exec();
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
@@ -12358,6 +12553,82 @@ inline void execute_v_perm_b32_vop3([[maybe_unused]] Inst &inst, [[maybe_unused]
     inst.vdst.write_lane(wf, lane, result);
   }
 }
+
+template <typename Inst>
+inline void execute_v_permlane16_b32_vop3([[maybe_unused]] Inst &inst,
+                                          [[maybe_unused]] Wavefront &wf) {
+  constexpr bool fi = false, bound_ctrl = false;
+  uint64_t exec = wf.exec();
+  uint32_t snap[64];
+  for (uint32_t i = 0; i < wf.wf_size(); ++i)
+    snap[i] = inst.src0.read_lane(wf, i);
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint32_t sel_word = (lane < 32) ? inst.src1.read_scalar(wf) : inst.src2.read_scalar(wf);
+    uint32_t sub = lane & 0xF;
+    uint32_t sel = (sel_word >> (sub * 2)) & 0xF;
+    uint32_t src_lane = (lane & ~0xFu) | ((sel) & 0xFu);
+    if (src_lane >= wf.wf_size())
+      continue;
+    bool src_active = (exec & (1ULL << src_lane)) != 0;
+    if (!src_active && !fi) {
+      if (bound_ctrl)
+        inst.vdst.write_lane(wf, lane, 0);
+      continue;
+    }
+    inst.vdst.write_lane(wf, lane, snap[src_lane]);
+  }
+}
+
+template <typename Inst>
+inline void execute_v_permlane64_b32_vop1([[maybe_unused]] Inst &inst,
+                                          [[maybe_unused]] Wavefront &wf) {
+  uint64_t exec = wf.exec();
+  uint32_t snap[64];
+  for (uint32_t i = 0; i < wf.wf_size(); ++i)
+    snap[i] = inst.src0.read_lane(wf, i);
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint32_t partner = lane ^ 32;
+    if (partner < wf.wf_size())
+      inst.vdst.write_lane(wf, lane, snap[partner]);
+  }
+}
+
+template <typename Inst>
+inline void execute_v_permlanex16_b32_vop3([[maybe_unused]] Inst &inst,
+                                           [[maybe_unused]] Wavefront &wf) {
+  constexpr bool fi = false, bound_ctrl = false;
+  uint64_t exec = wf.exec();
+  uint32_t snap[64];
+  for (uint32_t i = 0; i < wf.wf_size(); ++i)
+    snap[i] = inst.src0.read_lane(wf, i);
+  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
+    if (!(exec & (1ULL << lane)))
+      continue;
+    uint32_t sel_word = (lane < 32) ? inst.src1.read_scalar(wf) : inst.src2.read_scalar(wf);
+    uint32_t sub = lane & 0xF;
+    uint32_t sel = (sel_word >> (sub * 2)) & 0xF;
+    uint32_t src_lane = (lane & ~0xFu) | ((sel ^ 0x10) & 0xFu);
+    if (src_lane >= wf.wf_size())
+      continue;
+    bool src_active = (exec & (1ULL << src_lane)) != 0;
+    if (!src_active && !fi) {
+      if (bound_ctrl)
+        inst.vdst.write_lane(wf, lane, 0);
+      continue;
+    }
+    inst.vdst.write_lane(wf, lane, snap[src_lane]);
+  }
+}
+
+template <typename Inst>
+inline void execute_v_pipeflush_vop1([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_v_pipeflush_vop3([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
 
 template <typename Inst>
 inline void execute_v_pk_add_f16_vop3p([[maybe_unused]] Inst &inst,

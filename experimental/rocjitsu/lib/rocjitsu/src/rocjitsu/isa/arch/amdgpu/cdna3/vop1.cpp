@@ -40,7 +40,7 @@ void VNopVop1::execute_impl(amdgpu::Wavefront &wf) {
     dpp_src0_ = std::make_unique<DppOperand>(*src_operands_[0], result, static_cast<int>(ws));
     src_operands_[0] = dpp_src0_.get();
   }
-  (void)wf;
+  amdgpu::execute_v_nop_vop1(*this, wf);
 }
 
 VMovB32Vop1::VMovB32Vop1(const MachineInst *inst)
@@ -699,6 +699,7 @@ void VCvtOffF32I4Vop1::execute_impl(amdgpu::Wavefront &wf) {
     src_operands_[0] = dpp_src0_.get();
   }
   (void)wf;
+  throw util::UnimplementedInst(mnemonic());
 }
 
 VCvtF32F64Vop1::VCvtF32F64Vop1(const MachineInst *inst)
@@ -2923,7 +2924,7 @@ void VClrexcpVop1::execute_impl(amdgpu::Wavefront &wf) {
     dpp_src0_ = std::make_unique<DppOperand>(*src_operands_[0], result, static_cast<int>(ws));
     src_operands_[0] = dpp_src0_.get();
   }
-  (void)wf;
+  amdgpu::execute_v_clrexcp_vop1(*this, wf);
 }
 
 VScreenPartition4seB32Vop1::VScreenPartition4seB32Vop1(const MachineInst *inst)
@@ -2974,6 +2975,7 @@ void VScreenPartition4seB32Vop1::execute_impl(amdgpu::Wavefront &wf) {
     src_operands_[0] = dpp_src0_.get();
   }
   (void)wf;
+  throw util::UnimplementedInst(mnemonic());
 }
 
 VMovB64Vop1::VMovB64Vop1(const MachineInst *inst)
@@ -4142,6 +4144,7 @@ void VCvtNormI16F16Vop1::execute_impl(amdgpu::Wavefront &wf) {
     src_operands_[0] = dpp_src0_.get();
   }
   (void)wf;
+  throw util::UnimplementedInst(mnemonic());
   if (sdwa_clamp_) {
     uint64_t ex = wf.exec();
     uint32_t vb = wf.vgpr_alloc().base;
@@ -4204,6 +4207,7 @@ void VCvtNormU16F16Vop1::execute_impl(amdgpu::Wavefront &wf) {
     src_operands_[0] = dpp_src0_.get();
   }
   (void)wf;
+  throw util::UnimplementedInst(mnemonic());
   if (sdwa_clamp_) {
     uint64_t ex = wf.exec();
     uint32_t vb = wf.vgpr_alloc().base;
@@ -4266,6 +4270,7 @@ void VSatPkU8I16Vop1::execute_impl(amdgpu::Wavefront &wf) {
     src_operands_[0] = dpp_src0_.get();
   }
   (void)wf;
+  throw util::UnimplementedInst(mnemonic());
 }
 
 VSwapB32Vop1::VSwapB32Vop1(const MachineInst *inst)
@@ -4525,6 +4530,7 @@ void VCvtPkF32Fp8Vop1::execute_impl(amdgpu::Wavefront &wf) {
     src_operands_[0] = dpp_src0_.get();
   }
   (void)wf;
+  throw util::UnimplementedInst(mnemonic());
 }
 
 VCvtPkF32Bf8Vop1::VCvtPkF32Bf8Vop1(const MachineInst *inst)
@@ -4575,6 +4581,7 @@ void VCvtPkF32Bf8Vop1::execute_impl(amdgpu::Wavefront &wf) {
     src_operands_[0] = dpp_src0_.get();
   }
   (void)wf;
+  throw util::UnimplementedInst(mnemonic());
 }
 
 } // namespace cdna3
