@@ -82,6 +82,11 @@ public:
   /// GFX9 (CDNA): 4. GFX940+ (CDNA3/CDNA4): 8.
   void set_vgpr_granularity(uint32_t g) { vgpr_granularity_ = g; }
 
+  /// @brief Enable packed workitem IDs (PackedTID target feature).
+  /// @details CDNA3/4 (gfx90a/gfx942/gfx950) pack X/Y/Z workitem IDs into
+  /// VGPR0 as 10-bit fields: [9:0]=X, [19:10]=Y, [29:20]=Z.
+  void set_packed_tid(bool v) { packed_tid_ = v; }
+
   /// @brief Set the base address of the doorbell aperture page for KFD queues.
   ///
   /// @details Called by the driver once after mmap'ing the doorbell page. All KFD
@@ -198,8 +203,8 @@ private:
   };
 
   /// @brief Initialize a wavefront's registers per the AMDHSA ABI.
-  static void init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf, const InternalDispatch &pkt,
-                                  uint32_t global_wg_id, uint32_t wf_index_in_wg);
+  void init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf, const InternalDispatch &pkt,
+                           uint32_t global_wg_id, uint32_t wf_index_in_wg);
 
   /// @brief Doorbell event handler: check HW queues, fetch packets, dispatch, activate CUs.
   void handle_doorbell(simdojo::Tick timestamp);
@@ -246,6 +251,7 @@ private:
   bool is_primary_ = false;          ///< True if CP registered as primary.
   uint32_t workgroup_id_offset_ = 0; ///< Multi-XCD workgroup ID offset.
   uint32_t vgpr_granularity_ = 8;    ///< VGPR allocation granularity (4 for GFX9, 8 for GFX940+).
+  bool packed_tid_ = false;          ///< PackedTID: pack X/Y/Z into VGPR0 as 10-bit fields.
 
   /// @brief Reusable doorbell event. Fired when packets need processing.
   simdojo::Event doorbell_event_{this, simdojo::EventType::TIMER_CALLBACK};

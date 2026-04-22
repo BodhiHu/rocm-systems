@@ -125,23 +125,34 @@ void CommandProcessor::init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf,
   });
 
   // Workitem IDs per AMDHSA ABI. The SPI decomposes the flat thread index
-  // into (x, y, z) using the AQL packet's workgroup dimensions and writes
-  // the requested components to VGPRs based on enable_vgpr_workitem_id:
+  // into (x, y, z) using the AQL packet's workgroup dimensions.
+  // enable_vgpr_workitem_id (TIDIG_COMP_CNT from compute_pgm_rsrc2):
   //   0 = v0 only (workitem_id_x)
   //   1 = v0 + v1 (workitem_id_x, workitem_id_y)
   //   2 = v0 + v1 + v2 (workitem_id_x, workitem_id_y, workitem_id_z)
+  // On CDNA3/4 (PackedTID): v0[9:0]=X, v0[19:10]=Y, v0[29:20]=Z.
+  // v1/v2 are not written. Kernel extracts components via bit masks.
   uint32_t vbase = wf->vgpr_alloc().base;
   uint32_t sbase_dbg = wf->sgpr_alloc().base;
   uint32_t workitem_base = wf_index_in_wg * cu->wf_size();
   uint32_t wg_x = pkt.workgroup_size_x > 0 ? pkt.workgroup_size_x : 1;
   uint32_t wg_y = pkt.workgroup_size_y > 0 ? pkt.workgroup_size_y : 1;
+  uint32_t wg_xy = wg_x * wg_y;
   for (uint32_t lane = 0; lane < cu->wf_size(); ++lane) {
     uint32_t flat_id = workitem_base + lane;
-    cu->write_vgpr(vbase, lane, flat_id % wg_x);
-    if (pkt.enable_vgpr_workitem_id >= 1)
-      cu->write_vgpr(vbase + 1, lane, (flat_id / wg_x) % wg_y);
-    if (pkt.enable_vgpr_workitem_id >= 2)
-      cu->write_vgpr(vbase + 2, lane, flat_id / (wg_x * wg_y));
+    uint32_t id_x = flat_id % wg_x;
+    uint32_t id_y = (flat_id / wg_x) % wg_y;
+    uint32_t id_z = flat_id / wg_xy;
+    if (packed_tid_ && pkt.enable_vgpr_workitem_id > 0) {
+      uint32_t packed = (id_x & 0x3FFu) | ((id_y & 0x3FFu) << 10) | ((id_z & 0x3FFu) << 20);
+      cu->write_vgpr(vbase, lane, packed);
+    } else {
+      cu->write_vgpr(vbase, lane, id_x);
+      if (pkt.enable_vgpr_workitem_id >= 1)
+        cu->write_vgpr(vbase + 1, lane, id_y);
+      if (pkt.enable_vgpr_workitem_id >= 2)
+        cu->write_vgpr(vbase + 2, lane, id_z);
+    }
   }
   util::Logger::vm([&](auto &os) {
     os << std::format("{} wg[{}] wf[{}] init: wf_idx_in_wg={} vbase={} sbase={} workitem_base={}",
@@ -527,51 +538,78 @@ CommandProcessor::read_kernel_descriptor(uint64_t kernel_object, bool host_acces
   return kd;
 }
 
-/// @brief Find the kernel symbol name from the code object containing kernel_object.
-/// @details Scans backward from kernel_object to find the ELF header, then
-/// parses .symtab to find the STT_FUNC symbol whose value matches the kernel
-/// descriptor offset within the code object.
-/// @brief Find the kernel symbol name from the code object containing kernel_object.
-/// @details Uses /proc/self/maps to verify readability, then scans backward
-/// from kernel_object to find the ELF header and parses the symbol table.
-static std::string find_kernel_symbol(uint64_t kernel_object, bool host_accessible) {
-  if (kernel_object == 0 || !host_accessible)
+/// @brief Find the kernel symbol name from the code object's AMDHSA metadata.
+/// @details Uses GpuMemory::find_host_range to locate the ELF base. Parses the
+/// PT_NOTE segment to find NT_AMDGPU_METADATA (msgpack-encoded). Extracts kernel
+/// names by scanning for ".kd" symbol strings in the raw msgpack data and matches
+/// to the dispatched kernel using the kernel descriptor fields (group_segment_fixed_size,
+/// private_segment_fixed_size) read from the kernel descriptor at kernel_object.
+static std::string find_kernel_symbol(uint64_t kernel_object, GpuMemory *mem) {
+  if (kernel_object == 0 || !mem)
     return {};
 
-  auto *ko = reinterpret_cast<const uint8_t *>(kernel_object);
+  auto [range_base, range_size] = mem->find_host_range(kernel_object);
+  if (range_base == 0)
+    return {};
 
-  // The kernel descriptor is inside a code object ELF loaded by ROCR.
-  // The ELF starts at the page-aligned base of the allocation.
-  // kernel_code_entry_byte_offset is typically 0x100, so the descriptor
-  // is 0x100 bytes into the ELF — the ELF header is at the page base.
-  auto *elf_base = reinterpret_cast<const uint8_t *>(kernel_object & ~0xFFFULL);
+  auto *elf_base = reinterpret_cast<const uint8_t *>(range_base);
   if (elf_base[0] != 0x7f || elf_base[1] != 'E' || elf_base[2] != 'L' || elf_base[3] != 'F')
     return {};
 
   auto *ehdr = reinterpret_cast<const Elf64_Ehdr *>(elf_base);
-  if (ehdr->e_shentsize < sizeof(Elf64_Shdr) || ehdr->e_shnum == 0 || ehdr->e_shoff == 0)
+  if (ehdr->e_phnum == 0 || ehdr->e_phoff == 0)
     return {};
 
-  auto *shdrs = reinterpret_cast<const Elf64_Shdr *>(elf_base + ehdr->e_shoff);
-  uint64_t kd_offset = static_cast<uint64_t>(ko - elf_base);
+  auto *phdrs = reinterpret_cast<const Elf64_Phdr *>(elf_base + ehdr->e_phoff);
 
-  for (uint32_t sh_type : {SHT_SYMTAB, SHT_DYNSYM}) {
-    for (uint16_t i = 0; i < ehdr->e_shnum; ++i) {
-      if (shdrs[i].sh_type != sh_type || shdrs[i].sh_link >= ehdr->e_shnum)
+  // Read the kernel descriptor at kernel_object for matching fields.
+  auto *ko = reinterpret_cast<const uint8_t *>(kernel_object);
+  uint32_t kd_group_seg = 0, kd_private_seg = 0;
+  std::memcpy(&kd_group_seg, ko, 4);
+  std::memcpy(&kd_private_seg, ko + 4, 4);
+
+  // Find PT_NOTE containing AMDHSA metadata.
+  for (uint16_t i = 0; i < ehdr->e_phnum; ++i) {
+    if (phdrs[i].p_type != PT_NOTE || phdrs[i].p_filesz < sizeof(Elf64_Nhdr))
+      continue;
+    if (phdrs[i].p_offset + phdrs[i].p_filesz > range_size)
+      continue;
+    auto *nhdr = reinterpret_cast<const Elf64_Nhdr *>(elf_base + phdrs[i].p_offset);
+    constexpr uint32_t NT_AMDGPU_METADATA = 32;
+    if (nhdr->n_type != NT_AMDGPU_METADATA)
+      continue;
+
+    uint32_t name_aligned = (nhdr->n_namesz + 3) & ~3u;
+    uint64_t desc_off = phdrs[i].p_offset + sizeof(Elf64_Nhdr) + name_aligned;
+    uint32_t desc_sz = nhdr->n_descsz;
+    if (desc_off + desc_sz > range_size)
+      continue;
+    auto *note = elf_base + desc_off;
+
+    // Scan raw msgpack for ".kd" symbol strings. Each kernel entry has a
+    // ".symbol" field containing "kernel_name.kd" as a length-prefixed string.
+    // We extract the kernel name and check if the corresponding kernel
+    // descriptor matches our dispatch (by group_segment_fixed_size and
+    // private_segment_fixed_size). For single-kernel dispatches, the first
+    // match is sufficient.
+    std::string best_name;
+    for (size_t pos = 2; pos + 2 < desc_sz; ++pos) {
+      if (note[pos] != '.' || note[pos + 1] != 'k' || note[pos + 2] != 'd')
         continue;
-      auto *strtab = reinterpret_cast<const char *>(elf_base + shdrs[shdrs[i].sh_link].sh_offset);
-      auto *syms = reinterpret_cast<const Elf64_Sym *>(elf_base + shdrs[i].sh_offset);
-      size_t nsyms = shdrs[i].sh_size / sizeof(Elf64_Sym);
-      for (size_t s = 0; s < nsyms; ++s) {
-        if (syms[s].st_value != kd_offset)
-          continue;
-        std::string_view name(strtab + syms[s].st_name);
-        if (name.ends_with(".kd"))
-          name.remove_suffix(3);
-        if (!name.empty())
-          return std::string(name);
-      }
+      size_t end = pos + 3;
+      if (end < desc_sz && note[end] >= 0x20 && note[end] < 0x7f)
+        continue;
+      size_t start = pos;
+      while (start > 0 && note[start - 1] >= 0x20 && note[start - 1] < 0x7f)
+        --start;
+      if (start == pos)
+        continue;
+      std::string_view sym(reinterpret_cast<const char *>(note + start), pos - start);
+      if (best_name.empty())
+        best_name = std::string(sym);
     }
+    if (!best_name.empty())
+      return best_name;
   }
   return {};
 }
@@ -713,7 +751,7 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
     }
   });
   util::Logger::vm([&](auto &os) {
-    std::string sym = find_kernel_symbol(pkt.kernel_object, host_accessible);
+    std::string sym = find_kernel_symbol(pkt.kernel_object, memory_);
     os << std::format("CP: dispatch \"{}\" entry_pc={:#x} kernarg={:#x}"
                       " wgs={} wfs/wg={} grid=[{},{},{}] wg=[{},{},{}]"
                       " sgprs={} vgprs={} user_sgprs={} kcp={:#x} signal={:#x}"
