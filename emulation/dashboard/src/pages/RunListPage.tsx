@@ -30,9 +30,11 @@ export function RunListPage() {
     setError("");
     const fd = new FormData(e.currentTarget);
     const session = fd.get("session") as string;
+    const nodeRaw = fd.get("node_index") as string | null;
+    const nodeIndex = Math.max(0, Number.parseInt(nodeRaw ?? "0", 10) || 0);
 
     try {
-      const res = await createTerminal(session);
+      const res = await createTerminal(session, nodeIndex);
       if (!res.ok) {
         setError(res.error ?? "Failed to create terminal");
       } else {
@@ -110,6 +112,16 @@ export function RunListPage() {
                 </option>
               ))}
             </select>
+          </div>
+          <div className="form-field">
+            <label htmlFor="tf-node">Node index</label>
+            <input
+              id="tf-node"
+              name="node_index"
+              type="number"
+              min={0}
+              defaultValue={0}
+            />
           </div>
           <div className="form-field form-actions">
             <button type="submit" className="btn-primary">

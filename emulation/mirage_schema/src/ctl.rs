@@ -158,7 +158,7 @@ pub mod daemon {
     /// Query the daemon or a single session for its current health state.
     health({
         /// Optional session name to scope the health lookup to.
-        session_id: String = None,
+        session: String = None,
     }) -> {
         /// Whether the queried target is considered healthy.
         healthy: bool,
@@ -169,7 +169,7 @@ pub mod daemon {
     /// Query the daemon or a single session for its current simulated time.
     time({
         /// Optional session name to scope the time lookup to.
-        session_id: String = None,
+        session: String = None,
     }) -> {
         /// Current simulated time for the requested scope.
         time: Time,
@@ -352,10 +352,14 @@ pub mod daemon {
     /// and stdin is closed immediately.
     exec({
         /// Session that should execute the command.
-        session_name: String,
+        session: String,
         /// Run the exec in interactive mode (FIFO-backed I/O).
         #[arg(long)]
         interactive: bool,
+        /// Node index within a multi-node session. Defaults to the head
+        /// node (0) when omitted.
+        #[arg(long, default_value_t = 0)]
+        node_index: u32,
         /// Program and arguments to run inside the session container.
         ///
         /// Pass the command after `--`, for example:

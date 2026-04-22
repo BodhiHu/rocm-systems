@@ -78,6 +78,13 @@ pub struct ExecMeta {
     pub command: Vec<String>,
     pub interactive: bool,
     pub emulator_session: Option<String>,
+    /// Node index the exec was targeted at.
+    #[serde(default)]
+    pub node_index: u32,
+    /// Container id (runtime handle) the exec will run in. Persisted so
+    /// `attach` can reconnect without re-querying the runtime.
+    #[serde(default)]
+    pub container_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -575,7 +582,7 @@ impl MirageDaemon {
 #[async_trait]
 impl MirageDaemonHealth for MirageDaemon {
     async fn health(&self, request: HealthRequest) -> MirageDaemonResult<HealthReply> {
-        if let Some(session_id) = request.session_id {
+        if let Some(session_id) = request.session {
             // Check Docker for the session container.
             let containers = self.list_session_containers().await?;
             let found = containers.iter().any(|c| {
@@ -597,7 +604,7 @@ impl MirageDaemonHealth for MirageDaemon {
 #[async_trait]
 impl MirageDaemonTime for MirageDaemon {
     async fn time(&self, request: TimeRequest) -> MirageDaemonResult<TimeReply> {
-        if let Some(session_id) = request.session_id {
+        if let Some(session_id) = request.session {
             let containers = self.list_session_containers().await?;
             let found = containers.iter().any(|c| {
                 c.labels.get(LABEL_SESSION).map_or(false, |s| *s == session_id)
@@ -618,20 +625,189 @@ impl MirageDaemonTime for MirageDaemon {
 impl MirageDaemonAttach for MirageDaemon {
     async fn attach(
         &self,
-        _request: AttachRequest,
-        _input: tokio::sync::mpsc::Receiver<AttachInput>,
+        request: AttachRequest,
+        input: tokio::sync::mpsc::Receiver<AttachInput>,
         output: tokio::sync::mpsc::Sender<AttachOutput>,
     ) -> MirageDaemonResult<AttachReply> {
-        // The full attach implementation is future work; for now we emit a
-        // single stdout frame so REST clients can exercise the websocket
-        // dispatch wiring end-to-end, then return a clean exit.
+        // Look up the exec metadata written by `exec()` to learn which
+        // container the exec should run inside and what command to invoke.
+        let meta = match self.load_exec_meta(&request.exec_id) {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = output
+                    .send(AttachOutput {
+                        is_stdout: false,
+                        output: format!("attach: {e}\n").into_bytes(),
+                    })
+                    .await;
+                return Ok(AttachReply { exit_code: -1 });
+            }
+        };
+
+        // Spawn `docker exec -i <container_id> <command...>`, piping
+        // stdin/stdout/stderr through the attach channels so the
+        // dashboard's WebSocket can drive a live shell.
+        let exit_code = run_interactive_exec(&meta, input, output).await;
+        Ok(AttachReply { exit_code })
+    }
+}
+
+impl MirageDaemon {
+    fn load_exec_meta(&self, exec_id: &str) -> std::io::Result<ExecMeta> {
+        // We don't know the session up front, so scan all session dirs
+        // until we find a meta.json with the matching exec id.
+        let root = self.sessions_root();
+        let entries = std::fs::read_dir(&root).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("no session runtime directory at {root:?}: {e}"),
+            )
+        })?;
+        for session_entry in entries.flatten() {
+            let meta_path = session_entry.path().join("exec").join(exec_id).join("meta.json");
+            if meta_path.is_file() {
+                let data = std::fs::read_to_string(&meta_path)?;
+                let meta: ExecMeta = serde_json::from_str(&data).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+                })?;
+                return Ok(meta);
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("unknown exec id '{exec_id}'"),
+        ))
+    }
+}
+
+/// Drive an interactive `docker exec -i <container_id> <cmd...>` session,
+/// bridging stdin/stdout/stderr to the supplied attach channels.
+async fn run_interactive_exec(
+    meta: &ExecMeta,
+    mut input: tokio::sync::mpsc::Receiver<AttachInput>,
+    output: tokio::sync::mpsc::Sender<AttachOutput>,
+) -> i32 {
+    use std::process::Stdio;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::process::Command;
+
+    if meta.container_id.is_empty() {
         let _ = output
             .send(AttachOutput {
-                is_stdout: true,
-                output: b"attach not yet implemented\n".to_vec(),
+                is_stdout: false,
+                output: b"attach: exec has no container id\n".to_vec(),
             })
             .await;
-        Ok(AttachReply { exit_code: 0 })
+        return -1;
+    }
+    if meta.command.is_empty() {
+        let _ = output
+            .send(AttachOutput {
+                is_stdout: false,
+                output: b"attach: exec has no command\n".to_vec(),
+            })
+            .await;
+        return -1;
+    }
+
+    let mut cmd = Command::new("docker");
+    cmd.arg("exec").arg("-i").arg(&meta.container_id);
+    for part in &meta.command {
+        cmd.arg(part);
+    }
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = output
+                .send(AttachOutput {
+                    is_stdout: false,
+                    output: format!("attach: failed to spawn docker exec: {e}\n").into_bytes(),
+                })
+                .await;
+            return -1;
+        }
+    };
+
+    let mut stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    // Pump client input → child stdin.
+    let stdin_task = tokio::spawn(async move {
+        while let Some(frame) = input.recv().await {
+            let Some(pipe) = stdin.as_mut() else { break };
+            if pipe.write_all(&frame.stream).await.is_err() {
+                break;
+            }
+            let _ = pipe.flush().await;
+        }
+        // Closing stdin signals EOF to the child.
+        drop(stdin);
+    });
+
+    // Pump child stdout → client.
+    let stdout_tx = output.clone();
+    let stdout_task = tokio::spawn(async move {
+        if let Some(mut pipe) = stdout {
+            let mut buf = [0u8; 4096];
+            loop {
+                match pipe.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if stdout_tx
+                            .send(AttachOutput {
+                                is_stdout: true,
+                                output: buf[..n].to_vec(),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Pump child stderr → client.
+    let stderr_tx = output.clone();
+    let stderr_task = tokio::spawn(async move {
+        if let Some(mut pipe) = stderr {
+            let mut buf = [0u8; 4096];
+            loop {
+                match pipe.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if stderr_tx
+                            .send(AttachOutput {
+                                is_stdout: false,
+                                output: buf[..n].to_vec(),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    let status = child.wait().await;
+    // Stop the input pump so it doesn't hang forever if the client never closes.
+    stdin_task.abort();
+    let _ = stdout_task.await;
+    let _ = stderr_task.await;
+
+    match status {
+        Ok(s) => s.code().unwrap_or(-1),
+        Err(_) => -1,
     }
 }
 
@@ -1502,26 +1678,29 @@ async fn boot_session_task(
 #[async_trait]
 impl MirageDaemonExec for MirageDaemon {
     async fn exec(&self, request: ExecRequest) -> MirageDaemonResult<ExecReply> {
-        // Discover the session's head-node container from Docker.
+        // Discover the session's containers from Docker and select the one
+        // matching the requested node index (defaults to the head node).
         let containers = self.list_session_containers().await?;
-        let head = containers
+        let target_node = request.node_index;
+        let target = containers
             .iter()
             .filter(|c| {
                 c.labels
                     .get(LABEL_SESSION)
-                    .map_or(false, |s| *s == request.session_name)
+                    .map_or(false, |s| *s == request.session)
             })
-            .min_by_key(|c| {
+            .find(|c| {
                 c.labels
                     .get(LABEL_NODE_INDEX)
                     .and_then(|v| v.parse::<u32>().ok())
                     .unwrap_or(0)
+                    == target_node
             });
 
-        let Some(head) = head else {
+        let Some(head) = target else {
             return Err(mirage_schema::daemon::MirageDaemonError::Remote(format!(
-                "session '{}' does not exist",
-                request.session_name
+                "session '{}' has no node {}",
+                request.session, target_node
             )));
         };
 
@@ -1534,7 +1713,7 @@ impl MirageDaemonExec for MirageDaemon {
         let exec_id = self.next_exec_id();
 
         // Prepare I/O paths.
-        let io_dir = self.exec_io_dir(&request.session_name, &exec_id);
+        let io_dir = self.exec_io_dir(&request.session, &exec_id);
         if let Err(e) = create_exec_io(&io_dir, request.interactive) {
             return Err(mirage_schema::daemon::MirageDaemonError::Remote(format!(
                 "failed to create exec I/O: {e}"
@@ -1543,19 +1722,21 @@ impl MirageDaemonExec for MirageDaemon {
 
         let emulator_session = {
             let state = self.state.read().await;
-            state.emulator_sessions.get(&request.session_name).cloned()
+            state.emulator_sessions.get(&request.session).cloned()
         };
 
         // Persist exec metadata.
         let meta = ExecMeta {
             exec_id: exec_id.clone(),
-            session_name: request.session_name.clone(),
+            session_name: request.session.clone(),
             command: request.command.clone(),
             interactive: request.interactive,
             emulator_session,
+            node_index: target_node,
+            container_id: head.handle.id.clone(),
         };
         if let Err(e) = save_exec_meta(
-            &self.exec_meta_path(&request.session_name, &exec_id),
+            &self.exec_meta_path(&request.session, &exec_id),
             &meta,
         ) {
             tracing::warn!(%e, "failed to persist exec metadata");
@@ -1590,7 +1771,7 @@ impl MirageDaemonExec for MirageDaemon {
         // For non-interactive execs, run to completion and write output files.
         // For interactive execs, the client should use `attach` with the exec_id.
         if !request.interactive {
-            let session_name = request.session_name.clone();
+            let session_name = request.session.clone();
             let eid = exec_id.clone();
             let rt = Arc::clone(runtime);
             let async_io_dir = self.exec_io_dir(&session_name, &eid);
@@ -1624,15 +1805,25 @@ impl MirageDaemonExec for MirageDaemon {
 #[async_trait]
 impl MirageDaemonShutdown for MirageDaemon {
     async fn shutdown(&self, request: ShutdownRequest) -> MirageDaemonResult<ShutdownReply> {
-        let containers = self.list_session_containers().await?;
-        let session_containers: Vec<_> = containers
-            .iter()
-            .filter(|c| {
-                c.labels
-                    .get(LABEL_SESSION)
-                    .map_or(false, |s| *s == request.name)
-            })
-            .collect();
+        // Search for any container still labeled with this session name,
+        // regardless of whether it is running, exited, or missing the
+        // `managed=true` label. This is broader than `list_session_containers`
+        // so stale cleanup can reap orphans left behind by a crashed daemon.
+        let session_containers: Vec<_> = if let Some(runtime) = &self.container_runtime {
+            let mut filter = BTreeMap::new();
+            filter.insert(LABEL_SESSION.to_string(), request.name.clone());
+            runtime
+                .list_containers(&filter, None)
+                .await
+                .map_err(|e| {
+                    mirage_schema::daemon::MirageDaemonError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    ))
+                })?
+        } else {
+            Vec::new()
+        };
 
         // A session may be pending (still booting or boot-failed) and have
         // no containers yet — drop it from the pending map so the caller can
@@ -1644,7 +1835,8 @@ impl MirageDaemonShutdown for MirageDaemon {
 
         // A session may also be stale: no containers, not in the pending
         // map, but a leftover state directory is sitting on disk. Removing
-        // the directory is the cleanup for that case.
+        // the directory (and any orphan network) is the cleanup for that
+        // case.
         let session_dir = self.session_dir(&request.name);
         let was_stale = session_dir.is_dir();
 
@@ -1660,11 +1852,11 @@ impl MirageDaemonShutdown for MirageDaemon {
                 let _ = runtime.stop_container(&c.handle, 10, None).await;
                 let _ = runtime.remove_container(&c.handle, true, None).await;
             }
-            // Remove session network if multi-node.
-            if session_containers.len() > 1 {
-                let net_name = format!("mirage-{}", request.name);
-                let _ = runtime.remove_network(&net_name, None).await;
-            }
+            // Always attempt to remove the session network. Multi-node
+            // sessions create `mirage-<name>`; the call is idempotent for
+            // single-node or already-cleaned-up sessions.
+            let net_name = format!("mirage-{}", request.name);
+            let _ = runtime.remove_network(&net_name, None).await;
         }
 
         // Remove emulator session mapping.
@@ -1673,7 +1865,7 @@ impl MirageDaemonShutdown for MirageDaemon {
             state.emulator_sessions.remove(&request.name);
         }
 
-        // Clean up session runtime directory.
+        // Clean up session runtime directory (exec FIFOs, metadata, logs).
         let _ = std::fs::remove_dir_all(&session_dir);
 
         Ok(ShutdownReply {
@@ -2064,8 +2256,9 @@ mod tests {
         let mut command = vec![exec.command];
         command.extend(exec.args);
         ExecRequest {
-            session_name: session_name.into(),
+            session: session_name.into(),
             interactive: false,
+            node_index: 0,
             command,
         }
     }
@@ -2363,10 +2556,18 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_removes_stale_session_state_directory() {
-        let (daemon, _mock) = daemon_with_mock_runtime().await;
+        let (daemon, mock) = daemon_with_mock_runtime().await;
         let stale_dir = daemon.session_dir("leftover");
         std::fs::create_dir_all(&stale_dir).unwrap();
+        // Also plant a file inside and a leftover network, simulating a
+        // multi-node session whose daemon died mid-run.
+        std::fs::write(stale_dir.join("exec-meta.json"), b"{}").unwrap();
+        mock.create_network("mirage-leftover", None).await.unwrap();
         assert!(stale_dir.is_dir());
+        assert!(
+            mock.networks().await.iter().any(|n| n == "mirage-leftover"),
+            "network should exist before cleanup"
+        );
 
         let reply = daemon
             .shutdown(ShutdownRequest {
@@ -2374,8 +2575,16 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(reply.ok, "shutdown should clean up stale session: {:?}", reply.error);
+        assert!(
+            reply.ok,
+            "shutdown should clean up stale session: {:?}",
+            reply.error
+        );
         assert!(!stale_dir.exists(), "state directory should be removed");
+        assert!(
+            !mock.networks().await.iter().any(|n| n == "mirage-leftover"),
+            "orphan network should be removed"
+        );
 
         // A second shutdown on the same (now gone) session should fail.
         let reply2 = daemon

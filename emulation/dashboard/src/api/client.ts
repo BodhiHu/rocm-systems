@@ -349,14 +349,16 @@ export async function listRuns(
 export async function createRun(
   session: string,
   command: string,
+  nodeIndex: number = 0,
 ): Promise<{ ok: boolean; error?: string; run?: RunRecord }> {
   const parts = command.trim().split(/\s+/);
   if (!parts.length || !parts[0]) return { ok: false, error: "empty command" };
   let execReply: { exec_id: string };
   try {
     execReply = await post<{ exec_id: string }>("/exec", {
-      session_name: session,
+      session,
       interactive: false,
+      node_index: nodeIndex,
       command: parts,
     });
   } catch (e) {
@@ -433,11 +435,13 @@ export async function listTerminals(): Promise<TerminalInfo[]> {
 
 export async function createTerminal(
   session: string,
+  nodeIndex: number = 0,
 ): Promise<{ ok: boolean; error: string; id: string }> {
   try {
     const r = await post<{ exec_id: string }>("/exec", {
-      session_name: session,
+      session,
       interactive: true,
+      node_index: nodeIndex,
       command: ["/bin/sh"],
     });
     const id = `term-${++terminalCounter}`;

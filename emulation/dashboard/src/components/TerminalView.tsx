@@ -32,6 +32,15 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  // Stash callbacks in refs so the effect below can run exactly once per
+  // terminalId without tearing down the WebSocket whenever the parent
+  // re-renders with a new `onDead`/`onClose` lambda.
+  const onDeadRef = useRef(onDead);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onDeadRef.current = onDead;
+    onCloseRef.current = onClose;
+  }, [onDead, onClose]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -81,10 +90,10 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
           }
         } else if (msg.type === "reply") {
           term.write("\r\n\x1b[31m[terminal exited]\x1b[0m\r\n");
-          onDead?.();
+          onDeadRef.current?.();
         } else if (msg.type === "error") {
           term.write(`\r\n\x1b[31m[attach error: ${msg.message}]\x1b[0m\r\n`);
-          onDead?.();
+          onDeadRef.current?.();
         }
       } catch {
         // malformed frame; ignore
@@ -94,7 +103,7 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
     ws.onclose = () => {
       if (cancelled) return;
       term.write("\r\n\x1b[33m[disconnected]\x1b[0m\r\n");
-      onDead?.();
+      onDeadRef.current?.();
     };
 
     term.onData((data) => {
@@ -114,7 +123,7 @@ export function TerminalView({ terminalId, onClose, onDead }: Props) {
       if (ws.readyState === WebSocket.OPEN) ws.close();
       term.dispose();
     };
-  }, [terminalId, onDead]);
+  }, [terminalId]);
 
   return (
     <div className="terminal-container">

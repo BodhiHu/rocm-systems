@@ -93,7 +93,7 @@ fn exec_req(session: &str, cmd: &str, args: &[&str]) -> ExecRequest {
     let mut command = vec![cmd.to_string()];
     command.extend(args.iter().map(|s| s.to_string()));
     ExecRequest {
-        session_name: session.into(),
+        session: session.into(),
         interactive: false,
         command,
     }
@@ -847,7 +847,7 @@ async fn daemon_health_is_healthy_by_default() {
     let daemon = new_test_daemon();
 
     let reply = daemon
-        .health(HealthRequest { session_id: None })
+        .health(HealthRequest { session: None })
         .await
         .unwrap();
     assert!(reply.healthy);
@@ -866,7 +866,7 @@ async fn session_health_for_booted_session() {
 
     let reply = daemon
         .health(HealthRequest {
-            session_id: Some("health-test".into()),
+            session: Some("health-test".into()),
         })
         .await
         .unwrap();
@@ -880,7 +880,7 @@ async fn health_for_nonexistent_session_fails() {
 
     let result = daemon
         .health(HealthRequest {
-            session_id: Some("ghost".into()),
+            session: Some("ghost".into()),
         })
         .await;
     assert!(result.is_err());
@@ -891,7 +891,7 @@ async fn time_returns_default_for_daemon() {
     let daemon = new_test_daemon();
 
     let reply = daemon
-        .time(TimeRequest { session_id: None })
+        .time(TimeRequest { session: None })
         .await
         .unwrap();
     assert_eq!(reply.time.seconds, 0);
@@ -904,7 +904,7 @@ async fn time_for_nonexistent_session_fails() {
 
     let result = daemon
         .time(TimeRequest {
-            session_id: Some("ghost".into()),
+            session: Some("ghost".into()),
         })
         .await;
     assert!(result.is_err());
