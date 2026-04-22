@@ -665,8 +665,8 @@ void GpuAgent::InitDerivedCuid() {
 
   // Query the derived CUID using the device handle
   uint32_t cuid_length;
-  status = amdcuid_query_device_property(handle, AMDCUID_QUERY_DERIVED_CUID,
-                                         derived_cuid_, &cuid_length);
+  status = amdcuid_query_device_property(handle, AMDCUID_QUERY_DERIVED_CUID, derived_cuid_,
+                                         &cuid_length);
 
   if (status != AMDCUID_STATUS_SUCCESS) {
     debug_print("Secondary CUID not available: query failed.\n");
@@ -3390,9 +3390,9 @@ hsa_status_t GpuAgent::PcSamplingCreateFromId(HsaPcSamplingTraceId ioctlId,
   // Initialize per-XCC structures
   pcs_data->num_xcc = properties_.NumXcc;
 
-  // Allocate cache-line aligned per-XCC data array 
-  // Each per_xcc_data_t is 64-byte aligned to prevent false sharing between XCCs
-  pcs_data->xcc_data = new per_xcc_data_t[pcs_data->num_xcc]();
+  // Allocate cache-line aligned per-XCC data array
+  // Each per_xcc_pcs_data_t is 64-byte aligned to prevent false sharing between XCCs
+  pcs_data->xcc_data = new per_xcc_pcs_data_t[pcs_data->num_xcc]();
   for (uint32_t i = 0; i < pcs_data->num_xcc; i++) {
     pcs_data->xcc_data[i].host_write_offset.store(0, std::memory_order_relaxed);
     pcs_data->xcc_data[i].host_read_offset.store(0, std::memory_order_relaxed);
@@ -3493,7 +3493,7 @@ hsa_status_t GpuAgent::PcSamplingCreateFromId(HsaPcSamplingTraceId ioctlId,
   if (pcs_data->device_data == nullptr) return HSA_STATUS_ERROR_OUT_OF_RESOURCES;
 
   // Cache buf_size to avoid reading from device memory in hot path
-  pcs_data->buf_size = trap_buffer_size / session.sample_size();
+  pcs_data->samples_per_trap_buffer = trap_buffer_size / session.sample_size();
 
   // Initialize device buffer for each XCC with metadata and double-buffer signals
   for (uint32_t xcc_id = 0; xcc_id < pcs_data->num_xcc; xcc_id++) {
@@ -3655,7 +3655,14 @@ hsa_status_t GpuAgent::PcSamplingStart(pcs::PcsRuntime::PcSamplingSession& sessi
     uint32_t xcc_id;
   };
 
-  // Create one sampling thread per XCC to handle buffer flushes independently
+  // Create one sampling thread per XCC to handle buffer flushes independently.
+  // Each thread is lightweight - uses hsa_signal_wait with HSA_WAIT_STATE_BLOCKED which
+  // yields to the OS scheduler (kernel-level futex wait), not busy-spinning.
+  //
+  // TODO: Future optimization for large multi-GPU systems (e.g., 8 GPUs × 8 XCCs = 64 threads):
+  // Consider thread pooling where a single thread monitors multiple XCCs for lower sampling
+  // frequencies (higher latency tolerance). The 1:1 model is simple and correct for now -
+  // single-producer-single-consumer per XCC eliminates all cross-XCC coordination overhead.
   for (uint32_t xcc_id = 0; xcc_id < pcs_data->num_xcc; xcc_id++) {
     auto* thread_data = new ThreadData{this, pcs_data, thread_name, xcc_id};
 
@@ -3684,6 +3691,18 @@ hsa_status_t GpuAgent::PcSamplingStart(pcs::PcsRuntime::PcSamplingSession& sessi
 
     if (!pcs_data->xcc_data[xcc_id].thread) {
       delete thread_data;
+
+      // Cleanup any sampling threads that were already created for earlier XCCs
+      // before reporting the failure for this XCC.
+      pcs_data->session->stop();
+      for (uint32_t cleanup_xcc_id = 0; cleanup_xcc_id < xcc_id; cleanup_xcc_id++) {
+        if (pcs_data->xcc_data[cleanup_xcc_id].thread) {
+          os::WaitForThread(pcs_data->xcc_data[cleanup_xcc_id].thread);
+          os::CloseThread(pcs_data->xcc_data[cleanup_xcc_id].thread);
+          pcs_data->xcc_data[cleanup_xcc_id].thread = nullptr;
+        }
+      }
+
       throw AMD::hsa_exception(HSA_STATUS_ERROR_OUT_OF_RESOURCES,
                                "Failed to start PC Sampling thread.");
     }
@@ -3765,11 +3784,11 @@ hsa_status_t GpuAgent::PcSamplingFlushDeviceBuffersPerXCC(
   uint32_t& which_buffer = pcs_data->xcc_data[xcc_id].which_buffer;
   const size_t per_xcc_host_buffer_size = pcs_data->per_xcc_host_buffer_size;  // Cached
   uint8_t* host_buffer_begin = pcs_data->host_buffer + (xcc_id * per_xcc_host_buffer_size);
-  const size_t buf_size = pcs_data->buf_size;  // Cached (avoid device memory read)
+  const size_t samples_per_trap_buffer = pcs_data->samples_per_trap_buffer;  // Cached
 
   // Double buffers start after the metadata structure
   buffer[0] = reinterpret_cast<uint8_t*>(pcs_data->device_data[xcc_id]) + sizeof(pcs_sampling_data_t);
-  buffer[1] = buffer[0] + buf_size * session.sample_size();
+  buffer[1] = buffer[0] + samples_per_trap_buffer * session.sample_size();
 
   // Prepare to swap buffers: next_buffer index in upper bit of reset value
   next_buffer = (which_buffer + 1) % 2;
@@ -3783,9 +3802,11 @@ hsa_status_t GpuAgent::PcSamplingFlushDeviceBuffersPerXCC(
   // Mask off upper bit to get sample count from old value
   sample_count &= (ULLONG_MAX >> 1);
 
-  // Clamp to buffer size if overflow occurred (samples were lost)
-  if (sample_count > buf_size) {
-    sample_count = buf_size;
+  // Clamp to buffer capacity if overflow occurred (samples were lost)
+  if (sample_count > samples_per_trap_buffer) {
+    pcs_data->lost_sample_count.fetch_add(sample_count - samples_per_trap_buffer,
+                                          std::memory_order_relaxed);
+    sample_count = samples_per_trap_buffer;
   }
 
   to_copy = sample_count * session.sample_size();
@@ -3802,22 +3823,13 @@ hsa_status_t GpuAgent::PcSamplingFlushDeviceBuffersPerXCC(
     volatile uint32_t* bwv_written = (which_buffer == 0)
         ? reinterpret_cast<volatile uint32_t*>(&pcs_data->device_data[xcc_id]->buf_written_val0)
         : reinterpret_cast<volatile uint32_t*>(&pcs_data->device_data[xcc_id]->buf_written_val1);
-    uint32_t expected_written = (uint32_t)sample_count;
 
-    // Spin-wait for GPU to finish writing samples (with timeout)
-    constexpr int kMaxSpinIterations = 10000000;  // ~100ms at typical spin rates
-    int spin_count = 0;
+    // Wait for GPU to finish writing samples (per-XCC isolation eliminates contention)
+    uint32_t expected_written = (uint32_t)sample_count;
     uint32_t actual_written = 0;
 
     while ((actual_written = __atomic_load_n((uint32_t*)bwv_written, __ATOMIC_ACQUIRE)) <
            expected_written) {
-      if (++spin_count >= kMaxSpinIterations) {
-        // Timeout: copy only the samples that were actually written
-        uint32_t lost = expected_written - actual_written;
-        pcs_data->lost_sample_count.fetch_add(lost, std::memory_order_relaxed);
-        to_copy = actual_written * session.sample_size();
-        break;
-      }
 #if defined(__x86_64__) || defined(__i386__)
       __builtin_ia32_pause();
 #endif
@@ -3851,7 +3863,7 @@ void GpuAgent::PcSamplingThreadPerXCC(pcs_data_t& pcs_data, uint32_t xcc_id,
                                       const char* thread_name) {
   try {
     pcs::PcsRuntime::PcSamplingSession& session = *pcs_data.session;
-    per_xcc_data_t& xcc = pcs_data.xcc_data[xcc_id];
+    per_xcc_pcs_data_t& xcc = pcs_data.xcc_data[xcc_id];
     uint32_t& which_buffer = xcc.which_buffer;
 
     // Use cached per-XCC host buffer size (avoids division in hot path)
@@ -3864,48 +3876,47 @@ void GpuAgent::PcSamplingThreadPerXCC(pcs_data_t& pcs_data, uint32_t xcc_id,
     bool exit_requested = false;
     while (!exit_requested) {
       // Wait for trap handler to signal buffer is ready (val=0) or exit (val=-1)
-      hsa_signal_value_t val;
-      int wait_iterations = 0;
-      do {
-        val = HSA::hsa_signal_wait_scacquire(done_sig[which_buffer], HSA_SIGNAL_CONDITION_LT, 1,
-                                             1000000000ULL, HSA_WAIT_STATE_BLOCKED);
+      // With per-XCC isolated buffers, we use infinite wait as each XCC thread
+      // has its own dedicated device buffer region
+      hsa_signal_value_t val = HSA::hsa_signal_wait_scacquire(
+          done_sig[which_buffer], HSA_SIGNAL_CONDITION_LT, 1, UINT64_MAX, HSA_WAIT_STATE_BLOCKED);
 
-        wait_iterations++;
-
-        if (val == -1) {
-          exit_requested = true;
-          break;
-        }
-        if (val == 0) {
-          break;
-        }
-
-        // Break out after 5 timeouts to allow flush even without signal
-        if (wait_iterations >= 5) {
-          break;
-        }
-      } while (true);
+      if (val == -1) {
+        exit_requested = true;
+        // Still flush any remaining samples before exit
+      } else if (val != 0) {
+        // Spurious wakeup - continue waiting
+        continue;
+      }
 
       // Reset signal for next buffer fill cycle
       if (!exit_requested && val == 0) {
         HSA::hsa_signal_store_screlease(done_sig[which_buffer], 1);
       }
 
-      // Flush device buffer samples to host buffer
+      // Per-XCC mutex: only contends with PcSamplingFlush() for the current XCC's buffer.
+      // No cross-XCC contention exists because each XCC thread exclusively owns its
+      // partition of device_data[], host_buffer, and xcc_data[]. This is effectively
+      // a single-producer (this thread) single-consumer (Flush) model per XCC.
+      std::lock_guard<std::mutex> lock(xcc.host_buffer_mutex);
+
+      // Flush device buffer samples to host buffer (under mutex)
       if (PcSamplingFlushDeviceBuffersPerXCC(&pcs_data, session, xcc_id) !=
           HSA_STATUS_SUCCESS) {
         goto thread_exit;
       }
 
       // Process samples from host buffer and deliver to client callback
-      // Use per-XCC mutex to avoid contention between XCC threads
-      std::lock_guard<std::mutex> lock(xcc.host_buffer_mutex);
 
       uint64_t read_offset = xcc.host_read_offset.load(std::memory_order_acquire);
       uint64_t write_offset = xcc.host_write_offset.load(std::memory_order_acquire);
 
       // Use cached buf_size (avoids reading from device memory)
-      const size_t trap_buffer_size = pcs_data.buf_size * session.sample_size();
+      const size_t trap_buffer_size = pcs_data.samples_per_trap_buffer * session.sample_size();
+
+      // Get lost sample count and reset it - report on first callback of this batch
+      size_t lost_samples = pcs_data.lost_sample_count.exchange(0, std::memory_order_relaxed);
+      bool first_callback = true;
 
       // Process full trap-buffer-sized chunks.
       // This loop can iterate multiple times when:
@@ -3916,14 +3927,18 @@ void GpuAgent::PcSamplingThreadPerXCC(pcs_data_t& pcs_data, uint32_t xcc_id,
         uint64_t buffer_offset = read_offset % per_xcc_host_buffer_size;
         uint8_t* read_ptr = host_buffer_begin + buffer_offset;
 
+        // Report lost samples on first callback, then reset for subsequent calls
+        size_t lost_to_report = first_callback ? lost_samples : 0;
+        first_callback = false;
+
         // Handle wrap-around when data spans end of circular buffer
         if (buffer_offset + trap_buffer_size <= per_xcc_host_buffer_size) {
-          session.HandleSampleData(read_ptr, trap_buffer_size, nullptr, 0, 0);
+          session.HandleSampleData(read_ptr, trap_buffer_size, nullptr, 0, lost_to_report);
         } else {
           size_t bytes_before_wrap = per_xcc_host_buffer_size - buffer_offset;
           size_t bytes_after_wrap = trap_buffer_size - bytes_before_wrap;
           session.HandleSampleData(read_ptr, bytes_before_wrap, host_buffer_begin, bytes_after_wrap,
-                                   0);
+                                   lost_to_report);
         }
 
         read_offset += trap_buffer_size;
@@ -3939,13 +3954,16 @@ void GpuAgent::PcSamplingThreadPerXCC(pcs_data_t& pcs_data, uint32_t xcc_id,
         uint64_t buffer_offset = read_offset % per_xcc_host_buffer_size;
         uint8_t* read_ptr = host_buffer_begin + buffer_offset;
 
+        // Report lost samples if not yet reported
+        size_t lost_to_report = first_callback ? lost_samples : 0;
+
         if (buffer_offset + bytes_to_process <= per_xcc_host_buffer_size) {
-          session.HandleSampleData(read_ptr, bytes_to_process, nullptr, 0, 0);
+          session.HandleSampleData(read_ptr, bytes_to_process, nullptr, 0, lost_to_report);
         } else {
           size_t bytes_before_wrap = per_xcc_host_buffer_size - buffer_offset;
           size_t bytes_after_wrap = bytes_to_process - bytes_before_wrap;
           session.HandleSampleData(read_ptr, bytes_before_wrap, host_buffer_begin, bytes_after_wrap,
-                                   0);
+                                   lost_to_report);
         }
 
         read_offset += bytes_to_process;
@@ -3982,9 +4000,11 @@ hsa_status_t GpuAgent::PcSamplingFlush(pcs::PcsRuntime::PcSamplingSession& sessi
   const size_t per_xcc_host_buffer_size = pcs_data->per_xcc_host_buffer_size;  // Cached
 
   for (uint32_t xcc_id = 0; xcc_id < pcs_data->num_xcc; xcc_id++) {
-    per_xcc_data_t& xcc = pcs_data->xcc_data[xcc_id];
+    per_xcc_pcs_data_t& xcc = pcs_data->xcc_data[xcc_id];
 
-    // Use per-XCC mutex to avoid contention between XCC threads
+    // Per-XCC mutex: serializes with PcSamplingThreadPerXCC for the current XCC only.
+    // Each iteration locks a different xcc.host_buffer_mutex, so XCC N's lock
+    // does not block XCC M's monitoring thread (N != M). No global contention.
     std::lock_guard<std::mutex> lock(xcc.host_buffer_mutex);
 
     // First flush any pending device samples to host buffer
