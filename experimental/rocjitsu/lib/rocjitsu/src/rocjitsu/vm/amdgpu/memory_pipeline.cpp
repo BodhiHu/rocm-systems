@@ -104,11 +104,18 @@ void vector_complete(VectorMemState &d, ComputeUnitCore &cu) {
           is_atomic ? std::min(d.elem_size - i * 4, 4u) : std::min(d.elem_size, 4u);
       std::memcpy(&val, &d.response_data[data_offset], copy_size);
       if (copy_size <= 2 && (d.d16_hi || d.d16_lo)) {
-        uint32_t old = cu.read_vgpr(d.dst_reg_base + i, lane);
-        if (d.d16_hi)
-          val = (old & 0xFFFF) | (val << 16);
-        else
-          val = (old & 0xFFFF0000) | (val & 0xFFFF);
+        if (cu.sram_ecc()) {
+          if (d.d16_hi)
+            val = val << 16;
+          else
+            val = val & 0xFFFF;
+        } else {
+          uint32_t old = cu.read_vgpr(d.dst_reg_base + i, lane);
+          if (d.d16_hi)
+            val = (old & 0xFFFF) | (val << 16);
+          else
+            val = (old & 0xFFFF0000) | (val & 0xFFFF);
+        }
       }
       cu.write_vgpr(d.dst_reg_base + i, lane, val);
     }

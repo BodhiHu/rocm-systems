@@ -242,6 +242,9 @@ public:
     global_mem_pipeline_.set_l2(l2);
   }
 
+  /// @brief Query SRAM ECC mode. When true, D16 loads zero unused VGPR bits.
+  bool sram_ecc() const { return sram_ecc_; }
+
   // Memory issue interface for instruction execute() bodies.
   //
   // These provide the public interface through which instruction execute()
@@ -399,6 +402,7 @@ protected:
   Config config_;
   GpuMemory *memory_;
   uint32_t wf_size_ = 0;
+  bool sram_ecc_ = false;
   std::unique_ptr<Decoder> decoder_;
   simdojo::RegisterFile<uint32_t> sgpr_file_{"sgpr"};
   std::vector<std::unique_ptr<Wavefront>> wfs_; ///< Pre-allocated wavefront slots.
@@ -521,6 +525,7 @@ public:
     vgpr_file_.init(config.num_wf_slots * config.vgprs_per_wf, config.vgprs_per_wf);
     for (uint32_t i = 0; i < config.num_wf_slots; ++i)
       this->wfs_[i] = std::make_unique<IsaWavefront<Isa>>(*this, i);
+    this->sram_ecc_ = Isa::SRAM_ECC;
   }
 
   /// @returns Lane value from the VGPR file.

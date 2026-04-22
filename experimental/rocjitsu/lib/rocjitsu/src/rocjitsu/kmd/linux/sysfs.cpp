@@ -196,7 +196,7 @@ void Sysfs::write_gpu_node(const std::string &nodes_dir, const GpuInfo &gpu) {
         << "gds_size_in_kb 0\n"
         << "num_gws 64\n"
         << "wave_front_size " << gpu.wave_front_size << "\n"
-        << "array_count " << (gpu.num_shader_engines * gpu.num_xcc) << "\n"
+        << "array_count " << gpu.num_shader_engines << "\n"
         << "simd_arrays_per_engine " << gpu.num_shader_arrays_per_engine << "\n"
         << "cu_per_simd_array " << gpu.num_cu_per_sh << "\n"
         << "simd_per_cu " << gpu.simd_per_cu << "\n"
