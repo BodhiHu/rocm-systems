@@ -484,8 +484,12 @@ class LegalizationGenerator:
         for dst in candidates:
             if src.field_sig == dst.field_sig and src.opnd_sig == dst.opnd_sig:
                 if src.opcode == dst.opcode:
-                    return LegalizationAction.identity()
-                return LegalizationAction.substitute(dst.opcode)
+                    return LegalizationAction('identity', target_opcode=dst.opcode)
+                return LegalizationAction('substitute', target_opcode=dst.opcode)
+        # Encoding differs — LOWER.  Find the best candidate's opcode for
+        # the encoding translator (translate_by_table needs dst_opcode).
+        if candidates:
+            return LegalizationAction('lower', target_opcode=candidates[0].opcode)
         return LegalizationAction.lower()
 
     @staticmethod
