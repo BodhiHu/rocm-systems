@@ -4357,7 +4357,7 @@ void DsReadB64TrB16Ds::execute_impl(amdgpu::Wavefront &wf) {
   auto d = std::make_unique<amdgpu::VectorMemState>(amdgpu::LOCAL_MEM);
   d->dst_reg_base = wf.vgpr_alloc().base + inst_.vdst;
   d->elem_size = 4;
-  d->num_elems = 4;
+  d->num_elems = 2;
   d->is_load = true;
   d->transpose = 4;
   ds_calculate_addresses(inst_, wf, *d);

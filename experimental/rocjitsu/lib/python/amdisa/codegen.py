@@ -4667,7 +4667,7 @@ class CodeGenerator:
             'ds_read_tr_b4': (4, 2, 1),   # elem_size=4, num_elems=2, transpose=1
             'ds_read_tr_b6': (4, 3, 2),   # elem_size=4, num_elems=3, transpose=2
             'ds_read_tr_b8': (4, 2, 3),   # elem_size=4, num_elems=2, transpose=3
-            'ds_read_tr_b16': (4, 4, 4),  # elem_size=4, num_elems=4, transpose=4
+            'ds_read_tr_b16': (4, 2, 4),  # elem_size=4, num_elems=2, transpose=4
         }
         esz, ne, tr_kind = tr_map.get(sem.semantic_class, (4, 2, 4))
         L = []

@@ -11,8 +11,8 @@
 /// then apply a cross-lane shuffle to produce the transposed matrix layout
 /// expected by MFMA instructions.
 ///
-/// Both TR_B8 and TR_B16 use the same B64 byte-level transpose. The element
-/// size only affects LDS addressing (set by the kernel via bitop3 swizzle).
+/// TR_B8 uses byte-level transpose with groups of 4 consecutive lanes.
+/// TR_B16 uses word-level transpose with stride-4 pairing within groups of 8.
 
 #include "rocjitsu/vm/amdgpu/mem_state.h"
 
@@ -25,7 +25,7 @@ namespace amdgpu {
 
 enum class TransposeKind : uint8_t { NONE, TR_B4, TR_B6, TR_B8, TR_B16 };
 
-/// @brief B64 byte-level transpose (used by both TR_B8 and TR_B16).
+/// @brief B64 byte-level transpose (TR_B8 only).
 ///
 /// Groups of 4 source lanes, 8 byte iterations per group.
 /// Each iteration packs one byte from each of 4 source lanes into a dword
@@ -69,16 +69,17 @@ inline void transpose_b64(std::vector<uint8_t> &response_data, uint32_t num_elem
   response_data = std::move(output);
 }
 
-/// @brief TR_B16: 16-bit element transpose (4 VGPRs, 16 bytes per lane).
+/// @brief TR_B16: 16-bit element transpose (2 VGPRs, 8 bytes per lane).
 ///
-/// Groups of 2 source lanes, 8 half-word iterations per group. Each
-/// iteration reads one 16-bit word from each of 2 source lanes and packs
-/// them into a dword. Writes to 4 destination VGPRs across 8 dest lanes.
+/// Groups of 8 source lanes with stride-4 pairing: source lanes i and i+4
+/// are packed together. Each pair produces 4 dwords (one per halfword).
+/// dest_vgpr = group / 8 (0 or 1), dest_lane = lane_within_group * 4 + hw.
 inline void transpose_b16(std::vector<uint8_t> &response_data, uint32_t num_elems,
                           uint32_t wf_size) {
   constexpr uint32_t lanes_per_half = 32;
-  constexpr uint32_t source_group_size = 2;
-  constexpr uint32_t halfwords_per_iteration = 8;
+  constexpr uint32_t group_size = 8;
+  constexpr uint32_t halfwords_per_source_lane = 4;
+  constexpr uint32_t pair_stride = 4;
 
   const uint32_t bytes_per_lane_total = num_elems * 4;
   const uint32_t num_halves = (wf_size > lanes_per_half) ? 2u : 1u;
@@ -88,26 +89,31 @@ inline void transpose_b16(std::vector<uint8_t> &response_data, uint32_t num_elem
   for (uint32_t half_index = 0; half_index < num_halves; ++half_index) {
     const uint32_t lane_base = half_index * lanes_per_half;
 
-    for (uint32_t source_lane = 0; source_lane < lanes_per_half; source_lane += source_group_size) {
-      for (uint32_t halfword_index = 0; halfword_index < halfwords_per_iteration;
-           ++halfword_index) {
-        uint16_t word_lo = 0, word_hi = 0;
-        uint32_t offset_lo = (lane_base + source_lane) * bytes_per_lane_total + halfword_index * 2;
-        uint32_t offset_hi =
-            (lane_base + source_lane + 1) * bytes_per_lane_total + halfword_index * 2;
-        if (offset_lo + 2 <= response_data.size())
-          std::memcpy(&word_lo, &response_data[offset_lo], 2);
-        if (offset_hi + 2 <= response_data.size())
-          std::memcpy(&word_hi, &response_data[offset_hi], 2);
-        uint32_t packed_dword =
-            static_cast<uint32_t>(word_lo) | (static_cast<uint32_t>(word_hi) << 16);
+    for (uint32_t group_start = 0; group_start < lanes_per_half; group_start += group_size) {
+      for (uint32_t lane_in_group = 0; lane_in_group < pair_stride; ++lane_in_group) {
+        uint32_t source_lo = lane_base + group_start + lane_in_group;
+        uint32_t source_hi = source_lo + pair_stride;
 
-        uint32_t dest_vgpr_index = (source_lane % 8) / source_group_size;
-        uint32_t dest_lane = lane_base + source_lane - source_lane % 8 + halfword_index;
-        uint32_t dest_offset = dest_lane * bytes_per_lane_total + dest_vgpr_index * 4;
+        for (uint32_t halfword_index = 0; halfword_index < halfwords_per_source_lane;
+             ++halfword_index) {
+          uint16_t word_lo = 0, word_hi = 0;
+          uint32_t offset_lo = source_lo * bytes_per_lane_total + halfword_index * 2;
+          uint32_t offset_hi = source_hi * bytes_per_lane_total + halfword_index * 2;
+          if (offset_lo + 2 <= response_data.size())
+            std::memcpy(&word_lo, &response_data[offset_lo], 2);
+          if (offset_hi + 2 <= response_data.size())
+            std::memcpy(&word_hi, &response_data[offset_hi], 2);
+          uint32_t packed_dword =
+              static_cast<uint32_t>(word_lo) | (static_cast<uint32_t>(word_hi) << 16);
 
-        if (dest_offset + 4 <= output.size())
-          std::memcpy(&output[dest_offset], &packed_dword, 4);
+          uint32_t dest_vgpr_index = (group_start / group_size) % num_elems;
+          uint32_t dest_lane = lane_base + (group_start / (group_size * num_elems)) * 16 +
+                               lane_in_group * halfwords_per_source_lane + halfword_index;
+          uint32_t dest_offset = dest_lane * bytes_per_lane_total + dest_vgpr_index * 4;
+
+          if (dest_offset + 4 <= output.size())
+            std::memcpy(&output[dest_offset], &packed_dword, 4);
+        }
       }
     }
   }
