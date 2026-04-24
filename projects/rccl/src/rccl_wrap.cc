@@ -28,6 +28,7 @@ THE SOFTWARE.
 #include "debug.h"
 #include "amdsmi_wrap.h"
 #include "include/graph.h"
+#include "net.h"
 #include "register.h"
 
 
@@ -530,6 +531,21 @@ void rcclSetP2pNetChunkSize(struct ncclComm* comm,  int& rcclP2pNetChunkSize) {
   }
   rcclP2pNetChunkSize = p2pNetChunkSize;
 }
+void rcclSetP2pAlltoAllChunkSize(struct ncclComm* comm, int& rcclP2pAlltoAllChunkSize) {
+  static int p2pAlltoAllChunkSize = RCCL_VALUE_UNSET;
+  if (p2pAlltoAllChunkSize == RCCL_VALUE_UNSET) {
+    const char *inputStr = getenv("NCCL_P2P_NET_CHUNKSIZE");
+    const bool archGfx950 = IsArchMatch(comm->topo->nodes[GPU].nodes[0].gpu.gcn, "gfx950");
+    if (!archGfx950 || !rcclUseAinic() || inputStr) {
+      rcclP2pAlltoAllChunkSize = p2pAlltoAllChunkSize = RCCL_VALUE_INVALID;
+      return;
+    }
+    p2pAlltoAllChunkSize = (1 << 17);
+    INFO(NCCL_INIT, "RCCL AllToAll P2P net chunk size set to %d for AINIC/gfx950", p2pAlltoAllChunkSize);
+  }
+  rcclP2pAlltoAllChunkSize = p2pAlltoAllChunkSize;
+}
+
 #ifdef ENABLE_WARP_SPEED
 void rcclSetWarpSpeedCUs(struct ncclComm* comm, int algo, int threadsPerBlock, int& rcclWarpSpeedChannels) {
   static int userChannelControlInput = RCCL_VALUE_UNSET;

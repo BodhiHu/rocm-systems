@@ -597,6 +597,7 @@ struct ncclComm {
   // Buffer sizes
   int buffSizes[NCCL_NUM_PROTOCOLS];
   int p2pChunkSize;
+  int p2pAlltoAllChunkSize;
   int nvlsChunkSize;
 
   // Tuner values

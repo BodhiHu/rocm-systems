@@ -1203,7 +1203,14 @@ static ncclResult_t computeBuffSizes(struct ncclComm* comm) {
     comm->sharedRes->tpP2pChunkSize = comm->p2pChunkSize;
   }
 
-  INFO(NCCL_INIT, "P2P Chunksize set to %d", comm->p2pChunkSize);
+  // AllToAll may use a smaller chunk size on specific hardware (e.g. AINIC/gfx950).
+  // Defaults to p2pChunkSize when no override applies.
+  rcclSetP2pAlltoAllChunkSize(comm, comm->p2pAlltoAllChunkSize);
+  comm->p2pAlltoAllChunkSize = (comm->p2pAlltoAllChunkSize > RCCL_VALUE_INVALID)
+                               ? comm->p2pAlltoAllChunkSize : comm->p2pChunkSize;
+
+  INFO(NCCL_INIT, "P2P Chunksize set to %d, AllToAll P2P Chunksize set to %d",
+       comm->p2pChunkSize, comm->p2pAlltoAllChunkSize);
   return ncclSuccess;
 }
 
