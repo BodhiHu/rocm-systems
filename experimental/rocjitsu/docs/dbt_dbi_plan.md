@@ -3768,20 +3768,16 @@ typedef struct rj_code_dbt_options_t {
 
 /// @brief Translate a code object from guest_arch to host_arch.
 ///
-/// @param[in]  elf_bytes     Raw ELF image to translate.
-/// @param[in]  elf_size      Size of elf_bytes in bytes.
-/// @param[in]  options       Translation options (NULL = use defaults / env-var policy).
-/// @param[out] translated_elf       Translated ELF (caller must free with free()).
-/// @param[out] translated_elf_size  Size of @p translated_elf in bytes.
+/// @param[in]  source     Source code object to translate.
+/// @param[in]  options    Translation options (NULL = use defaults / env-var policy).
+/// @param[out] translated Newly created translated code object (refcount = 0; caller owns it).
 /// @returns ROCJITSU_STATUS_SUCCESS on success.
 ///          ROCJITSU_STATUS_UNSUPPORTED if the translation pair is not yet implemented.
-///          ROCJITSU_STATUS_ERROR on fatal translation failure (translated_elf set to NULL).
+///          ROCJITSU_STATUS_ERROR on fatal translation failure.
 [[nodiscard]] RJ_API_EXPORT rj_status_t
-rj_code_translate(const uint8_t *elf_bytes,
-                  size_t elf_size,
+rj_code_translate(const rj_code_object_t *source,
                   const rj_code_dbt_options_t *options,
-                  uint8_t **translated_elf,
-                  size_t *translated_elf_size);
+                  rj_code_object_t **translated);
 ```
 
 The `rj_code_dbt_options_t` struct is also used internally by `RjHsaLayer` (Pillar 5) to carry the env-var policy into `BinaryTranslator`, so both the C API and the internal pipeline share the same options representation.
