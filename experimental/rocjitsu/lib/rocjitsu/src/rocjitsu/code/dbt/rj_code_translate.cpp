@@ -5,9 +5,8 @@
 
 #include "rocjitsu/code/dbt/binary_translator.h"
 
-extern "C" rj_status_t rj_code_translate(const rj_code_object_t *source,
-                                         const rj_code_dbt_options_t *options,
-                                         rj_code_object_t **translated) {
+rj_status_t rj_code_translate(const rj_code_object_t *source, const rj_code_dbt_options_t *options,
+                              rj_code_object_t **translated) {
   if (!source || !source->co || !options || !translated)
     return ROCJITSU_STATUS_ERROR;
 

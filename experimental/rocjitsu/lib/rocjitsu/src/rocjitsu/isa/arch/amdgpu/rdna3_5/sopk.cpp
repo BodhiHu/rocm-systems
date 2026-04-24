@@ -341,6 +341,7 @@ SWaitcntVscntSopk::SWaitcntVscntSopk(const MachineInst *inst)
   src_operands_[1] = &simm16;
   num_src_ = 2;
   num_dst_ = 0;
+  flags_ |= WAITCNT;
 }
 
 void SWaitcntVscntSopk::execute_impl(amdgpu::Wavefront &wf) {
@@ -357,6 +358,7 @@ SWaitcntVmcntSopk::SWaitcntVmcntSopk(const MachineInst *inst)
   src_operands_[1] = &simm16;
   num_src_ = 2;
   num_dst_ = 0;
+  flags_ |= WAITCNT;
 }
 
 void SWaitcntVmcntSopk::execute_impl(amdgpu::Wavefront &wf) {
@@ -373,6 +375,7 @@ SWaitcntExpcntSopk::SWaitcntExpcntSopk(const MachineInst *inst)
   src_operands_[1] = &simm16;
   num_src_ = 2;
   num_dst_ = 0;
+  flags_ |= WAITCNT;
 }
 
 void SWaitcntExpcntSopk::execute_impl(amdgpu::Wavefront &wf) {
@@ -389,6 +392,7 @@ SWaitcntLgkmcntSopk::SWaitcntLgkmcntSopk(const MachineInst *inst)
   src_operands_[1] = &simm16;
   num_src_ = 2;
   num_dst_ = 0;
+  flags_ |= WAITCNT;
 }
 
 void SWaitcntLgkmcntSopk::execute_impl(amdgpu::Wavefront &wf) {

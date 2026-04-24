@@ -259,7 +259,7 @@ PYTHONPATH=$PWD/lib/python python3 -m amdisa --multi \
   rdna3_5:$MRISA/amdgpu_isa_rdna3_5.xml \
   rdna4:$MRISA/amdgpu_isa_rdna4.xml \
   --gen-legalization \
-  --legalization-output lib/rocjitsu/src/rocjitsu/isa/dbt/generated
+  --legalization-output lib/rocjitsu/src/rocjitsu/code/dbt/generated
 
 # Encoding field structs (all ISAs) + translators (one pair)
 PYTHONPATH=$PWD/lib/python python3 -m amdisa --multi \
@@ -273,10 +273,10 @@ PYTHONPATH=$PWD/lib/python python3 -m amdisa --multi \
   rdna3_5:$MRISA/amdgpu_isa_rdna3_5.xml \
   rdna4:$MRISA/amdgpu_isa_rdna4.xml \
   --gen-encoding-translators --encoding-pair "cdna4->rdna4" \
-  --encoding-translator-output lib/rocjitsu/src/rocjitsu/isa/dbt/generated
+  --encoding-translator-output lib/rocjitsu/src/rocjitsu/code/dbt/generated
 
 # Format generated files
-./scripts/clang_format.sh lib/rocjitsu/src/rocjitsu/isa/dbt/
+./scripts/clang_format.sh lib/rocjitsu/src/rocjitsu/code/dbt/
 ```
 
 See `lib/python/amdisa/README.md` for details on the amdisa codegen pipeline.

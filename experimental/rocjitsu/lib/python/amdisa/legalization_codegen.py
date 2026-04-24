@@ -52,7 +52,9 @@ def emit_all(
     generated.append(str(types_path))
 
     for src, dst, entries in pairs:
-        sorted_entries = sorted(entries, key=lambda e: (e.src_encoding_order, e.src_opcode))
+        sorted_entries = sorted(entries, key=lambda e: (
+            e.src_encoding_order if e.src_encoding_order >= 0 else 0xFFFF,
+            e.src_opcode))
         pair_path = output_dir / f'legalization_{_pair_name(src, dst)}.h'
         _emit_pair(pair_path, src, dst, sorted_entries)
         generated.append(str(pair_path))
@@ -88,7 +90,9 @@ def _emit_types(path: Path) -> None:
              '            return cmp;',
              '        return src_opcode <=> rhs.src_opcode;',
              '    }',
-             '    constexpr bool operator==(const InstructionLegalization &rhs) const = default;',
+             '    constexpr bool operator==(const InstructionLegalization &rhs) const {',
+             '        return src_encoding_id == rhs.src_encoding_id && src_opcode == rhs.src_opcode;',
+             '    }',
              '};',
              '',
              'inline const InstructionLegalization *lookup(',
@@ -121,8 +125,9 @@ def _emit_pair(
 
     for e in entries:
         tgt = e.action.target_opcode
+        enc_id = e.src_encoding_order if e.src_encoding_order >= 0 else 0xFFFF
         lines.append(
-            f'    {{{e.src_opcode:>5}, {e.src_encoding_order:>3}, '
+            f'    {{{e.src_opcode:>5}, {enc_id:>5}, '
             f'{_action_enum(e):<20s}, {tgt:>5}}},'
         )
 

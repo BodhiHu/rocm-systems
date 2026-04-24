@@ -964,6 +964,7 @@ VMfmaF3232x32x1f32Vop3pMfma::VMfmaF3232x32x1f32Vop3pMfma(const MachineInst *inst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3232x32x1f32Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -994,6 +995,7 @@ VMfmaF3216x16x1f32Vop3pMfma::VMfmaF3216x16x1f32Vop3pMfma(const MachineInst *inst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3216x16x1f32Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1024,6 +1026,7 @@ VMfmaF324x4x1f32Vop3pMfma::VMfmaF324x4x1f32Vop3pMfma(const MachineInst *inst)
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF324x4x1f32Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1054,6 +1057,7 @@ VMfmaF3232x32x2f32Vop3pMfma::VMfmaF3232x32x2f32Vop3pMfma(const MachineInst *inst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3232x32x2f32Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1084,6 +1088,7 @@ VMfmaF3216x16x4f32Vop3pMfma::VMfmaF3216x16x4f32Vop3pMfma(const MachineInst *inst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3216x16x4f32Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1115,6 +1120,7 @@ VMfmaF3232x32x4f16Vop3pMfma::VMfmaF3232x32x4f16Vop3pMfma(const MachineInst *inst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3232x32x4f16Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1145,6 +1151,7 @@ VMfmaF3216x16x4f16Vop3pMfma::VMfmaF3216x16x4f16Vop3pMfma(const MachineInst *inst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3216x16x4f16Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1175,6 +1182,7 @@ VMfmaF324x4x4f16Vop3pMfma::VMfmaF324x4x4f16Vop3pMfma(const MachineInst *inst)
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF324x4x4f16Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1205,6 +1213,7 @@ VMfmaF3232x32x8f16Vop3pMfma::VMfmaF3232x32x8f16Vop3pMfma(const MachineInst *inst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3232x32x8f16Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1235,6 +1244,7 @@ VMfmaF3216x16x16f16Vop3pMfma::VMfmaF3216x16x16f16Vop3pMfma(const MachineInst *in
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3216x16x16f16Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1266,6 +1276,7 @@ VMfmaI3232x32x4i8Vop3pMfma::VMfmaI3232x32x4i8Vop3pMfma(const MachineInst *inst)
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaI3232x32x4i8Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1295,6 +1306,7 @@ VMfmaI3216x16x4i8Vop3pMfma::VMfmaI3216x16x4i8Vop3pMfma(const MachineInst *inst)
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaI3216x16x4i8Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1324,6 +1336,7 @@ VMfmaI324x4x4i8Vop3pMfma::VMfmaI324x4x4i8Vop3pMfma(const MachineInst *inst)
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaI324x4x4i8Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1353,6 +1366,7 @@ VMfmaI3232x32x8i8Vop3pMfma::VMfmaI3232x32x8i8Vop3pMfma(const MachineInst *inst)
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaI3232x32x8i8Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1382,6 +1396,7 @@ VMfmaI3216x16x16i8Vop3pMfma::VMfmaI3216x16x16i8Vop3pMfma(const MachineInst *inst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaI3216x16x16i8Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1412,6 +1427,7 @@ VMfmaF3232x32x4bf161kVop3pMfma::VMfmaF3232x32x4bf161kVop3pMfma(const MachineInst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3232x32x4bf161kVop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1442,6 +1458,7 @@ VMfmaF3216x16x4bf161kVop3pMfma::VMfmaF3216x16x4bf161kVop3pMfma(const MachineInst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3216x16x4bf161kVop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1472,6 +1489,7 @@ VMfmaF324x4x4bf161kVop3pMfma::VMfmaF324x4x4bf161kVop3pMfma(const MachineInst *in
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF324x4x4bf161kVop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1502,6 +1520,7 @@ VMfmaF3232x32x8bf161kVop3pMfma::VMfmaF3232x32x8bf161kVop3pMfma(const MachineInst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3232x32x8bf161kVop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1532,6 +1551,7 @@ VMfmaF3216x16x16bf161kVop3pMfma::VMfmaF3216x16x16bf161kVop3pMfma(const MachineIn
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3216x16x16bf161kVop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1563,6 +1583,7 @@ VMfmaF3232x32x2bf16Vop3pMfma::VMfmaF3232x32x2bf16Vop3pMfma(const MachineInst *in
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3232x32x2bf16Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1593,6 +1614,7 @@ VMfmaF3216x16x2bf16Vop3pMfma::VMfmaF3216x16x2bf16Vop3pMfma(const MachineInst *in
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3216x16x2bf16Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1623,6 +1645,7 @@ VMfmaF324x4x2bf16Vop3pMfma::VMfmaF324x4x2bf16Vop3pMfma(const MachineInst *inst)
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF324x4x2bf16Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1653,6 +1676,7 @@ VMfmaF3232x32x4bf16Vop3pMfma::VMfmaF3232x32x4bf16Vop3pMfma(const MachineInst *in
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3232x32x4bf16Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1683,6 +1707,7 @@ VMfmaF3216x16x8bf16Vop3pMfma::VMfmaF3216x16x8bf16Vop3pMfma(const MachineInst *in
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF3216x16x8bf16Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1713,6 +1738,7 @@ VMfmaF6416x16x4f64Vop3pMfma::VMfmaF6416x16x4f64Vop3pMfma(const MachineInst *inst
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF6416x16x4f64Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {
@@ -1742,6 +1768,7 @@ VMfmaF644x4x4f64Vop3pMfma::VMfmaF644x4x4f64Vop3pMfma(const MachineInst *inst)
   src_operands_[2] = &src2;
   num_src_ = 3;
   num_dst_ = 1;
+  flags_ |= MFMA;
 }
 
 void VMfmaF644x4x4f64Vop3pMfma::execute_impl(amdgpu::Wavefront &wf) {

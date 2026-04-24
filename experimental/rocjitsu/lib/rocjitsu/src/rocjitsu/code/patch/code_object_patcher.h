@@ -23,12 +23,17 @@ public:
 
   void update_elf_flags(uint32_t new_flags);
 
+  void append_cave_body(std::span<const uint32_t> words);
+
+  uint64_t cave_offset() const { return cave_body_.size(); }
+
   std::vector<uint8_t> emit() const;
 
 private:
   std::vector<uint8_t> image_;
   uint64_t text_offset_;
   uint64_t text_size_;
+  std::vector<uint8_t> cave_body_;
 };
 
 } // namespace rocjitsu

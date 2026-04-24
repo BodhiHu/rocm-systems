@@ -6,7 +6,6 @@
 #include "rocjitsu/code/amdgpu_code_object.h"
 #include "rocjitsu/code/amdgpu_elf.h"
 
-#include <algorithm>
 #include <cassert>
 #include <cstring>
 
@@ -40,6 +39,28 @@ void CodeObjectPatcher::update_elf_flags(uint32_t new_flags) {
   ehdr->e_flags = (ehdr->e_flags & ~EF_AMDGPU_MACH) | (new_flags & EF_AMDGPU_MACH);
 }
 
-std::vector<uint8_t> CodeObjectPatcher::emit() const { return image_; }
+void CodeObjectPatcher::append_cave_body(std::span<const uint32_t> words) {
+  auto *bytes = reinterpret_cast<const uint8_t *>(words.data());
+  cave_body_.insert(cave_body_.end(), bytes, bytes + words.size() * 4);
+}
+
+std::vector<uint8_t> CodeObjectPatcher::emit() const {
+  if (cave_body_.empty())
+    return image_;
+
+  std::vector<uint8_t> result = image_;
+  uint64_t cave_file_offset = result.size();
+
+  result.insert(result.end(), cave_body_.begin(), cave_body_.end());
+
+  // TODO: append a proper .rj_translations section header to the ELF section
+  // header table and update e_shnum. For now the cave body is appended as raw
+  // bytes after the image — the code cave stubs in .text use s_branch with
+  // offsets computed relative to the text section end, so this works for
+  // execution even without a formal section header.
+  (void)cave_file_offset;
+
+  return result;
+}
 
 } // namespace rocjitsu

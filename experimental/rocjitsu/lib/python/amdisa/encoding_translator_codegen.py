@@ -138,6 +138,7 @@ class EncodingTranslation:
     has_coherency_remap: bool = False
     has_glc_remap: bool = False
     src_dt_index: int = 0       # primary decode table index (for dispatch)
+    src_enc_field_bit_cnt: int = 9  # encoding field width in bits
     dst_enc_field_val: int = 0  # actual encoding bitfield value (for dst.encoding)
 
 
@@ -413,7 +414,8 @@ def _emit_decode_fn(trans, src_ns, src_name):
         n = bit_cnt // 32
         ws = ', '.join(f'w{i}' for i in range(n))
         lines.append(f'    {full_type} src{{}};')
-        lines.append(f'    std::memcpy(&src, (const uint32_t[]){{{ws}}}, sizeof(src));')
+        lines.append(f'    const uint32_t src_words[] = {{{ws}}};')
+        lines.append(f'    std::memcpy(&src, src_words, sizeof(src));')
 
     lines.append(f'    {fsname} f{{}};')
 
@@ -514,8 +516,23 @@ def _emit_dispatch(translations, src_name, dst_name):
 
     fn = f'translate_encoding_{src_name}_to_{dst_name}'
     lines.append(f'inline TranslationResult {fn}(')
-    lines.append(f'    uint32_t encoding_id, uint32_t w0, uint32_t w1, uint32_t w2,')
-    lines.append(f'    uint16_t dst_op, uint8_t seg = 0) {{')
+    lines.append(f'    uint32_t encoding_id, uint32_t w0, uint32_t w1, [[maybe_unused]] uint32_t w2,')
+    lines.append(f'    uint16_t dst_op, [[maybe_unused]] uint8_t seg = 0) {{')
+    # Build a priority-ordered lookup table: (enc_bits, base_val) sorted
+    # by ascending bit count. Encodings with fewer bits must be tried first
+    # because they mask away more bits. Used to normalize encoding_id.
+    enc_entries = []
+    seen_e: set[int] = set()
+    for ev, grp in sorted(val_groups.items()):
+        if ev not in seen_e:
+            seen_e.add(ev)
+            enc_entries.append((grp[0].src_enc_field_bit_cnt, ev))
+    enc_entries.sort()
+
+    # Emit a normalization chain: try each encoding format from narrowest
+    # to widest, masking encoding_id to the format's field width and comparing.
+    # No pre-normalization needed; handled in default: case below.
+
     lines.append(f'    switch (encoding_id) {{')
 
     seen_vals: set[int] = set()
@@ -558,8 +575,25 @@ def _emit_dispatch(translations, src_name, dst_name):
             lines.append(f'        break;')
             lines.append(f'    }}')
 
-    lines.append(f'    default: break;')
+    lines.append(f'    default:')
+    lines.append(f'        break;')
     lines.append(f'    }}')
+
+    # For formats with encoding fields narrower than 9 bits, the
+    # 9-bit encoding_id has don't-care low bits. If no exact match,
+    # try masking and retrying (one level, not recursive).
+    need_norm = any(b < 9 for b, _ in enc_entries)
+    if need_norm:
+        # Build a static mapping from mask → base value, widest first.
+        norm_entries_wide = sorted(
+            [(b, v) for b, v in enc_entries if b < 9],
+            key=lambda x: -x[0])
+        for bits, base_val in norm_entries_wide:
+            mask = ((1 << bits) - 1) << (9 - bits)
+            cn_n = val_groups[base_val][0].src_enc_name.upper().replace('ENC_', '')
+            lines.append(f'    if ((encoding_id & 0x{mask:X}) == kEnc_{cn_n})')
+            lines.append(f'        return {fn}(kEnc_{cn_n}, w0, w1, w2, dst_op, seg);')
+
     lines.append(f'    return {{}};')
     lines.append(f'}}')
     lines.append('')
@@ -610,6 +644,7 @@ def generate_encoding_translators(src_spec, dst_spec, src_name, dst_name, output
             has_coherency_remap=(se in _COHERENCY_REMAP_ENCODINGS),
             has_glc_remap=(se in _GLC_REMAP_ENCODINGS),
             src_dt_index=src_dts.get(se, 0),
+            src_enc_field_bit_cnt=src_enc.enc_field_bit_cnt,
             dst_enc_field_val=dst_evs.get(de, 0),
         ))
     translations.sort(key=lambda t: (t.src_bit_cnt, t.src_enc_name))
@@ -626,7 +661,7 @@ def generate_encoding_translators(src_spec, dst_spec, src_name, dst_name, output
                   '',
                   f'#include "rocjitsu/isa/arch/amdgpu/{src_name}/machine_insts.h"',
                   f'#include "rocjitsu/isa/arch/amdgpu/{dst_name}/machine_insts.h"',
-                  '#include "rocjitsu/isa/dbt/encoding_translator.h"',
+                  '#include "rocjitsu/code/dbt/encoding_translator.h"',
                   '#include "encoding_fields.h"',
                   '',
                   'namespace rocjitsu {', '']

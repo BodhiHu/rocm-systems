@@ -400,6 +400,19 @@ class LegalizationGenerator:
         self._build_records()
         self._discover_equivalences()
 
+    @staticmethod
+    def _dt_index(enc, spec) -> int:
+        if enc.primary_dt_ptrs is None:
+            parent_name = spec.profile.derive_parent_enc_name(enc.enc_name)
+            if parent_name in spec.encoding_map:
+                return LegalizationGenerator._dt_index(
+                    spec.encoding_map[parent_name], spec)
+            return 0
+        for ptr in enc.primary_dt_ptrs:
+            if ptr != -1:
+                return ptr
+        return 0
+
     def _alloc_id(self) -> int:
         eid = self._next_id
         self._next_id += 1
@@ -421,7 +434,7 @@ class LegalizationGenerator:
                         canonical=canonical_mnemonic(inst.name),
                         isa_name=isa_name,
                         enc_name=enc.enc_name,
-                        enc_order=enc.order,
+                        enc_order=self._dt_index(enc, spec),
                         opcode=inst.opcode,
                         field_sig=fsig,
                         opnd_sig=opsig,
