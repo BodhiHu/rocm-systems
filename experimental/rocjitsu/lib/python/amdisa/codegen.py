@@ -5188,6 +5188,10 @@ class CodeGenerator:
                         # base's apply_dpp() runs before the ALU logic.
                         _dpp_preamble = ''
                         if enc.enc_name.upper() in ('ENC_VOP1', 'ENC_VOP2'):
+                            _src0_name = next(
+                                (o.name for o in inst.operands if o.is_input),
+                                None
+                            )
                             _dpp_preamble = (
                                 '  if (inst_.src0 == 250)\n'
                                 '    amdgpu::dpp::apply_dpp(src_operands_[0], dpp_ctrl_,\n'
@@ -5205,6 +5209,8 @@ class CodeGenerator:
                                 '        *src_operands_[0], result, static_cast<int>(ws));\n'
                                 '    src_operands_[0] = dpp_src0_.get();\n'
                                 '  }\n'
+                                + (f'  if (dpp_src0_) {_src0_name}.set_delegate(dpp_src0_.get());\n'
+                                   if _src0_name else '')
                             )
                         # SDWA postamble: apply float clamp after ALU.
                         _sdwa_postamble = ''
@@ -5224,6 +5230,11 @@ class CodeGenerator:
                                 '    }\n'
                                 '  }\n'
                             )
+                        _dpp_cleanup = ''
+                        if enc.enc_name.upper() in ('ENC_VOP1', 'ENC_VOP2') and _src0_name:
+                            _dpp_cleanup = (
+                                f'  {_src0_name}.clear_delegate();\n'
+                            )
                         can_share = self._can_share_execute(inst.mnemonic)
                         if can_share:
                             enc_key = enc.enc_name.lower().replace('enc_', '')
@@ -5233,6 +5244,7 @@ class CodeGenerator:
                                 f'(amdgpu::Wavefront &wf) {{\n'
                                 f'{_dpp_preamble}'
                                 f'  amdgpu::execute_{tmpl_name}(*this, wf);\n'
+                                f'{_dpp_cleanup}'
                                 f'{_sdwa_postamble}}}'
                             )
                             body_key = (inst.mnemonic, enc.enc_name)
@@ -5245,6 +5257,7 @@ class CodeGenerator:
                                 f'(amdgpu::Wavefront &wf) {{\n'
                                 f'{_dpp_preamble}'
                                 f'{body}\n'
+                                f'{_dpp_cleanup}'
                                 f'{_sdwa_postamble}}}'
                             )
                     else:
@@ -5319,6 +5332,17 @@ class CodeGenerator:
                     cpp_includes.append((
                         'rocjitsu/isa/arch/amdgpu/shared/dpp_sdwa_ops.h', False
                     ))
+                has_saveexec = any(
+                    self.semantics
+                    and (s := self.semantics.instructions.get(i.name))
+                    and s.semantic_class == 'scalar_saveexec'
+                    for i in all_insts
+                )
+                if has_saveexec:
+                    cpp_includes.extend([
+                        ('util/log.h', False),
+                        ('format', True),
+                    ])
 
                 # Include the unified shared execute template header when
                 # any instruction in this encoding delegates to a template.
@@ -5851,6 +5875,7 @@ class CodeGenerator:
 
         _read_lane_body = (
             'uint32_t Operand::read_lane(const amdgpu::Wavefront &wf, uint32_t lane) const {\n'
+            '  if (delegate()) return delegate()->read_lane(wf, lane);\n'
             '  int ev = encoding_value_;\n'
             '  if (is_vgpr_only_type(opr_type_))\n'
             '    return wf.cu().read_vgpr(wf.vgpr_alloc().base + vgpr_index(opr_type_, ev), lane);\n'
@@ -5865,6 +5890,7 @@ class CodeGenerator:
 
         _read_lane64_body = (
             'uint64_t Operand::read_lane64(const amdgpu::Wavefront &wf, uint32_t lane) const {\n'
+            '  if (delegate()) return delegate()->read_lane64(wf, lane);\n'
             '  int ev = encoding_value_;\n'
             '  if (is_vgpr_only_type(opr_type_)) {\n'
             '    uint32_t idx = wf.vgpr_alloc().base + vgpr_index(opr_type_, ev);\n'
@@ -6020,6 +6046,7 @@ class CodeGenerator:
             '} // namespace\n'
             '\n'
             'uint32_t Operand::read_scalar(const amdgpu::Wavefront &wf) const {\n'
+            '  if (delegate()) return delegate()->read_scalar(wf);\n'
             '  if (is_immediate_type(opr_type_))\n'
             '    return static_cast<uint32_t>(encoding_value_);\n'
             '  return resolve_src_scalar(wf, encoding_value_);\n'
