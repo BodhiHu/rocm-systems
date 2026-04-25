@@ -59,7 +59,7 @@ This plan describes the complete implementation of Dynamic Binary Instrumentatio
   ┌────────────▼──────────┐            ┌──────────▼──────────────────────┐
   │  DBI Engine (Pillar 2)│            │  DBT Engine (Pillar 3)          │
   │  Instrumentor         │            │  BinaryTranslator               │
-  │  TrampolineBuilder    │            │  InstructionMapper              │
+  │  TrampolineBuilder    │            │  LegalizationLookupFn           │
   │  BufferInjector       │            │  WaitcntTranslator              │
   │                       │            │  Wave emulation, MfmaStub       │
   └────────────┬──────────┘            └──────────┬──────────────────────┘
@@ -2216,9 +2216,11 @@ private:
 } // namespace rocjitsu
 ```
 
-#### 3.3.1 `InstructionMapper` — Legalization Rule Table
+#### 3.3.1 Legalization Rule Table
 
-`InstructionMapper` is the **legalization rule table** for a specific (src_arch, dst_arch) pair. It answers one question per instruction: *is this instruction legal on the target, and if not, how should it be legalized?* It does not perform any transformation itself — that is `BinaryTranslator`'s job.
+> **Implementation note:** The plan below describes `InstructionMapper` as a class. In the actual implementation, this was simplified to a `LegalizationLookupFn` function pointer that queries the auto-generated legalization table directly. No `InstructionMapper` class exists. The concept and responsibility are the same — the references to `InstructionMapper` throughout this document should be read as `LegalizationLookupFn`.
+
+The legalization rule table answers one question per instruction for a specific (src_arch, dst_arch) pair: *is this instruction legal on the target, and if not, how should it be legalized?* It does not perform any transformation itself — that is `BinaryTranslator`'s job.
 
 **Where rules are defined:**
 
@@ -2543,7 +2545,7 @@ into one 8-bit immediate). All other split-wait instructions remain the same.
 Translation function:
 
 ```cpp
-// lib/rocjitsu/src/rocjitsu/code/dbt/waitcnt_translator.h
+// lib/rocjitsu/src/rocjitsu/code/dbt/semantic_translator.h (waitcnt decode/encode merged here)
 
 namespace rocjitsu {
 
@@ -4988,7 +4990,7 @@ No public C API additions — `LivenessAnalysis` is consumed internally by `Spil
 
 ---
 
-### Phase 4: CodeObjectPatcher — ELF Rewriter (1 week) [parallel with Phases 1–3]
+### Phase 4: CodeObjectPatcher — ELF Rewriter (1 week) [parallel with Phases 1–3] ✅ DONE
 
 **Depends on:** `amdgpu_elf.h` only (no analysis dependency)
 
@@ -5042,13 +5044,13 @@ No public C API additions — `LivenessAnalysis` is consumed internally by `Spil
 
 ---
 
-### Phase 8: WaitcntTranslator (3–5 days) [parallel with any phase]
+### Phase 8: WaitcntTranslator (3–5 days) [parallel with any phase] ✅ DONE
 
 **Depends on:** nothing
 
 | Task | New Files |
 |---|---|
-| `WaitcntTranslator`: encode/decode `s_waitcnt` for GFX9 (CDNA1/2/3/4), GFX10 (RDNA1/2; has `s_waitcnt_vscnt` for store counts), GFX11 (RDNA3/3.5 use split `s_wait_*` instructions), GFX12 (RDNA4 uses `s_wait_storecnt_dscnt`); map flag semantics across formats | `dbt/waitcnt_translator.h/.cpp` |
+| Waitcnt decode/encode: GFX9 `s_waitcnt` → GFX12 split `s_wait_*` instructions; workgroup_id SGPR→TTMP rewrite | `dbt/semantic_translator.h/.cpp` |
 
 **Tests:**
 - **GFX9 ↔ GFX11 round-trip:** Golden-value round-trip for `vmcnt(0)`, `lgkmcnt(0)`, `expcnt(0)`, combined `vmcnt(15) lgkmcnt(0) expcnt(0)`. Verify GFX9 encoding encodes/decodes for every case.
@@ -5063,7 +5065,7 @@ No public C API additions — `LivenessAnalysis` is consumed internally by `Spil
 
 ---
 
-### Phase 8.5: Legalization Tables and Encoding Translators (3–5 days) [parallel with Phases 1–8]
+### Phase 8.5: Legalization Tables and Encoding Translators (3–5 days) [parallel with Phases 1–8] ✅ DONE
 
 **Depends on:** Nothing (extends the existing `amdisa` library; no new build dependencies)
 
@@ -5107,7 +5109,7 @@ python -m amdisa --multi cdna4:cdna4.xml rdna4:rdna4.xml --gen-legalization \
 
 ---
 
-### Phase 9: BinaryTranslator — CDNA4→RDNA4 MVP (1–2 weeks)
+### Phase 9: BinaryTranslator — CDNA4→RDNA4 MVP (1–2 weeks) ✅ DONE
 
 **Depends on:** Phase 1, Phase 2, Phase 4, Phase 8, Phase 8.5
 
@@ -5124,7 +5126,7 @@ Note: `BranchFixup` is not needed for DBT — the code cave invariant (§3.3.2) 
 
 ---
 
-### Phase 9.5: KernelDescriptorTranslator — Resource-Level Translation (1 week)
+### Phase 9.5: KernelDescriptorTranslator — Resource-Level Translation (1 week) ✅ DONE
 
 **Depends on:** Phase 3 (LivenessAnalysis), Phase 9 (BinaryTranslator skeleton)
 
@@ -5164,7 +5166,7 @@ Note: `BranchFixup` is not needed for DBT — the code cave invariant (§3.3.2) 
 
 ---
 
-### Phase 11a: Semantic Translator Framework + MFMA→WMMA Rules (1 week)
+### Phase 11a: Semantic Translator Framework + MFMA→WMMA Rules (1 week) (framework ✅ DONE, MFMA rules pending)
 
 **Depends on:** Phase 9 (BinaryTranslator skeleton)
 
@@ -5417,11 +5419,10 @@ Phase 16: RDNA translation pairs (post-MVP; decoders done in Phase A)
 - New: `lib/rocjitsu/src/rocjitsu/code/patch/code_object_reader_registry.h/.cpp` — reader handle → ELF bytes
 - `lib/rocjitsu/src/rocjitsu/isa/arch/amdgpu/cdna3/operand_types.h`
 - `lib/rocjitsu/src/rocjitsu/code/dbt/binary_translator.h/.cpp` — ISA-agnostic translation loop using `EncodingTranslateFn`/`LegalizationLookupFn` function pointers; guest/host terminology
-- `lib/rocjitsu/src/rocjitsu/code/dbt/semantic_translator.h` — `SemanticRule`, `SemanticAnchor`, `SemanticMatch`, `SemanticTranslator` class (§3.3.3)
-- `lib/rocjitsu/src/rocjitsu/code/dbt/semantic_rules_cdna4_to_rdna4.h` — MFMA→WMMA semantic rules for CDNA4→RDNA4 pair
-- `lib/rocjitsu/src/rocjitsu/code/dbt/waitcnt_translator.h/.cpp` — GFX9 `s_waitcnt` → GFX12 split `s_wait_*` with code cave expansion
+- `lib/rocjitsu/src/rocjitsu/code/dbt/semantic_translator.h/.cpp` — `SemanticRule`, `SemanticTranslator` class; waitcnt GFX9→GFX12 splitting; workgroup_id SGPR→TTMP rewrite; `try_lower_expand()` for instruction lowering (v_lshl_add_u64 etc.)
 - `lib/rocjitsu/src/rocjitsu/code/dbt/rj_code_translate.cpp` — `rj_code_translate()` C API implementation
 - `lib/rocjitsu/src/rocjitsu/code/patch/code_object_patcher.h/.cpp` — ELF read/modify/emit with code cave support
+- `lib/rocjitsu/src/rocjitsu/code/patch/instruction_builder.h` — ISA-parameterized instruction encoding helpers (s_branch, s_nop)
 - `lib/rocjitsu/src/rocjitsu/code/rj_code_internal.h` — shared internal header for opaque handle structs
 - `lib/rocjitsu/src/rocjitsu/code/amdgpu_elf.h` — `EF_AMDGPU_MACH` constants for all 9 ISAs, `elf_mach_for_arch()` helper
 - `lib/rocjitsu/src/rocjitsu/isa/instruction.h` — `WAITCNT`, `BARRIER`, `MFMA`, `ACCVGPR` flags with accessors; `raw_encoding()`

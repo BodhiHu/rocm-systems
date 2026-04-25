@@ -9,6 +9,5 @@ rj_add_object_library(rocjitsu_code
     dbt/binary_translator.cpp
     dbt/rj_code_translate.cpp
     dbt/semantic_translator.cpp
-    dbt/waitcnt_translator.cpp
     patch/code_object_patcher.cpp
 )

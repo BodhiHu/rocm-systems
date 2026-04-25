@@ -2,24 +2,25 @@
 // SPDX-License-Identifier: MIT
 
 /// @file semantic_translator.h
-/// @brief Data-driven semantic translation for instructions whose semantics
-/// change across ISA generations.
+/// @brief Semantic translation for ISA-level behavioral differences.
 ///
-/// @details The encoding translator handles the ~80% of instructions where
-/// only the binary encoding differs between ISAs. The semantic translator
-/// handles the remaining ~20% where the instruction semantics themselves
-/// change: waitcnt counter models, barrier split/merge, MFMA→WMMA
-/// decomposition, AccVGPR register topology, and transpose load replacement.
+/// @details Handles instructions and ABI conventions whose semantics change
+/// across ISA generations, as opposed to the encoding translator which handles
+/// pure binary format differences. Current semantic translations:
+///
+/// - **Waitcnt splitting**: GFX9 monolithic s_waitcnt → GFX12 split
+///   s_wait_loadcnt / s_wait_storecnt_dscnt / s_wait_kmcnt / s_wait_expcnt
+/// - **Workgroup ID delivery**: GFX9 delivers workgroup IDs via SGPRs,
+///   RDNA4 delivers them via TTMP registers (TTMP9 for X, TTMP7 for Y/Z)
 ///
 /// The translator runs per-basic-block before the per-instruction encoding
-/// translation loop. It scans for anchor instructions (identified by InstFlags),
-/// applies the first matching rule, and produces a SemanticReplacement that the
-/// binary translator writes in-place or via code caves. Unmatched instructions
-/// fall through to the encoding translation path.
+/// loop. It scans for anchor instructions (identified by InstFlags), applies
+/// the first matching rule, and produces a SemanticReplacement that the binary
+/// translator writes in-place or via code caves.
 ///
-/// Rules are data-driven: each SemanticRule is a (name, anchor_flags, translate_fn)
-/// tuple. Adding a new translation means adding one rule entry to the per-pair
-/// rule table — no modifications to the translator framework or the main loop.
+/// Rules are data-driven: each SemanticRule is a (name, anchor_flags,
+/// translate_fn) tuple. Adding a new rule means adding one entry to the
+/// per-pair rule table.
 
 #pragma once
 
@@ -28,12 +29,26 @@
 #include <span>
 #include <vector>
 
+#include "rocjitsu/code/patch/code_object_patcher.h"
 #include "rocjitsu/code/rj_code.h"
 
 namespace rocjitsu {
 
 class BasicBlock;
 class Instruction;
+
+/// @brief Decoded wait-counter values from a GFX9 s_waitcnt simm16 field.
+struct WaitcntValues {
+  uint8_t vmcnt = 0x3F;   ///< VM count (loads + stores on GFX9). Sentinel: 0x3F.
+  uint8_t lgkmcnt = 0x0F; ///< LDS/GDS/Kmem count. Sentinel: 0x0F.
+  uint8_t expcnt = 0x07;  ///< Export count. Sentinel: 0x07.
+};
+
+/// @brief Decode a GFX9 s_waitcnt simm16 field into individual counter values.
+[[nodiscard]] WaitcntValues decode_waitcnt_gfx9(uint16_t simm16);
+
+/// @brief Encode wait-counter values as GFX12 split s_wait_* instruction words.
+[[nodiscard]] std::vector<uint32_t> encode_waitcnt_gfx12(const WaitcntValues &vals);
 
 /// @brief Result of a successful semantic translation: the source byte range
 /// and the target instruction words that replace it.
@@ -86,12 +101,25 @@ public:
   /// @returns A list of non-overlapping replacements, ordered by start_offset.
   [[nodiscard]] std::vector<SemanticReplacement> translate(BasicBlock &block) const;
 
+  /// @brief Rewrite workgroup_id SGPR references to TTMP registers.
+  /// On RDNA4, workgroup IDs are delivered via TTMP registers, not SGPRs.
+  /// This pass substitutes the SGPR operand in each matching instruction.
+  [[nodiscard]] std::vector<SemanticReplacement>
+  rewrite_workgroup_ids(BasicBlock &block,
+                        std::span<const CodeObjectPatcher::WorkGroupIdInfo> wg_info,
+                        std::span<const uint8_t> translated_text) const;
+
+  /// @brief Try to lower an instruction marked as Action::Expand.
+  /// @returns Replacement instruction words on success, empty vector if unhandled.
+  [[nodiscard]] std::vector<uint32_t> try_lower_expand(const Instruction &inst) const;
+
   /// @brief Whether any semantic rules exist for this (guest, host) pair.
   [[nodiscard]] bool has_rules() const { return !rules_.empty(); }
 
 private:
-  std::span<const SemanticRule> rules_; ///< Rule table for this (guest, host) pair.
-  rj_code_arch_t host_arch_;            ///< Target ISA, passed to TranslateFn.
+  std::span<const SemanticRule> rules_;        ///< Rule table for this (guest, host) pair.
+  [[maybe_unused]] rj_code_arch_t guest_arch_; ///< Source ISA.
+  rj_code_arch_t host_arch_;                   ///< Target ISA.
 };
 
 } // namespace rocjitsu

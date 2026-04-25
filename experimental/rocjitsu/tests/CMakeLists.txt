@@ -145,6 +145,31 @@ if(HSA_RUNTIME64)
         SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
         TIMEOUT 30)
     message(STATUS "HSA init test enabled (found ${HSA_RUNTIME64})")
+
+    # --- HSA translate test: CDNA4→RDNA4 on-device verification ---
+    if(HAS_DEVICE_KERNELS)
+        add_executable(hsa_translate_test dbt/hsa_translate_test.cpp)
+        target_include_directories(hsa_translate_test PRIVATE
+            ${CMAKE_SOURCE_DIR}/lib/rocjitsu/include
+            ${CMAKE_SOURCE_DIR}/lib/rocjitsu/src
+            ${CMAKE_SOURCE_DIR}/lib/util/include
+            /opt/rocm/include)
+        target_link_libraries(hsa_translate_test PRIVATE
+            ${RJ_OBJECT_LIBS} ${HSA_RUNTIME64} GTest::gtest GTest::gtest_main)
+        target_link_options(hsa_translate_test PRIVATE -Wl,-rpath,/opt/rocm/lib)
+        target_compile_definitions(hsa_translate_test PRIVATE
+            HAS_HOST_AMDGPU=1
+            KERNEL_DIR="${KERNEL_OUTPUT_DIR}")
+        add_dependencies(hsa_translate_test device_kernels)
+        rj_configure_target(hsa_translate_test TEST)
+
+        add_test(NAME "HsaTranslateTest.TranslateAndDispatchVectorAdd"
+            COMMAND hsa_translate_test
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+        set_tests_properties("HsaTranslateTest.TranslateAndDispatchVectorAdd" PROPERTIES
+            TIMEOUT 30)
+        message(STATUS "HSA translate test enabled")
+    endif()
 else()
     message(STATUS "HSA init test disabled (libhsa-runtime64 not found)")
 endif()

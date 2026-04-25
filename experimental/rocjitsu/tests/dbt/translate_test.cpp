@@ -4,7 +4,33 @@
 #include "rocjitsu/code/dbt/encoding_translator.h"
 #include "rocjitsu/code/dbt/generated/encoding_cdna4_to_rdna4.h"
 #include "rocjitsu/code/dbt/generated/encoding_fields.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna1_to_cdna2.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna1_to_cdna3.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna1_to_cdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna1_to_rdna1.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna1_to_rdna2.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna1_to_rdna3.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna1_to_rdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna2_to_cdna3.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna2_to_cdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna2_to_rdna3.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna2_to_rdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna3_to_cdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna3_to_rdna3.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna3_to_rdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_cdna4_to_rdna3.h"
 #include "rocjitsu/code/dbt/generated/legalization_cdna4_to_rdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_rdna1_to_cdna3.h"
+#include "rocjitsu/code/dbt/generated/legalization_rdna1_to_cdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_rdna1_to_rdna2.h"
+#include "rocjitsu/code/dbt/generated/legalization_rdna1_to_rdna3.h"
+#include "rocjitsu/code/dbt/generated/legalization_rdna1_to_rdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_rdna2_to_rdna3.h"
+#include "rocjitsu/code/dbt/generated/legalization_rdna2_to_rdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_rdna3_5_to_rdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_rdna3_to_cdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_rdna3_to_rdna4.h"
+#include "rocjitsu/code/dbt/generated/legalization_rdna4_to_cdna4.h"
 #include "rocjitsu/code/dbt/generated/legalization_types.h"
 
 #include <gtest/gtest.h>
@@ -119,7 +145,7 @@ TEST(EncodingTranslator, SmemRemapsCoherency) {
   EXPECT_EQ(dst.scope, 2);
   EXPECT_EQ(dst.th, 0);
   EXPECT_EQ(dst.nv, 0);
-  EXPECT_EQ(dst.soffset, 0x7F);
+  EXPECT_EQ(dst.soffset, 0x7C); // CDNA4 null (0x7F) → RDNA4 null (0x7C)
 }
 
 TEST(EncodingTranslator, Vop3PreservesModifiers) {
@@ -191,18 +217,56 @@ TEST(LegalizationLookup, ReturnsNullForUnknown) {
   EXPECT_EQ(entry, nullptr);
 }
 
-TEST(LegalizationTable, NoIllegalEntries) {
+TEST(LegalizationTable, NoIllegalEntries_Cdna4ToRdna4) {
   for (const auto &e : kLegalization_cdna4_to_rdna4) {
     EXPECT_NE(e.action, Action::Illegal)
-        << "Unexpected ILLEGAL at encoding_id=" << e.src_encoding_id << " opcode=" << e.src_opcode;
+        << "ILLEGAL at encoding_id=" << e.src_encoding_id << " opcode=" << e.src_opcode;
   }
 }
+
+#define CHECK_NO_ILLEGAL(pair)                                                                     \
+  TEST(LegalizationTable, NoIllegalEntries_##pair) {                                               \
+    for (const auto &e : kLegalization_##pair) {                                                   \
+      EXPECT_NE(e.action, Action::Illegal)                                                         \
+          << "ILLEGAL at encoding_id=" << e.src_encoding_id << " opcode=" << e.src_opcode;         \
+    }                                                                                              \
+    EXPECT_GT(std::size(kLegalization_##pair), 0u) << "table is empty";                            \
+  }
+
+CHECK_NO_ILLEGAL(cdna1_to_cdna2)
+CHECK_NO_ILLEGAL(cdna1_to_cdna3)
+CHECK_NO_ILLEGAL(cdna1_to_cdna4)
+CHECK_NO_ILLEGAL(cdna1_to_rdna1)
+CHECK_NO_ILLEGAL(cdna1_to_rdna2)
+CHECK_NO_ILLEGAL(cdna1_to_rdna3)
+CHECK_NO_ILLEGAL(cdna1_to_rdna4)
+CHECK_NO_ILLEGAL(cdna2_to_cdna3)
+CHECK_NO_ILLEGAL(cdna2_to_cdna4)
+CHECK_NO_ILLEGAL(cdna2_to_rdna3)
+CHECK_NO_ILLEGAL(cdna2_to_rdna4)
+CHECK_NO_ILLEGAL(cdna3_to_cdna4)
+CHECK_NO_ILLEGAL(cdna3_to_rdna3)
+CHECK_NO_ILLEGAL(cdna3_to_rdna4)
+CHECK_NO_ILLEGAL(cdna4_to_rdna3)
+CHECK_NO_ILLEGAL(rdna1_to_cdna3)
+CHECK_NO_ILLEGAL(rdna1_to_cdna4)
+CHECK_NO_ILLEGAL(rdna1_to_rdna2)
+CHECK_NO_ILLEGAL(rdna1_to_rdna3)
+CHECK_NO_ILLEGAL(rdna1_to_rdna4)
+CHECK_NO_ILLEGAL(rdna2_to_rdna3)
+CHECK_NO_ILLEGAL(rdna2_to_rdna4)
+CHECK_NO_ILLEGAL(rdna3_5_to_rdna4)
+CHECK_NO_ILLEGAL(rdna3_to_cdna4)
+CHECK_NO_ILLEGAL(rdna3_to_rdna4)
+CHECK_NO_ILLEGAL(rdna4_to_cdna4)
+
+#undef CHECK_NO_ILLEGAL
 
 } // namespace
 } // namespace rocjitsu
 
 // --- WaitcntTranslator tests ---
-#include "rocjitsu/code/dbt/waitcnt_translator.h"
+#include "rocjitsu/code/dbt/semantic_translator.h"
 
 using rocjitsu::decode_waitcnt_gfx9;
 using rocjitsu::encode_waitcnt_gfx12;
@@ -339,19 +403,16 @@ TEST(BinaryTranslatorE2E, OutputDecodesAsValidRdna4) {
         }
         pc += inst->size() / 4;
         ++inst_count;
-      } catch (...) {
+      } catch (const std::exception &e) {
+        std::cerr << "  decode fail at 0x" << std::hex << pc * 4 << " word=0x" << data[pc] << ": "
+                  << e.what() << "\n";
         ++decode_failures;
         ++pc;
       }
     }
   }
   EXPECT_GT(inst_count, 0) << "Text section should contain instructions";
-  // TODO: Some VOP3/FLAT instructions produce valid RDNA4 encodings that
-  // the RDNA4 decoder's primary decode table doesn't handle yet (the 9-bit
-  // encoding_id has don't-care bits from narrow encoding fields).
-  // Uncomment when the decoder supports the full encoding_id range.
-  // EXPECT_EQ(decode_failures, 0) << decode_failures << " instructions failed to decode";
-  EXPECT_LE(decode_failures, 10) << "regression: more failures than expected";
+  EXPECT_EQ(decode_failures, 0) << decode_failures << " instructions failed to decode as RDNA4";
 }
 
 TEST(BinaryTranslatorE2E, NoGfx9WaitcntInOutput) {
@@ -413,6 +474,89 @@ TEST(BinaryTranslatorE2E, TextSizesMatch) {
   // The translated .text must be at least as large as the original
   // (code caves may grow it, but individual instructions never shift).
   EXPECT_GE(translated_text_size, original_text_size);
+}
+
+TEST(BinaryTranslatorE2E, WriteTranslatedElfToFile) {
+  Executable exec(kernel_path("vector_add"));
+  ASSERT_TRUE(exec.is_valid());
+  ASSERT_GT(exec.num_code_objects(ROCJITSU_CODE_TARGET_GFX950), 0u);
+
+  const auto *co = exec.code_object(ROCJITSU_CODE_TARGET_GFX950, 0);
+  ASSERT_NE(co, nullptr);
+
+  BinaryTranslator translator(ROCJITSU_CODE_ARCH_CDNA4, ROCJITSU_CODE_ARCH_RDNA4);
+  auto result = translator.translate(*co);
+  ASSERT_FALSE(result.elf_bytes.empty());
+
+  // Write a GFX1201 variant (same ISA, different MACH flag).
+  auto elf_1201 = result.elf_bytes;
+  // Patch e_flags: clear low 8 bits (MACH), set GFX1201 = 0x4E.
+  uint32_t e_flags = 0;
+  std::memcpy(&e_flags, elf_1201.data() + 48, 4);
+  e_flags = (e_flags & ~0xFFu) | 0x4E;
+  std::memcpy(elf_1201.data() + 48, &e_flags, 4);
+
+  const char *out_path = "/tmp/vector_add_gfx1201.co";
+  FILE *f = fopen(out_path, "wb");
+  ASSERT_NE(f, nullptr);
+  fwrite(elf_1201.data(), 1, elf_1201.size(), f);
+  fclose(f);
+  printf("  Wrote translated ELF to %s (%zu bytes)\n", out_path, elf_1201.size());
+}
+
+TEST(BinaryTranslatorE2E, DumpTranslation) {
+  Executable exec(kernel_path("vector_add"));
+  ASSERT_TRUE(exec.is_valid());
+  ASSERT_GT(exec.num_code_objects(ROCJITSU_CODE_TARGET_GFX950), 0u);
+
+  const auto *co = exec.code_object(ROCJITSU_CODE_TARGET_GFX950, 0);
+  ASSERT_NE(co, nullptr);
+
+  auto dump = [](const char *label, const uint8_t *text, size_t size, rj_code_arch_t arch) {
+    auto dec = Decoder::create(arch);
+    if (!dec)
+      return;
+    const auto *data = reinterpret_cast<const uint32_t *>(text);
+    size_t words = size / 4, pc = 0;
+    printf("\n--- %s (%zu bytes, %zu words) ---\n", label, size, words);
+    while (pc < words) {
+      try {
+        std::unique_ptr<rocjitsu::Instruction> inst(dec->decode(&data[pc]));
+        if (!inst) {
+          printf("  0x%04zx: ???\n", pc * 4);
+          ++pc;
+          continue;
+        }
+        printf("  0x%04zx: %-45s [", pc * 4, inst->disassemble().c_str());
+        for (int i = 0; i < inst->size() / 4; i++)
+          printf("%s%08X", i ? " " : "", data[pc + i]);
+        printf("]\n");
+        pc += inst->size() / 4;
+      } catch (...) {
+        printf("  0x%04zx: [decode error] 0x%08X\n", pc * 4, data[pc]);
+        ++pc;
+      }
+    }
+  };
+
+  for (const auto *sec : co->text_sections())
+    dump("CDNA4 source", reinterpret_cast<const uint8_t *>(sec->data()), sec->size(),
+         ROCJITSU_CODE_ARCH_CDNA4);
+
+  BinaryTranslator translator(ROCJITSU_CODE_ARCH_CDNA4, ROCJITSU_CODE_ARCH_RDNA4);
+  auto result = translator.translate(*co);
+  ASSERT_FALSE(result.elf_bytes.empty());
+
+  rocjitsu::AmdGpuCodeObject translated(result.elf_bytes.data(), result.elf_bytes.size());
+  for (const auto *sec : translated.text_sections())
+    dump("RDNA4 translated", reinterpret_cast<const uint8_t *>(sec->data()), sec->size(),
+         ROCJITSU_CODE_ARCH_RDNA4);
+
+  if (!result.warnings.empty()) {
+    printf("\n--- Warnings (%zu) ---\n", result.warnings.size());
+    for (const auto &w : result.warnings)
+      printf("  %s\n", w.c_str());
+  }
 }
 
 #endif // HAS_DEVICE_KERNELS

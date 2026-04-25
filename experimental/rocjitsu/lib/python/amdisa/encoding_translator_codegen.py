@@ -485,6 +485,15 @@ def _emit_encode_fn(trans, dst_ns, dst_name):
             lines.append(f'    dst.{m.dst_name} = 0;')
         # drop and coherency: nothing to encode
 
+    # Remap null register sentinels: CDNA uses 0x7F (7-bit max), RDNA uses 0x7C.
+    if any(m.src_name == 'saddr' or m.dst_name == 'saddr' for m in trans.mappings):
+        lines.append('    if (dst.saddr == 0x7F) dst.saddr = 0x7C;')
+    if any(m.src_name == 'soffset' or m.dst_name == 'soffset' for m in trans.mappings):
+        lines.append('    if (dst.soffset == 0x7F) dst.soffset = 0x7C;')
+        # CDNA SMEM uses soffset_en=0 to disable scalar offset. RDNA uses soffset=0x7C (null).
+        if any(m.src_name == 'soffset_en' for m in trans.mappings):
+            lines.append('    if (f.soffset_en == 0) dst.soffset = 0x7C;')
+
     # Return
     if bit_cnt <= 32:
         lines.append(f'    return TranslationResult{{{{std::bit_cast<uint32_t>(dst), 0u, 0u}}, uint8_t{{1}}}};')
@@ -517,7 +526,7 @@ def _emit_dispatch(translations, src_name, dst_name):
     fn = f'translate_encoding_{src_name}_to_{dst_name}'
     lines.append(f'inline TranslationResult {fn}(')
     lines.append(f'    uint32_t encoding_id, uint32_t w0, uint32_t w1, [[maybe_unused]] uint32_t w2,')
-    lines.append(f'    uint16_t dst_op, [[maybe_unused]] uint8_t seg = 0) {{')
+    lines.append(f'    uint16_t dst_op) {{')
     # Build a priority-ordered lookup table: (enc_bits, base_val) sorted
     # by ascending bit count. Encodings with fewer bits must be tried first
     # because they mask away more bits. Used to normalize encoding_id.
@@ -553,6 +562,7 @@ def _emit_dispatch(translations, src_name, dst_name):
             lines.append(f'        return {enc_fn}({dec_fn}({args}), dst_op);')
         else:
             lines.append(f'    case kEnc_{cn}: {{')
+            lines.append(f'        const uint8_t seg = (w0 >> 14) & 0x3;')
             lines.append(f'        switch (seg) {{')
             seg_map: dict[int, EncodingTranslation] = {}
             for t in group:
@@ -592,7 +602,7 @@ def _emit_dispatch(translations, src_name, dst_name):
             mask = ((1 << bits) - 1) << (9 - bits)
             cn_n = val_groups[base_val][0].src_enc_name.upper().replace('ENC_', '')
             lines.append(f'    if ((encoding_id & 0x{mask:X}) == kEnc_{cn_n})')
-            lines.append(f'        return {fn}(kEnc_{cn_n}, w0, w1, w2, dst_op, seg);')
+            lines.append(f'        return {fn}(kEnc_{cn_n}, w0, w1, w2, dst_op);')
 
     lines.append(f'    return {{}};')
     lines.append(f'}}')

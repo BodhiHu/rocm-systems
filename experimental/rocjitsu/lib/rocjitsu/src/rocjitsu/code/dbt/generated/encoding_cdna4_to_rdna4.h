@@ -362,6 +362,8 @@ inline TranslationResult encode_flat_rdna4(const FlatFields &f, uint16_t dst_op)
   dst.vdst = f.vdst;
   dst.nv = 0;
   dst.sve = 0;
+  if (dst.saddr == 0x7F)
+    dst.saddr = 0x7C;
   TranslationResult r{};
   r.word_count = uint8_t{3};
   std::memcpy(r.words, &dst, sizeof(dst));
@@ -382,6 +384,8 @@ inline TranslationResult encode_flat_glbl_rdna4(const FlatGlblFields &f, uint16_
   dst.saddr = f.saddr;
   dst.vdst = f.vdst;
   dst.nv = 0;
+  if (dst.saddr == 0x7F)
+    dst.saddr = 0x7C;
   TranslationResult r{};
   r.word_count = uint8_t{3};
   std::memcpy(r.words, &dst, sizeof(dst));
@@ -402,6 +406,8 @@ inline TranslationResult encode_flat_scratch_rdna4(const FlatScratchFields &f, u
   dst.saddr = f.saddr;
   dst.vdst = f.vdst;
   dst.nv = 0;
+  if (dst.saddr == 0x7F)
+    dst.saddr = 0x7C;
   TranslationResult r{};
   r.word_count = uint8_t{3};
   std::memcpy(r.words, &dst, sizeof(dst));
@@ -425,6 +431,8 @@ inline TranslationResult encode_mubuf_rdna4(const MubufFields &f, uint16_t dst_o
   dst.nv = 0;
   dst.tfe = 0;
   dst.format = 0;
+  if (dst.soffset == 0x7F)
+    dst.soffset = 0x7C;
   TranslationResult r{};
   r.word_count = uint8_t{3};
   std::memcpy(r.words, &dst, sizeof(dst));
@@ -443,6 +451,10 @@ inline TranslationResult encode_smem_rdna4(const SmemFields &f, uint16_t dst_op)
   dst.nv = f.nv;
   dst.ioffset = f.ioffset & 0xFFFFFF;
   dst.soffset = f.soffset;
+  if (dst.soffset == 0x7F)
+    dst.soffset = 0x7C;
+  if (f.soffset_en == 0)
+    dst.soffset = 0x7C;
   TranslationResult r{};
   r.word_count = uint8_t{2};
   std::memcpy(r.words, &dst, sizeof(dst));
@@ -527,8 +539,7 @@ inline constexpr uint32_t kEnc_VOP3_SDST_ENC = 0x1A2;
 inline TranslationResult translate_encoding_cdna4_to_rdna4(uint32_t encoding_id, uint32_t w0,
                                                            uint32_t w1,
                                                            [[maybe_unused]] uint32_t w2,
-                                                           uint16_t dst_op,
-                                                           [[maybe_unused]] uint8_t seg = 0) {
+                                                           uint16_t dst_op) {
   switch (encoding_id) {
   case kEnc_VOP2:
     return encode_vop2_rdna4(decode_vop2_cdna4(w0), dst_op);
@@ -557,6 +568,7 @@ inline TranslationResult translate_encoding_cdna4_to_rdna4(uint32_t encoding_id,
   case kEnc_DS:
     return encode_ds_rdna4(decode_ds_cdna4(w0, w1), dst_op);
   case kEnc_FLAT: {
+    const uint8_t seg = (w0 >> 14) & 0x3;
     switch (seg) {
     case 0:
       return encode_flat_rdna4(decode_flat_cdna4(w0, w1), dst_op);
@@ -575,27 +587,27 @@ inline TranslationResult translate_encoding_cdna4_to_rdna4(uint32_t encoding_id,
     break;
   }
   if ((encoding_id & 0x1FC) == kEnc_VOPC)
-    return translate_encoding_cdna4_to_rdna4(kEnc_VOPC, w0, w1, w2, dst_op, seg);
+    return translate_encoding_cdna4_to_rdna4(kEnc_VOPC, w0, w1, w2, dst_op);
   if ((encoding_id & 0x1FC) == kEnc_VOP1)
-    return translate_encoding_cdna4_to_rdna4(kEnc_VOP1, w0, w1, w2, dst_op, seg);
+    return translate_encoding_cdna4_to_rdna4(kEnc_VOP1, w0, w1, w2, dst_op);
   if ((encoding_id & 0x1F8) == kEnc_SMEM)
-    return translate_encoding_cdna4_to_rdna4(kEnc_SMEM, w0, w1, w2, dst_op, seg);
+    return translate_encoding_cdna4_to_rdna4(kEnc_SMEM, w0, w1, w2, dst_op);
   if ((encoding_id & 0x1F8) == kEnc_VOP3)
-    return translate_encoding_cdna4_to_rdna4(kEnc_VOP3, w0, w1, w2, dst_op, seg);
+    return translate_encoding_cdna4_to_rdna4(kEnc_VOP3, w0, w1, w2, dst_op);
   if ((encoding_id & 0x1F8) == kEnc_VOP3_SDST_ENC)
-    return translate_encoding_cdna4_to_rdna4(kEnc_VOP3_SDST_ENC, w0, w1, w2, dst_op, seg);
+    return translate_encoding_cdna4_to_rdna4(kEnc_VOP3_SDST_ENC, w0, w1, w2, dst_op);
   if ((encoding_id & 0x1F8) == kEnc_DS)
-    return translate_encoding_cdna4_to_rdna4(kEnc_DS, w0, w1, w2, dst_op, seg);
+    return translate_encoding_cdna4_to_rdna4(kEnc_DS, w0, w1, w2, dst_op);
   if ((encoding_id & 0x1F8) == kEnc_FLAT)
-    return translate_encoding_cdna4_to_rdna4(kEnc_FLAT, w0, w1, w2, dst_op, seg);
+    return translate_encoding_cdna4_to_rdna4(kEnc_FLAT, w0, w1, w2, dst_op);
   if ((encoding_id & 0x1F8) == kEnc_MUBUF)
-    return translate_encoding_cdna4_to_rdna4(kEnc_MUBUF, w0, w1, w2, dst_op, seg);
+    return translate_encoding_cdna4_to_rdna4(kEnc_MUBUF, w0, w1, w2, dst_op);
   if ((encoding_id & 0x1E0) == kEnc_SOPK)
-    return translate_encoding_cdna4_to_rdna4(kEnc_SOPK, w0, w1, w2, dst_op, seg);
+    return translate_encoding_cdna4_to_rdna4(kEnc_SOPK, w0, w1, w2, dst_op);
   if ((encoding_id & 0x180) == kEnc_SOP2)
-    return translate_encoding_cdna4_to_rdna4(kEnc_SOP2, w0, w1, w2, dst_op, seg);
+    return translate_encoding_cdna4_to_rdna4(kEnc_SOP2, w0, w1, w2, dst_op);
   if ((encoding_id & 0x100) == kEnc_VOP2)
-    return translate_encoding_cdna4_to_rdna4(kEnc_VOP2, w0, w1, w2, dst_op, seg);
+    return translate_encoding_cdna4_to_rdna4(kEnc_VOP2, w0, w1, w2, dst_op);
   return {};
 }
 
