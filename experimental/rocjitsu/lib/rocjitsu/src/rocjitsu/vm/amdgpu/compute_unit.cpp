@@ -195,7 +195,7 @@ void ComputeUnitCore::retire_halted_wfs() {
   }
 }
 
-bool ComputeUnitCore::can_accept_workgroup(uint32_t num_wfs) const {
+bool ComputeUnitCore::can_accept_workgroup(uint32_t num_wfs, uint32_t lds_bytes) const {
   // Count free wavefront slots.
   uint32_t free_slots = 0;
   for (const auto &w : wfs_)
@@ -223,7 +223,14 @@ bool ComputeUnitCore::can_accept_workgroup(uint32_t num_wfs) const {
     return false;
   }
 
-  // LDS capacity is checked during allocate_lds() at dispatch time.
+  if (lds_bytes > 0) {
+    uint32_t aligned = util::align_up(lds_bytes, 256u);
+    uint32_t lds_capacity_bytes = config_.lds_size_kb * 1024u;
+    if (next_lds_alloc_ + aligned > lds_capacity_bytes) {
+      return false;
+    }
+  }
+
   return true;
 }
 
