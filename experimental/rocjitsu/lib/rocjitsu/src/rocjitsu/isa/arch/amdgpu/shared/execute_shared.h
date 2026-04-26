@@ -8186,12 +8186,20 @@ inline void execute_v_div_fixup_f16_vop3([[maybe_unused]] Inst &inst,
       result = std::numeric_limits<float>::quiet_NaN();
     else if (std::isinf(c) && std::isinf(b))
       result = std::numeric_limits<float>::quiet_NaN();
-    else if (c == 0.0f) {
+    else if (b == 0.0f) {
+      result = std::copysign(
+          std::numeric_limits<float>::infinity(),
+          std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
+    } else if (c == 0.0f)
+      result = std::copysign(
+          0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
+    else if (std::isinf(c)) {
       result = std::copysign(
           std::numeric_limits<float>::infinity(),
           std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
     } else if (std::isinf(b))
-      result = std::copysign(0.0f, b);
+      result = std::copysign(
+          0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
     else
       result = p;
     if (inst.inst_.omod == 1)
@@ -8237,12 +8245,20 @@ inline void execute_v_div_fixup_f32_vop3([[maybe_unused]] Inst &inst,
       result = std::numeric_limits<float>::quiet_NaN();
     else if (std::isinf(c) && std::isinf(b))
       result = std::numeric_limits<float>::quiet_NaN();
-    else if (c == 0.0f) {
+    else if (b == 0.0f) {
+      result = std::copysign(
+          std::numeric_limits<float>::infinity(),
+          std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
+    } else if (c == 0.0f)
+      result = std::copysign(
+          0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
+    else if (std::isinf(c)) {
       result = std::copysign(
           std::numeric_limits<float>::infinity(),
           std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
     } else if (std::isinf(b))
-      result = std::copysign(0.0f, b);
+      result = std::copysign(
+          0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
     else
       result = p;
     if (inst.inst_.omod == 1)
@@ -8288,12 +8304,20 @@ inline void execute_v_div_fixup_f64_vop3([[maybe_unused]] Inst &inst,
       result = std::numeric_limits<double>::quiet_NaN();
     else if (std::isinf(c) && std::isinf(b))
       result = std::numeric_limits<double>::quiet_NaN();
-    else if (c == 0.0) {
+    else if (b == 0.0) {
+      result = std::copysign(
+          std::numeric_limits<double>::infinity(),
+          std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));
+    } else if (c == 0.0)
+      result = std::copysign(
+          0.0, std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));
+    else if (std::isinf(c)) {
       result = std::copysign(
           std::numeric_limits<double>::infinity(),
           std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));
     } else if (std::isinf(b))
-      result = std::copysign(0.0, b);
+      result = std::copysign(
+          0.0, std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));
     else
       result = p;
     if (inst.inst_.omod == 1)
@@ -8339,12 +8363,20 @@ inline void execute_v_div_fixup_legacy_f16_vop3([[maybe_unused]] Inst &inst,
       result = std::numeric_limits<float>::quiet_NaN();
     else if (std::isinf(c) && std::isinf(b))
       result = std::numeric_limits<float>::quiet_NaN();
-    else if (c == 0.0f) {
+    else if (b == 0.0f) {
+      result = std::copysign(
+          std::numeric_limits<float>::infinity(),
+          std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
+    } else if (c == 0.0f)
+      result = std::copysign(
+          0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
+    else if (std::isinf(c)) {
       result = std::copysign(
           std::numeric_limits<float>::infinity(),
           std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
     } else if (std::isinf(b))
-      result = std::copysign(0.0f, b);
+      result = std::copysign(
+          0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
     else
       result = p;
     if (inst.inst_.omod == 1)
@@ -8441,7 +8473,8 @@ inline void execute_v_div_scale_f32_vop3([[maybe_unused]] Inst &inst,
     float result = s0;
     bool set_vcc = false;
     if (s2 == 0.0f || s1 == 0.0f) {
-      result = std::numeric_limits<float>::quiet_NaN();
+      // Zero numerator or denominator: pass through s0 unscaled.
+      // Special-case handling (0/0, 0/x, x/0) is done by v_div_fixup.
     } else {
       int exp1 = 0, exp2 = 0;
       std::frexp(s1, &exp1);
@@ -8496,7 +8529,8 @@ inline void execute_v_div_scale_f64_vop3([[maybe_unused]] Inst &inst,
     double result = s0;
     bool set_vcc = false;
     if (s2 == 0.0 || s1 == 0.0) {
-      result = std::numeric_limits<double>::quiet_NaN();
+      // Zero numerator or denominator: pass through s0 unscaled.
+      // Special-case handling (0/0, 0/x, x/0) is done by v_div_fixup.
     } else {
       int exp1 = 0, exp2 = 0;
       std::frexp(s1, &exp1);
