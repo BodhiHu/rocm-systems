@@ -352,11 +352,9 @@ bool ComputeUnitCore::step() {
 
   active->trace_inst_count_++;
 
-  // Safety valve: halt wavefronts stuck in infinite loops.
-  if (active->trace_inst_count_ > 50000) {
-    active->halt();
-    return has_active_wfs();
-  }
+  // No instruction-count safety valve — real kernels (Triton flash attention)
+  // can legitimately execute hundreds of thousands of instructions per wavefront.
+  // Infinite loops are detected via the dispatch logger showing no progress.
 
   // Trace v4 and instruction words at key PCs in the fill kernel.
   util::Logger::vm([&](auto &os) {
