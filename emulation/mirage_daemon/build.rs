@@ -17,11 +17,26 @@ fn main() {
     let dist_dir = dashboard_dir.join("dist");
 
     // Rebuild if the dashboard sources or the dist change.
-    println!("cargo:rerun-if-changed={}", dashboard_dir.join("src").display());
-    println!("cargo:rerun-if-changed={}", dashboard_dir.join("index.html").display());
-    println!("cargo:rerun-if-changed={}", dashboard_dir.join("package.json").display());
-    println!("cargo:rerun-if-changed={}", dashboard_dir.join("vite.config.ts").display());
-    println!("cargo:rerun-if-changed={}", dist_dir.join("index.html").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        dashboard_dir.join("src").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        dashboard_dir.join("index.html").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        dashboard_dir.join("package.json").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        dashboard_dir.join("vite.config.ts").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        dist_dir.join("index.html").display()
+    );
     println!("cargo:rerun-if-env-changed=MIRAGE_SKIP_DASHBOARD_BUILD");
 
     let dist_has_index = dist_dir.join("index.html").is_file();

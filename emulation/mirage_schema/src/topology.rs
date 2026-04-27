@@ -450,7 +450,9 @@ impl std::error::Error for TopologyParseError {}
 
 impl TopologyParseError {
     fn new(msg: impl Into<String>) -> Self {
-        Self { message: msg.into() }
+        Self {
+            message: msg.into(),
+        }
     }
 }
 
@@ -688,9 +690,7 @@ impl TypedTopology {
             let properties = topo
                 .files
                 .get(&format!("{prefix}properties"))
-                .ok_or_else(|| {
-                    TopologyParseError::new(format!("missing `{prefix}properties`"))
-                })
+                .ok_or_else(|| TopologyParseError::new(format!("missing `{prefix}properties`")))
                 .and_then(|b| NodeProperties::from_bytes(b))?;
 
             let name = topo
@@ -724,9 +724,7 @@ impl TypedTopology {
                     .files
                     .get(&format!("{mb_prefix}{mi}/properties"))
                     .ok_or_else(|| {
-                        TopologyParseError::new(format!(
-                            "missing `{mb_prefix}{mi}/properties`"
-                        ))
+                        TopologyParseError::new(format!("missing `{mb_prefix}{mi}/properties`"))
                     })
                     .and_then(|b| MemBankProperties::from_bytes(b))?;
                 let used_memory = topo
@@ -734,16 +732,20 @@ impl TypedTopology {
                     .get(&format!("{mb_prefix}{mi}/used_memory"))
                     .map(|b| parse_single_u64(b))
                     .transpose()?;
-                mem_banks.insert(mi, MemBank { properties: props, used_memory });
+                mem_banks.insert(
+                    mi,
+                    MemBank {
+                        properties: props,
+                        used_memory,
+                    },
+                );
             }
 
             // ── io_links ───────────────────────────────────────────────────
-            let io_links =
-                parse_link_map(&format!("{prefix}io_links/"), &topo.files)?;
+            let io_links = parse_link_map(&format!("{prefix}io_links/"), &topo.files)?;
 
             // ── p2p_links ──────────────────────────────────────────────────
-            let p2p_links =
-                parse_link_map(&format!("{prefix}p2p_links/"), &topo.files)?;
+            let p2p_links = parse_link_map(&format!("{prefix}p2p_links/"), &topo.files)?;
 
             // ── caches ─────────────────────────────────────────────────────
             let cache_prefix = format!("{prefix}caches/");
@@ -763,9 +765,7 @@ impl TypedTopology {
                     .files
                     .get(&format!("{cache_prefix}{ci}/properties"))
                     .ok_or_else(|| {
-                        TopologyParseError::new(format!(
-                            "missing `{cache_prefix}{ci}/properties`"
-                        ))
+                        TopologyParseError::new(format!("missing `{cache_prefix}{ci}/properties`"))
                     })
                     .and_then(|b| CacheProperties::from_bytes(b))?;
                 caches.insert(ci, cp);
@@ -773,11 +773,23 @@ impl TypedTopology {
 
             nodes.insert(
                 idx,
-                TopologyNode { properties, name, gpu_id, mem_banks, io_links, p2p_links, caches },
+                TopologyNode {
+                    properties,
+                    name,
+                    gpu_id,
+                    mem_banks,
+                    io_links,
+                    p2p_links,
+                    caches,
+                },
             );
         }
 
-        Ok(TypedTopology { generation_id, system_properties, nodes })
+        Ok(TypedTopology {
+            generation_id,
+            system_properties,
+            nodes,
+        })
     }
 
     /// Serialise back to the flat [`Topology`] wire format.
@@ -792,10 +804,7 @@ impl TypedTopology {
             "generation_id".into(),
             format!("{}\n", self.generation_id).into_bytes(),
         );
-        files.insert(
-            "system_properties".into(),
-            self.system_properties.into(),
-        );
+        files.insert("system_properties".into(), self.system_properties.into());
 
         for (idx, node) in self.nodes {
             let prefix = format!("nodes/{idx}/");
@@ -823,24 +832,15 @@ impl TypedTopology {
             }
 
             for (li, link) in node.io_links {
-                files.insert(
-                    format!("{prefix}io_links/{li}/properties"),
-                    link.into(),
-                );
+                files.insert(format!("{prefix}io_links/{li}/properties"), link.into());
             }
 
             for (li, link) in node.p2p_links {
-                files.insert(
-                    format!("{prefix}p2p_links/{li}/properties"),
-                    link.into(),
-                );
+                files.insert(format!("{prefix}p2p_links/{li}/properties"), link.into());
             }
 
             for (ci, cache) in node.caches {
-                files.insert(
-                    format!("{prefix}caches/{ci}/properties"),
-                    cache.into(),
-                );
+                files.insert(format!("{prefix}caches/{ci}/properties"), cache.into());
             }
         }
 
@@ -868,9 +868,7 @@ fn parse_link_map(
     for i in indices {
         let lp = files
             .get(&format!("{prefix}{i}/properties"))
-            .ok_or_else(|| {
-                TopologyParseError::new(format!("missing `{prefix}{i}/properties`"))
-            })
+            .ok_or_else(|| TopologyParseError::new(format!("missing `{prefix}{i}/properties`")))
             .and_then(|b| LinkProperties::from_bytes(b))?;
         map.insert(i, lp);
     }

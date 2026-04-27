@@ -18,38 +18,34 @@ use crate::ctl::daemon::{
 };
 use crate::paths;
 
-pub use crate::ctl::{
-    MirageDaemonError, MirageDaemonResult, SessionSummary, SimulatorSummary, WorkloadSummary,
-};
 pub use crate::ctl::daemon::{
     AttachInput, AttachOutput, AttachReply, AttachRequest, BootReply, BootRequest,
-    CreateProfileReply, CreateProfileRequest,
-    CreateWorkloadReply, CreateWorkloadRequest, DeleteProfileReply, DeleteProfileRequest,
-    DeleteWorkloadReply, DeleteWorkloadRequest,
-    ExecReply, ExecRequest, GetOverviewReply, GetOverviewRequest,
-    HealthReply, HealthRequest, ListProfilesReply,
-    ListProfilesRequest, ListSessionsReply, ListSessionsRequest, ListSimulatorsReply,
-    ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest, RegisterSimReply,
-    RegisterSimRequest, ShowSimulatorReply, ShowSimulatorRequest,
-    ShowWorkloadReply, ShowWorkloadRequest, ShutdownReply, ShutdownRequest,
-    StatusReply, StatusRequest, TimeReply, TimeRequest,
+    CreateProfileReply, CreateProfileRequest, CreateWorkloadReply, CreateWorkloadRequest,
+    DeleteProfileReply, DeleteProfileRequest, DeleteWorkloadReply, DeleteWorkloadRequest,
+    ExecReply, ExecRequest, GetOverviewReply, GetOverviewRequest, HealthReply, HealthRequest,
+    ListProfilesReply, ListProfilesRequest, ListSessionsReply, ListSessionsRequest,
+    ListSimulatorsReply, ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest,
+    RegisterSimReply, RegisterSimRequest, ShowSimulatorReply, ShowSimulatorRequest,
+    ShowWorkloadReply, ShowWorkloadRequest, ShutdownReply, ShutdownRequest, StatusReply,
+    StatusRequest, TimeReply, TimeRequest,
 };
 pub use crate::ctl::daemon::{
-    DaemonCli as MirageDaemonCli, DaemonCommand as MirageDaemonCommand,
-    DaemonImpl as MirageDaemon, ImplAttach as MirageDaemonAttach,
-    ImplBoot as MirageDaemonBoot, ImplCreateProfile as MirageDaemonCreateProfile,
+    DaemonCli as MirageDaemonCli, DaemonCommand as MirageDaemonCommand, DaemonImpl as MirageDaemon,
+    ImplAttach as MirageDaemonAttach, ImplBoot as MirageDaemonBoot,
+    ImplCreateProfile as MirageDaemonCreateProfile,
     ImplCreateWorkload as MirageDaemonCreateWorkload,
     ImplDeleteProfile as MirageDaemonDeleteProfile,
-    ImplDeleteWorkload as MirageDaemonDeleteWorkload,
-    ImplExec as MirageDaemonExec, ImplGetOverview as MirageDaemonOverview,
-    ImplStatus as MirageDaemonStatus,
-    ImplShowSimulator as MirageDaemonShowSimulator, ImplShowWorkload as MirageDaemonShowWorkload,
-    ImplHealth as MirageDaemonHealth, ImplListProfiles as MirageDaemonListProfiles,
-    ImplListSessions as MirageDaemonListSessions,
+    ImplDeleteWorkload as MirageDaemonDeleteWorkload, ImplExec as MirageDaemonExec,
+    ImplGetOverview as MirageDaemonOverview, ImplHealth as MirageDaemonHealth,
+    ImplListProfiles as MirageDaemonListProfiles, ImplListSessions as MirageDaemonListSessions,
     ImplListSimulators as MirageDaemonListSimulators,
-    ImplListWorkloads as MirageDaemonListWorkloads,
-    ImplRegisterSim as MirageDaemonRegistration, ImplShutdown as MirageDaemonShutdown,
+    ImplListWorkloads as MirageDaemonListWorkloads, ImplRegisterSim as MirageDaemonRegistration,
+    ImplShowSimulator as MirageDaemonShowSimulator, ImplShowWorkload as MirageDaemonShowWorkload,
+    ImplShutdown as MirageDaemonShutdown, ImplStatus as MirageDaemonStatus,
     ImplTime as MirageDaemonTime,
+};
+pub use crate::ctl::{
+    MirageDaemonError, MirageDaemonResult, SessionSummary, SimulatorSummary, WorkloadSummary,
 };
 
 const MAX_FRAME_LEN: usize = 64 * 1024 * 1024;
@@ -251,7 +247,10 @@ impl MirageDaemonServer {
         }
     }
 
-    async fn handle_client(daemon: Arc<dyn MirageDaemon>, stream: UnixStream) -> MirageDaemonResult<()> {
+    async fn handle_client(
+        daemon: Arc<dyn MirageDaemon>,
+        stream: UnixStream,
+    ) -> MirageDaemonResult<()> {
         let (mut reader, writer) = stream.into_split();
         let request = match read_frame::<_, TransportFrame>(&mut reader).await? {
             TransportFrame::Request(request) => request,
@@ -293,14 +292,13 @@ impl MirageDaemonServer {
         let input_task = tokio::spawn(async move {
             loop {
                 match read_frame::<_, TransportFrame>(&mut reader).await? {
-                    TransportFrame::Input(input) => transport_input_tx
-                        .send(input)
-                        .await
-                        .map_err(|_| {
+                    TransportFrame::Input(input) => {
+                        transport_input_tx.send(input).await.map_err(|_| {
                             MirageDaemonError::protocol(
                                 "daemon input receiver dropped before all client input was read",
                             )
-                        })?,
+                        })?
+                    }
                     TransportFrame::EndInput => break,
                     other => {
                         return Err(MirageDaemonError::protocol(format!(
@@ -567,10 +565,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MirageDaemonStatus for FixedDaemon {
-        async fn status(
-            &self,
-            _request: StatusRequest,
-        ) -> MirageDaemonResult<StatusReply> {
+        async fn status(&self, _request: StatusRequest) -> MirageDaemonResult<StatusReply> {
             Ok(StatusReply {
                 name: None,
                 profile: None,
@@ -589,10 +584,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MirageDaemonBoot for FixedDaemon {
-        async fn boot(
-            &self,
-            _request: BootRequest,
-        ) -> MirageDaemonResult<BootReply> {
+        async fn boot(&self, _request: BootRequest) -> MirageDaemonResult<BootReply> {
             Ok(BootReply {
                 ok: true,
                 error: None,
@@ -616,10 +608,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MirageDaemonShutdown for FixedDaemon {
-        async fn shutdown(
-            &self,
-            _request: ShutdownRequest,
-        ) -> MirageDaemonResult<ShutdownReply> {
+        async fn shutdown(&self, _request: ShutdownRequest) -> MirageDaemonResult<ShutdownReply> {
             Ok(ShutdownReply {
                 ok: true,
                 error: None,

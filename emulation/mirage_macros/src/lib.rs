@@ -343,8 +343,16 @@ fn expand_ctl_module(module: CtlModule) -> Result<TokenStream2> {
             ));
         }
 
-        generated_types.push(expand_struct(&endpoint_attrs, &request_name, &endpoint.request));
-        generated_types.push(expand_struct(&endpoint_attrs, &output_name, &endpoint.output));
+        generated_types.push(expand_struct(
+            &endpoint_attrs,
+            &request_name,
+            &endpoint.request,
+        ));
+        generated_types.push(expand_struct(
+            &endpoint_attrs,
+            &output_name,
+            &endpoint.output,
+        ));
 
         if let Some(input_block) = &endpoint.input {
             generated_types.push(expand_struct(
@@ -370,22 +378,24 @@ fn expand_ctl_module(module: CtlModule) -> Result<TokenStream2> {
         } else {
             for error_path in &endpoint.errors {
                 if let Some(error_ident) = error_path.get_ident() {
-                    error_defs.entry(error_ident.to_string()).or_insert_with(|| {
-                        let message = humanize_ident(error_ident);
-                        quote! {
-                            #[derive(
-                                Debug,
-                                Clone,
-                                PartialEq,
-                                Eq,
-                                ::serde::Serialize,
-                                ::serde::Deserialize,
-                                ::thiserror::Error,
-                            )]
-                            #[error(#message)]
-                            pub struct #error_ident;
-                        }
-                    });
+                    error_defs
+                        .entry(error_ident.to_string())
+                        .or_insert_with(|| {
+                            let message = humanize_ident(error_ident);
+                            quote! {
+                                #[derive(
+                                    Debug,
+                                    Clone,
+                                    PartialEq,
+                                    Eq,
+                                    ::serde::Serialize,
+                                    ::serde::Deserialize,
+                                    ::thiserror::Error,
+                                )]
+                                #[error(#message)]
+                                pub struct #error_ident;
+                            }
+                        });
                 }
             }
 
@@ -992,11 +1002,12 @@ fn expand_ctl_module(module: CtlModule) -> Result<TokenStream2> {
 }
 
 fn expand_struct(attrs: &[Attribute], name: &Ident, block: &FieldBlock) -> TokenStream2 {
-    let default_derive = if block.fields.is_empty() || block.fields.iter().all(|field| field.optional) {
-        Some(quote! { Default, })
-    } else {
-        None
-    };
+    let default_derive =
+        if block.fields.is_empty() || block.fields.iter().all(|field| field.optional) {
+            Some(quote! { Default, })
+        } else {
+            None
+        };
     let fields = block.fields.iter().map(|field| {
         let field_attrs = filter_clap_attrs(&field.attrs);
         let ident = &field.ident;
@@ -1445,7 +1456,8 @@ fn expand_streaming_run_arm(
         quote! { #ident: args.#ident, }
     });
 
-    let enqueue_input = if let (Some(input_name), Some(input_block)) = (input_name, &endpoint.input) {
+    let enqueue_input = if let (Some(input_name), Some(input_block)) = (input_name, &endpoint.input)
+    {
         if input_block.fields.len() == 1 && is_vec_u8(&input_block.fields[0].ty) {
             let field_name = &input_block.fields[0].ident;
             quote! {
@@ -1516,8 +1528,16 @@ fn expand_print_output_arm(
     endpoint: &Endpoint,
 ) -> TokenStream2 {
     let raw_stream = endpoint.output.fields.len() == 2
-        && endpoint.output.fields.iter().any(|field| field.ident == "is_stdout")
-        && endpoint.output.fields.iter().any(|field| field.ident == "output")
+        && endpoint
+            .output
+            .fields
+            .iter()
+            .any(|field| field.ident == "is_stdout")
+        && endpoint
+            .output
+            .fields
+            .iter()
+            .any(|field| field.ident == "output")
         && endpoint
             .output
             .fields
@@ -1557,14 +1577,30 @@ fn expand_print_output_arm(
     }
 }
 
-fn expand_print_reply_arm(reply_enum: &Ident, variant_name: &Ident, endpoint: &Endpoint) -> TokenStream2 {
+fn expand_print_reply_arm(
+    reply_enum: &Ident,
+    variant_name: &Ident,
+    endpoint: &Endpoint,
+) -> TokenStream2 {
     let reply_block = endpoint.reply.as_ref().unwrap_or(&endpoint.output);
-    let exit_code_only =
-        reply_block.fields.len() == 1 && reply_block.fields.iter().any(|field| field.ident == "exit_code");
+    let exit_code_only = reply_block.fields.len() == 1
+        && reply_block
+            .fields
+            .iter()
+            .any(|field| field.ident == "exit_code");
     let exit_code_with_streams = reply_block.fields.len() == 3
-        && reply_block.fields.iter().any(|field| field.ident == "exit_code")
-        && reply_block.fields.iter().any(|field| field.ident == "stdout")
-        && reply_block.fields.iter().any(|field| field.ident == "stderr")
+        && reply_block
+            .fields
+            .iter()
+            .any(|field| field.ident == "exit_code")
+        && reply_block
+            .fields
+            .iter()
+            .any(|field| field.ident == "stdout")
+        && reply_block
+            .fields
+            .iter()
+            .any(|field| field.ident == "stderr")
         && reply_block
             .fields
             .iter()
@@ -1578,7 +1614,10 @@ fn expand_print_reply_arm(reply_enum: &Ident, variant_name: &Ident, endpoint: &E
             .map(|field| is_vec_u8(&field.ty))
             .unwrap_or(false);
     let ok_reply = reply_block.fields.iter().any(|field| field.ident == "ok")
-        && reply_block.fields.iter().any(|field| field.ident == "error");
+        && reply_block
+            .fields
+            .iter()
+            .any(|field| field.ident == "error");
     let ok_reply_only = ok_reply && reply_block.fields.len() == 2;
 
     if exit_code_only {
@@ -1695,12 +1734,14 @@ fn last_path_ident(path: &Path) -> Ident {
 }
 
 fn has_clap_arg_attr(attrs: &[Attribute]) -> bool {
-    attrs.iter()
+    attrs
+        .iter()
         .any(|attr| attr.path().is_ident("arg") || attr.path().is_ident("command"))
 }
 
 fn filter_clap_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
-    attrs.iter()
+    attrs
+        .iter()
         .filter(|attr| !attr.path().is_ident("arg") && !attr.path().is_ident("command"))
         .cloned()
         .collect()
@@ -1784,7 +1825,14 @@ mod tests {
         let (_, module_options) =
             split_module_attrs(module.attrs.clone()).expect("module attrs should parse");
         assert_eq!(
-            module_options.shared_error.as_ref().unwrap().segments.last().unwrap().ident,
+            module_options
+                .shared_error
+                .as_ref()
+                .unwrap()
+                .segments
+                .last()
+                .unwrap()
+                .ident,
             "MirageDaemonError"
         );
         assert_eq!(

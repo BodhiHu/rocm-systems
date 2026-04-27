@@ -49,7 +49,9 @@ fn new_test_daemon() -> MirageDaemon {
     d
 }
 
-fn new_test_daemon_with_runtime(runtime: Arc<dyn mirage_container::ContainerRuntime>) -> MirageDaemon {
+fn new_test_daemon_with_runtime(
+    runtime: Arc<dyn mirage_container::ContainerRuntime>,
+) -> MirageDaemon {
     let mut d = MirageDaemon::with_container_runtime(runtime);
     d.set_config_root(test_config_root());
     d
@@ -147,12 +149,7 @@ async fn queue_ok(mock: &MockContainerRuntime, boot: &BootReply, stdout: &[u8]) 
 }
 
 /// Queue a failing exec result returning `stderr` on the head container.
-async fn queue_fail(
-    mock: &MockContainerRuntime,
-    boot: &BootReply,
-    exit_code: i32,
-    stderr: &[u8],
-) {
+async fn queue_fail(mock: &MockContainerRuntime, boot: &BootReply, exit_code: i32, stderr: &[u8]) {
     let starts = mock.start_requests().await;
     let handle = ContainerHandle {
         id: boot.container_id.clone().unwrap(),
@@ -200,10 +197,7 @@ async fn vllm_full_e2e_lifecycle() {
         .find(|s| s.name.as_deref() == Some("rocjitsu"));
     assert!(rocjitsu.is_some(), "rocjitsu must be a builtin simulator");
     let rocjitsu = rocjitsu.unwrap();
-    assert!(rocjitsu
-        .supported_gpus
-        .iter()
-        .any(|g| g.name == "MI300X"));
+    assert!(rocjitsu.supported_gpus.iter().any(|g| g.name == "MI300X"));
 
     // -- boot vLLM session --------------------------------------------------
     let boot = daemon
@@ -243,10 +237,7 @@ async fn vllm_full_e2e_lifecycle() {
         .exec(exec_req(
             "vllm-e2e",
             "python",
-            &[
-                "-c",
-                "import torch; print(f'PyTorch {torch.__version__}')",
-            ],
+            &["-c", "import torch; print(f'PyTorch {torch.__version__}')"],
         ))
         .await
         .unwrap();
@@ -303,8 +294,11 @@ async fn vllm_full_e2e_lifecycle() {
     queue_ok(
         &mock,
         &boot,
-        format!("{}\nBenchmark passed.\n", serde_json::to_string_pretty(&bench).unwrap())
-            .as_bytes(),
+        format!(
+            "{}\nBenchmark passed.\n",
+            serde_json::to_string_pretty(&bench).unwrap()
+        )
+        .as_bytes(),
     )
     .await;
     let reply = daemon
@@ -482,7 +476,11 @@ async fn rocjitsu_rejects_unsupported_gpu() {
 async fn create_multiple_gpu_profiles() {
     let daemon = new_test_daemon();
 
-    for (name, gpu) in [("mi300x", "MI300X"), ("mi325x", "MI325X"), ("mi350x", "MI350X")] {
+    for (name, gpu) in [
+        ("mi300x", "MI300X"),
+        ("mi325x", "MI325X"),
+        ("mi350x", "MI350X"),
+    ] {
         let reply = daemon
             .create_profile(create_profile_req(ProfileDef {
                 name: name.into(),
@@ -738,10 +736,7 @@ async fn boot_without_container_runtime_fails() {
         .await
         .unwrap();
 
-    let r = daemon
-        .boot(boot_req("s", "p", "img:latest"))
-        .await
-        .unwrap();
+    let r = daemon.boot(boot_req("s", "p", "img:latest")).await.unwrap();
     assert!(!r.ok);
     assert!(r.error.unwrap().contains("container runtime"));
 }
@@ -832,9 +827,7 @@ async fn exec_multiple_commands_sequentially() {
 async fn exec_on_nonexistent_session_fails() {
     let (daemon, _mock) = vllm_daemon().await;
 
-    let result = daemon
-        .exec(exec_req("ghost", "echo", &["hello"]))
-        .await;
+    let result = daemon.exec(exec_req("ghost", "echo", &["hello"])).await;
     assert!(result.is_err());
 }
 
@@ -890,10 +883,7 @@ async fn health_for_nonexistent_session_fails() {
 async fn time_returns_default_for_daemon() {
     let daemon = new_test_daemon();
 
-    let reply = daemon
-        .time(TimeRequest { session: None })
-        .await
-        .unwrap();
+    let reply = daemon.time(TimeRequest { session: None }).await.unwrap();
     assert_eq!(reply.time.seconds, 0);
     assert_eq!(reply.time.picoseconds, 0);
 }
@@ -1024,9 +1014,7 @@ async fn shutdown_immediately_after_boot() {
         .unwrap();
 
     let r = daemon
-        .shutdown(ShutdownRequest {
-            name: "del".into(),
-        })
+        .shutdown(ShutdownRequest { name: "del".into() })
         .await
         .unwrap();
     assert!(r.ok);
@@ -1156,10 +1144,7 @@ async fn multinode_vllm_cluster_boot() {
         find_env(head_env, "MIRAGE_HEAD_ADDR"),
         Some("mirage-vllm-cluster-node0".into())
     );
-    assert_eq!(
-        find_env(head_env, "MIRAGE_HEAD_PORT"),
-        Some("29500".into())
-    );
+    assert_eq!(find_env(head_env, "MIRAGE_HEAD_PORT"), Some("29500".into()));
 
     // Verify distributed env vars on worker node.
     let worker_env = &starts[1].container.entrypoint.env;
@@ -1234,10 +1219,7 @@ async fn register_custom_simulator() {
                     description: None,
                 }],
                 supports_custom_gpus: true,
-                supported_modes: vec![
-                    SimulatorMode::Functional,
-                    SimulatorMode::CycleAccurate,
-                ],
+                supported_modes: vec![SimulatorMode::Functional, SimulatorMode::CycleAccurate],
             },
         })
         .await
@@ -1249,10 +1231,11 @@ async fn register_custom_simulator() {
         .list_simulators(ListSimulatorsRequest::default())
         .await
         .unwrap();
-    assert!(sims
-        .simulators
-        .iter()
-        .any(|s| s.name.as_deref() == Some("gem5-gpu")));
+    assert!(
+        sims.simulators
+            .iter()
+            .any(|s| s.name.as_deref() == Some("gem5-gpu"))
+    );
 
     // Can create profiles on the new simulator.
     let r = daemon
@@ -1516,11 +1499,7 @@ async fn multiple_concurrent_vllm_sessions() {
     let mut boots = vec![];
     for i in 0..3 {
         let boot = daemon
-            .boot(boot_req(
-                &format!("vllm-{i}"),
-                "mi300x-func",
-                VLLM_IMAGE,
-            ))
+            .boot(boot_req(&format!("vllm-{i}"), "mi300x-func", VLLM_IMAGE))
             .await
             .unwrap();
         assert!(boot.ok, "boot vllm-{i} failed: {:?}", boot.error);

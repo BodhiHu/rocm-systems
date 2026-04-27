@@ -17,29 +17,26 @@ use mirage_schema::common::{
 };
 use mirage_schema::container::{BindMount, ContainerDef};
 use mirage_schema::daemon::{
-    MirageDaemonAttach, MirageDaemonBoot, MirageDaemonCreateProfile,
-    MirageDaemonCreateWorkload, MirageDaemonDeleteProfile,
-    MirageDaemonDeleteWorkload, MirageDaemonExec, MirageDaemonStatus,
-    MirageDaemonShowSimulator, MirageDaemonShowWorkload, MirageDaemonHealth,
+    MirageDaemonAttach, MirageDaemonBoot, MirageDaemonCreateProfile, MirageDaemonCreateWorkload,
+    MirageDaemonDeleteProfile, MirageDaemonDeleteWorkload, MirageDaemonExec, MirageDaemonHealth,
     MirageDaemonListProfiles, MirageDaemonListSessions, MirageDaemonListSimulators,
-    MirageDaemonListWorkloads, MirageDaemonOverview, MirageDaemonRegistration,
-    MirageDaemonResult, MirageDaemonShutdown, MirageDaemonTime,
+    MirageDaemonListWorkloads, MirageDaemonOverview, MirageDaemonRegistration, MirageDaemonResult,
+    MirageDaemonShowSimulator, MirageDaemonShowWorkload, MirageDaemonShutdown, MirageDaemonStatus,
+    MirageDaemonTime,
 };
+use mirage_schema::paths;
 use mirage_schema::simulator::SimulatorInfo;
 use mirage_schema::socket::{
     AttachInput, AttachOutput, AttachReply, AttachRequest, BootReply, BootRequest,
-    CreateProfileReply, CreateProfileRequest,
-    CreateWorkloadReply, CreateWorkloadRequest, DeleteProfileReply, DeleteProfileRequest,
-    DeleteWorkloadReply, DeleteWorkloadRequest,
-    ExecReply, ExecRequest, GetOverviewReply, GetOverviewRequest,
-    HealthReply, HealthRequest, ListProfilesReply,
-    ListProfilesRequest, ListSessionsReply, ListSessionsRequest, ListSimulatorsReply,
-    ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest, RegisterSimReply,
-    RegisterSimRequest, SessionSummary, ShowSimulatorReply, ShowSimulatorRequest,
-    ShowWorkloadReply, ShowWorkloadRequest, ShutdownReply, ShutdownRequest,
-    SimulatorSummary, StatusReply, StatusRequest, TimeReply, TimeRequest, WorkloadSummary,
+    CreateProfileReply, CreateProfileRequest, CreateWorkloadReply, CreateWorkloadRequest,
+    DeleteProfileReply, DeleteProfileRequest, DeleteWorkloadReply, DeleteWorkloadRequest,
+    ExecReply, ExecRequest, GetOverviewReply, GetOverviewRequest, HealthReply, HealthRequest,
+    ListProfilesReply, ListProfilesRequest, ListSessionsReply, ListSessionsRequest,
+    ListSimulatorsReply, ListSimulatorsRequest, ListWorkloadsReply, ListWorkloadsRequest,
+    RegisterSimReply, RegisterSimRequest, SessionSummary, ShowSimulatorReply, ShowSimulatorRequest,
+    ShowWorkloadReply, ShowWorkloadRequest, ShutdownReply, ShutdownRequest, SimulatorSummary,
+    StatusReply, StatusRequest, TimeReply, TimeRequest, WorkloadSummary,
 };
-use mirage_schema::paths;
 
 pub mod dashboard;
 
@@ -304,10 +301,7 @@ impl MirageDaemon {
         }
         // Tear down any containers the runtime knows about.
         if let Some(runtime) = &self.container_runtime {
-            if let Ok(containers) = runtime
-                .list_containers(&BTreeMap::new(), None)
-                .await
-            {
+            if let Ok(containers) = runtime.list_containers(&BTreeMap::new(), None).await {
                 for c in containers {
                     let _ = runtime.stop_container(&c.handle, 1, None).await;
                     let _ = runtime.remove_container(&c.handle, true, None).await;
@@ -422,15 +416,12 @@ impl MirageDaemon {
         };
         let mut labels = BTreeMap::new();
         labels.insert(LABEL_MANAGED.to_string(), "true".to_string());
-        runtime
-            .list_containers(&labels, None)
-            .await
-            .map_err(|e| {
-                mirage_schema::daemon::MirageDaemonError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
-            })
+        runtime.list_containers(&labels, None).await.map_err(|e| {
+            mirage_schema::daemon::MirageDaemonError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            ))
+        })
     }
 
     /// Scan the per-session state directory tree on disk and return the
@@ -530,7 +521,10 @@ impl MirageDaemon {
         let parts: Vec<&str> = spec.split(',').collect();
         ExecArgs {
             command: parts.first().copied().unwrap_or_default().to_string(),
-            args: parts[1..].iter().map(|value| (*value).to_string()).collect(),
+            args: parts[1..]
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             env: vec![],
         }
     }
@@ -549,7 +543,10 @@ impl MirageDaemon {
             profile,
             image,
             startup: startup.as_deref().map(Self::parse_csv_exec),
-            execs: execs.iter().map(|value| Self::parse_csv_exec(value)).collect(),
+            execs: execs
+                .iter()
+                .map(|value| Self::parse_csv_exec(value))
+                .collect(),
             cleanup,
         }
     }
@@ -569,7 +566,10 @@ impl MirageDaemon {
         labels.insert(LABEL_PROFILE.to_string(), profile_name.to_string());
         labels.insert(LABEL_SIMULATOR.to_string(), simulator.to_string());
         labels.insert(LABEL_IMAGE.to_string(), image.to_string());
-        labels.insert(LABEL_EMULATOR_SESSION.to_string(), emulator_session.to_string());
+        labels.insert(
+            LABEL_EMULATOR_SESSION.to_string(),
+            emulator_session.to_string(),
+        );
         labels.insert(LABEL_NODE_INDEX.to_string(), node_index.to_string());
         labels
     }
@@ -586,7 +586,9 @@ impl MirageDaemonHealth for MirageDaemon {
             // Check Docker for the session container.
             let containers = self.list_session_containers().await?;
             let found = containers.iter().any(|c| {
-                c.labels.get(LABEL_SESSION).map_or(false, |s| *s == session_id)
+                c.labels
+                    .get(LABEL_SESSION)
+                    .map_or(false, |s| *s == session_id)
             });
             if !found {
                 return Err(mirage_schema::daemon::MirageDaemonError::Remote(format!(
@@ -607,7 +609,9 @@ impl MirageDaemonTime for MirageDaemon {
         if let Some(session_id) = request.session {
             let containers = self.list_session_containers().await?;
             let found = containers.iter().any(|c| {
-                c.labels.get(LABEL_SESSION).map_or(false, |s| *s == session_id)
+                c.labels
+                    .get(LABEL_SESSION)
+                    .map_or(false, |s| *s == session_id)
             });
             if !found {
                 return Err(mirage_schema::daemon::MirageDaemonError::Remote(format!(
@@ -664,12 +668,15 @@ impl MirageDaemon {
             )
         })?;
         for session_entry in entries.flatten() {
-            let meta_path = session_entry.path().join("exec").join(exec_id).join("meta.json");
+            let meta_path = session_entry
+                .path()
+                .join("exec")
+                .join(exec_id)
+                .join("meta.json");
             if meta_path.is_file() {
                 let data = std::fs::read_to_string(&meta_path)?;
-                let meta: ExecMeta = serde_json::from_str(&data).map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-                })?;
+                let meta: ExecMeta = serde_json::from_str(&data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
                 return Ok(meta);
             }
         }
@@ -853,8 +860,7 @@ impl MirageDaemonOverview for MirageDaemon {
         let containers = self.list_session_containers().await?;
         // Count unique sessions from containers plus any pending sessions
         // that do not yet have a backing container.
-        let mut session_names: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut session_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         for c in &containers {
             if let Some(name) = c.labels.get(LABEL_SESSION) {
                 session_names.insert(name.clone());
@@ -893,7 +899,9 @@ impl MirageDaemonListSimulators for MirageDaemon {
                 let active = containers
                     .iter()
                     .filter(|c| {
-                        c.labels.get(LABEL_SIMULATOR).map_or(false, |s| *s == info.name)
+                        c.labels
+                            .get(LABEL_SIMULATOR)
+                            .map_or(false, |s| *s == info.name)
                     })
                     .count() as u32;
                 Self::simulator_summary(&state, info, active)
@@ -1097,8 +1105,8 @@ impl MirageDaemonListSessions for MirageDaemon {
                     continue;
                 }
             }
-            seen.entry(session_name.clone()).or_insert_with(|| {
-                SessionSummary {
+            seen.entry(session_name.clone())
+                .or_insert_with(|| SessionSummary {
                     name: Some(session_name.clone()),
                     profile: c.labels.get(LABEL_PROFILE).cloned(),
                     simulator: c.labels.get(LABEL_SIMULATOR).cloned(),
@@ -1106,8 +1114,7 @@ impl MirageDaemonListSessions for MirageDaemon {
                     health_status: HealthStatus::Healthy,
                     phase: SessionPhase::Running,
                     progress_message: None,
-                }
-            });
+                });
         }
         // Merge pending sessions (still booting or boot-failed) that have
         // no backing container yet.
@@ -1469,10 +1476,7 @@ async fn boot_session_task(
                 if let Some(ref topo) = topology {
                     if let Ok(topo_dir) = create_synthetic_topology(&session_name, topo) {
                         base_mounts.push(BindMount {
-                            host_path: topo_dir
-                                .join("sys/class/kfd")
-                                .to_string_lossy()
-                                .to_string(),
+                            host_path: topo_dir.join("sys/class/kfd").to_string_lossy().to_string(),
                             container_path: "/sys/class/kfd".to_string(),
                             readonly: true,
                         });
@@ -1510,7 +1514,8 @@ async fn boot_session_task(
     }
 
     // --- Image pull with progress streaming ---
-    let (progress_tx, mut progress_rx) = mirage_schema::container::container_runtime_progress_channel();
+    let (progress_tx, mut progress_rx) =
+        mirage_schema::container::container_runtime_progress_channel();
     {
         // Forward the latest status message into the pending session record
         // so the dashboard can surface pull progress.
@@ -1522,11 +1527,9 @@ async fn boot_session_task(
                 let message = match event {
                     ContainerRuntimeEvent::Status { message, .. } => Some(message),
                     ContainerRuntimeEvent::Stdout { chunk, .. }
-                    | ContainerRuntimeEvent::Stderr { chunk, .. } => {
-                        String::from_utf8(chunk).ok().and_then(|s| {
-                            s.lines().last().map(|line| line.trim().to_string())
-                        })
-                    }
+                    | ContainerRuntimeEvent::Stderr { chunk, .. } => String::from_utf8(chunk)
+                        .ok()
+                        .and_then(|s| s.lines().last().map(|line| line.trim().to_string())),
                 };
                 if let Some(message) = message
                     && !message.is_empty()
@@ -1735,10 +1738,7 @@ impl MirageDaemonExec for MirageDaemon {
             node_index: target_node,
             container_id: head.handle.id.clone(),
         };
-        if let Err(e) = save_exec_meta(
-            &self.exec_meta_path(&request.session, &exec_id),
-            &meta,
-        ) {
+        if let Err(e) = save_exec_meta(&self.exec_meta_path(&request.session, &exec_id), &meta) {
             tracing::warn!(%e, "failed to persist exec metadata");
         }
 
@@ -1787,7 +1787,8 @@ impl MirageDaemonExec for MirageDaemon {
                     }
                     Err(e) => {
                         tracing::warn!(%e, "non-interactive exec failed");
-                        let _ = std::fs::write(async_io_dir.join("stderr"), e.to_string().as_bytes());
+                        let _ =
+                            std::fs::write(async_io_dir.join("stderr"), e.to_string().as_bytes());
                         let _ = std::fs::write(async_io_dir.join("exit_code"), b"-1");
                     }
                 }
@@ -1812,15 +1813,12 @@ impl MirageDaemonShutdown for MirageDaemon {
         let session_containers: Vec<_> = if let Some(runtime) = &self.container_runtime {
             let mut filter = BTreeMap::new();
             filter.insert(LABEL_SESSION.to_string(), request.name.clone());
-            runtime
-                .list_containers(&filter, None)
-                .await
-                .map_err(|e| {
-                    mirage_schema::daemon::MirageDaemonError::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?
+            runtime.list_containers(&filter, None).await.map_err(|e| {
+                mirage_schema::daemon::MirageDaemonError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                ))
+            })?
         } else {
             Vec::new()
         };
@@ -2225,11 +2223,7 @@ mod tests {
         let phase = daemon
             .wait_for_boot(&name, std::time::Duration::from_secs(5))
             .await;
-        assert_eq!(
-            phase,
-            SessionPhase::Running,
-            "boot did not reach Running"
-        );
+        assert_eq!(phase, SessionPhase::Running, "boot did not reach Running");
         reply
     }
 
@@ -2310,7 +2304,11 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert!(reply.ok, "profile creation should succeed: {:?}", reply.error);
+        assert!(
+            reply.ok,
+            "profile creation should succeed: {:?}",
+            reply.error
+        );
     }
 
     #[tokio::test]
@@ -2335,10 +2333,8 @@ mod tests {
         assert_eq!(sessions.sessions[0].name.as_deref(), Some("session-a"));
     }
 
-    async fn daemon_with_mock_runtime() -> (
-        MirageDaemon,
-        Arc<mirage_container::MockContainerRuntime>,
-    ) {
+    async fn daemon_with_mock_runtime()
+    -> (MirageDaemon, Arc<mirage_container::MockContainerRuntime>) {
         let mock = Arc::new(mirage_container::MockContainerRuntime::default());
         let daemon = MirageDaemon::with_container_runtime_test(mock.clone());
 
@@ -2653,10 +2649,8 @@ mod tests {
         assert!(sessions.sessions.is_empty());
     }
 
-    async fn daemon_with_multinode_profile() -> (
-        MirageDaemon,
-        Arc<mirage_container::MockContainerRuntime>,
-    ) {
+    async fn daemon_with_multinode_profile()
+    -> (MirageDaemon, Arc<mirage_container::MockContainerRuntime>) {
         let mock = Arc::new(mirage_container::MockContainerRuntime::default());
         let daemon = MirageDaemon::with_container_runtime_test(mock.clone());
 
@@ -2941,7 +2935,10 @@ mod tests {
             .unwrap();
         assert!(r1.ok);
 
-        let r2 = daemon.create_workload(create_workload_request(workload)).await.unwrap();
+        let r2 = daemon
+            .create_workload(create_workload_request(workload))
+            .await
+            .unwrap();
         assert!(!r2.ok);
         assert!(r2.error.unwrap().contains("already exists"));
     }
@@ -3035,7 +3032,8 @@ mod tests {
     //  MNIST training E2E tests
     // -----------------------------------------------------------------------
 
-    const MNIST_IMAGE: &str = "docker.io/rocm/pytorch:rocm6.4_ubuntu24.04_py3.12_pytorch_release_2.6.0";
+    const MNIST_IMAGE: &str =
+        "docker.io/rocm/pytorch:rocm6.4_ubuntu24.04_py3.12_pytorch_release_2.6.0";
 
     fn mnist_exec(cmd: &str, args: &[&str]) -> ExecArgs {
         ExecArgs {
@@ -3059,10 +3057,8 @@ mod tests {
         )
     }
 
-    async fn mnist_daemon_with_mock() -> (
-        MirageDaemon,
-        Arc<mirage_container::MockContainerRuntime>,
-    ) {
+    async fn mnist_daemon_with_mock() -> (MirageDaemon, Arc<mirage_container::MockContainerRuntime>)
+    {
         let mock = Arc::new(mirage_container::MockContainerRuntime::default());
         let daemon = MirageDaemon::with_container_runtime_test(mock.clone());
 
@@ -3167,10 +3163,7 @@ mod tests {
             .unwrap();
         assert_eq!(sessions.sessions.len(), 1);
         assert_eq!(sessions.sessions[0].name.as_deref(), Some("mnist-boot"));
-        assert_eq!(
-            sessions.sessions[0].image.as_deref(),
-            Some(MNIST_IMAGE)
-        );
+        assert_eq!(sessions.sessions[0].image.as_deref(), Some(MNIST_IMAGE));
 
         let starts = mock.start_requests().await;
         assert_eq!(starts.len(), 1);
@@ -3220,7 +3213,10 @@ mod tests {
         let reply = daemon
             .exec(exec_request(
                 "mnist-test",
-                mnist_exec("python", &["-c", "import sys; print(f'Python {sys.version}')"]),
+                mnist_exec(
+                    "python",
+                    &["-c", "import sys; print(f'Python {sys.version}')"],
+                ),
             ))
             .await
             .unwrap();
@@ -3298,7 +3294,10 @@ mod tests {
             &handle,
             mirage_container::ExecResult {
                 exit_code: 0,
-                stdout: format!("Training...\n--- RESULT ---\n{result_json}\nMNIST training test passed.\n").into_bytes(),
+                stdout: format!(
+                    "Training...\n--- RESULT ---\n{result_json}\nMNIST training test passed.\n"
+                )
+                .into_bytes(),
                 stderr: vec![],
             },
         )
@@ -3497,7 +3496,11 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert!(reply.ok, "workload create should succeed: {:?}", reply.error);
+        assert!(
+            reply.ok,
+            "workload create should succeed: {:?}",
+            reply.error
+        );
 
         let list = daemon
             .list_workloads(ListWorkloadsRequest::default())
@@ -3533,7 +3536,10 @@ mod tests {
                 image: MNIST_IMAGE.to_string(),
                 startup: Some(mnist_exec("pip", &["install", "torchvision"])),
                 execs: vec![
-                    mnist_exec("python", &["-c", "import torch; assert torch.cuda.is_available()"]),
+                    mnist_exec(
+                        "python",
+                        &["-c", "import torch; assert torch.cuda.is_available()"],
+                    ),
                     mnist_exec("python", &["-c", "import torchvision; print('OK')"]),
                     mnist_exec("python", &["/workspace/mnist_train.py", "--epochs", "2"]),
                 ],
@@ -3685,7 +3691,10 @@ mod tests {
             ("rocminfo", b"ROCk module loaded\n1 agent(s)\n".to_vec()),
             ("nvidia-smi", b"AMD Instinct MI300X\n".to_vec()),
             ("python -c 'import torch'", b"torch OK\n".to_vec()),
-            ("python train.py", b"Training complete. Accuracy: 97.5%\n".to_vec()),
+            (
+                "python train.py",
+                b"Training complete. Accuracy: 97.5%\n".to_vec(),
+            ),
         ];
 
         for (_i, (_desc, output)) in steps.iter().enumerate() {
@@ -4083,17 +4092,11 @@ mod tests {
 
         assert!(rocjitsu.version.is_some());
         assert!(
-            rocjitsu
-                .supported_gpus
-                .iter()
-                .any(|g| g.name == "MI300X"),
+            rocjitsu.supported_gpus.iter().any(|g| g.name == "MI300X"),
             "MI300X should be supported"
         );
         assert!(
-            rocjitsu
-                .supported_gpus
-                .iter()
-                .any(|g| g.name == "MI350X"),
+            rocjitsu.supported_gpus.iter().any(|g| g.name == "MI350X"),
             "MI350X should be supported"
         );
         assert!(

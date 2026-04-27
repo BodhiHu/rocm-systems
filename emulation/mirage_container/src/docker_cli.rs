@@ -801,11 +801,7 @@ where
             ));
         }
         self.run_checked(
-            &[
-                "network".to_string(),
-                "rm".to_string(),
-                name.to_string(),
-            ],
+            &["network".to_string(), "rm".to_string(), name.to_string()],
             ContainerRuntimeOperation::RemoveNetwork,
             progress.as_ref(),
         )
@@ -845,21 +841,10 @@ where
                 continue;
             }
             let value: Value = serde_json::from_str(line)?;
-            let id = value["ID"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let name = value["Names"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let image = value["Image"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let state_str = value["State"]
-                .as_str()
-                .unwrap_or("unknown");
+            let id = value["ID"].as_str().unwrap_or_default().to_string();
+            let name = value["Names"].as_str().unwrap_or_default().to_string();
+            let image = value["Image"].as_str().unwrap_or_default().to_string();
+            let state_str = value["State"].as_str().unwrap_or("unknown");
             let state = match state_str {
                 "running" => ContainerState::Running,
                 "created" => ContainerState::Created,

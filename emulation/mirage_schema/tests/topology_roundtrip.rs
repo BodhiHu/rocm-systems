@@ -42,7 +42,10 @@ fn fixture_system_properties() {
 
     // Values captured from the MI300X build machine.
     assert_eq!(typed.generation_id, 9);
-    assert_eq!(typed.system_properties.platform_oem, 4_777_524_452_235_890_003);
+    assert_eq!(
+        typed.system_properties.platform_oem,
+        4_777_524_452_235_890_003
+    );
     assert_eq!(typed.system_properties.platform_id, 85_015_745_549_651);
     assert_eq!(typed.system_properties.platform_rev, 2);
 }
@@ -62,7 +65,10 @@ fn fixture_cpu_nodes() {
     let typed = TypedTopology::from_topology(&raw).unwrap();
 
     for idx in [0u32, 1u32] {
-        let node = typed.nodes.get(&idx).unwrap_or_else(|| panic!("node {idx} missing"));
+        let node = typed
+            .nodes
+            .get(&idx)
+            .unwrap_or_else(|| panic!("node {idx} missing"));
         let p = &node.properties;
 
         // CPU nodes have cores and no SIMDs.
@@ -71,10 +77,22 @@ fn fixture_cpu_nodes() {
         assert_eq!(node.gpu_id, 0, "node {idx} gpu_id should be 0");
 
         // GPU-only optional fields must be absent.
-        assert!(p.max_engine_clk_fcompute.is_none(), "node {idx} should not have fcompute clock");
-        assert!(p.fw_version.is_none(), "node {idx} should not have fw_version");
-        assert!(p.capability.is_none(), "node {idx} should not have capability");
-        assert!(p.unique_id.is_none(), "node {idx} should not have unique_id");
+        assert!(
+            p.max_engine_clk_fcompute.is_none(),
+            "node {idx} should not have fcompute clock"
+        );
+        assert!(
+            p.fw_version.is_none(),
+            "node {idx} should not have fw_version"
+        );
+        assert!(
+            p.capability.is_none(),
+            "node {idx} should not have capability"
+        );
+        assert!(
+            p.unique_id.is_none(),
+            "node {idx} should not have unique_id"
+        );
         assert!(p.num_xcc.is_none(), "node {idx} should not have num_xcc");
     }
 }
@@ -128,7 +146,10 @@ fn round_trip_typed_topology() {
 
     // Re-parse and check structural equality.
     let typed2 = TypedTopology::from_topology(&raw2).unwrap();
-    assert_eq!(typed, typed2, "round-trip produced a different TypedTopology");
+    assert_eq!(
+        typed, typed2,
+        "round-trip produced a different TypedTopology"
+    );
 }
 
 #[test]
@@ -209,8 +230,10 @@ fn into_vec_u8_cache_properties_roundtrips() {
         association: 0,
         latency: 0,
         cache_type: 9,
-        sibling_map: vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        sibling_map: vec![
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ],
     };
     let bytes: Vec<u8> = c.clone().into();
     let c2 = CacheProperties::from_bytes(&bytes).unwrap();
@@ -261,8 +284,7 @@ fn into_vec_u8_mem_bank_properties_roundtrips() {
 fn parse_error_on_missing_field() {
     // Omit `platform_oem` — must produce a TopologyParseError.
     let bad = b"platform_id 1\nplatform_rev 2\n";
-    let err = mirage_schema::topology::SystemProperties::from_bytes(bad)
-        .unwrap_err();
+    let err = mirage_schema::topology::SystemProperties::from_bytes(bad).unwrap_err();
     assert!(
         err.message.contains("platform_oem"),
         "error should mention the missing field: {err}"

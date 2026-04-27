@@ -5,8 +5,8 @@
 //! enums, identifiers, execution primitives, and time representation —
 //! that every other schema module depends on.
 
-use serde::{Deserialize, Serialize};
 use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 //  GPU family & definition

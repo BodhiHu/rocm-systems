@@ -106,8 +106,7 @@ fn memfd_from_topology_data(data: &[u8]) -> c_int {
         return -1;
     }
     if !data.is_empty() {
-        let written =
-            unsafe { libc::write(fd, data.as_ptr() as *const c_void, data.len()) };
+        let written = unsafe { libc::write(fd, data.as_ptr() as *const c_void, data.len()) };
         if written < 0 {
             unsafe { libc::close(fd) };
             return -1;
@@ -1031,7 +1030,7 @@ fn dispatch_drm(remote: &RemoteEmulator, cmd: u32, arg: *mut c_void, host_fd: c_
                     }
                     0
                 }
-                Err(err) => errno_to_rc(err.errno())
+                Err(err) => errno_to_rc(err.errno()),
             }
         }
         _ => {
@@ -1203,7 +1202,9 @@ fn open_host_path_or_memfd(
 ) -> (c_int, bool) {
     // KFD fds are always synthetic — the daemon owns /dev/kfd.
     if kind != DeviceKind::Kfd {
-        if let Some(real) = next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int) {
+        if let Some(real) =
+            next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
+        {
             let fd = unsafe { real(path, flags, mode) };
             if fd >= 0 {
                 return (fd, false);
