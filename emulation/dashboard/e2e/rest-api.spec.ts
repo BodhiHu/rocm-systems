@@ -141,10 +141,9 @@ test.describe("WebSocket attach", () => {
   }) => {
     const exec = await jsonPost<{ exec_id: string }>("/exec", {
       session_name: "attach-sess",
-      interactive: false,
       command: ["echo", "hello"],
     });
-    expect(exec.exec_id).toMatch(/^exec-/);
+    expect(exec.exec_id).toMatch(/^session\//);
 
     // Drive the WebSocket from inside the browser context so CORS is not
     // an issue and the environment matches what the dashboard sees.

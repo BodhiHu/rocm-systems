@@ -357,7 +357,6 @@ export async function createRun(
   try {
     execReply = await post<{ exec_id: string }>("/exec", {
       session,
-      interactive: false,
       node_index: nodeIndex,
       command: parts,
     });
@@ -440,7 +439,6 @@ export async function createTerminal(
   try {
     const r = await post<{ exec_id: string }>("/exec", {
       session,
-      interactive: true,
       node_index: nodeIndex,
       command: ["/bin/sh"],
     });

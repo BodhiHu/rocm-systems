@@ -346,16 +346,22 @@ pub mod daemon {
     /// Launch a command inside an already booted session and return an exec
     /// identifier that can be attached to later.
     ///
-    /// When `interactive` is `true`, I/O is channelled through FIFOs so a
-    /// client can stream stdin/stdout/stderr via the `attach` endpoint.
-    /// When `false`, stdout and stderr are written to regular files on disk
-    /// and stdin is closed immediately.
+    /// The daemon spawns the process immediately and keeps a rolling output
+    /// buffer. Any number of clients can attach to the same exec via the
+    /// `attach` endpoint and receive buffered + live output.
+    ///
+    /// The `exec_id` returned follows the path format
+    /// `session/<session>/exec/<n>`, which encodes the session name so that
+    /// `attach` never needs to scan session directories.
     exec({
         /// Session that should execute the command.
         session: String,
-        /// Run the exec in interactive mode (FIFO-backed I/O).
+        /// Print the exec identifier and exit without attaching.
+        ///
+        /// By default `mirage-ctl exec` auto-attaches and streams output.
         #[arg(long)]
-        interactive: bool,
+        #[ctl(cli_only)]
+        detach: bool,
         /// Node index within a multi-node session. Defaults to the head
         /// node (0) when omitted.
         #[arg(long, default_value_t = 0)]
@@ -363,11 +369,13 @@ pub mod daemon {
         /// Program and arguments to run inside the session container.
         ///
         /// Pass the command after `--`, for example:
-        /// `mirage-ctl exec --session-name demo -- python -c 'print(1)'`.
+        /// `mirage-ctl exec --session demo -- python -c 'print(1)'`.
         #[arg(last = true, required = true)]
         command: Vec<String>,
     }) -> {
-        /// Unique identifier for the exec, usable with `attach`.
+        /// Path-format identifier for the exec, usable with `attach`.
+        ///
+        /// Format: `session/<session>/exec/<n>`.
         exec_id: String,
     };
 

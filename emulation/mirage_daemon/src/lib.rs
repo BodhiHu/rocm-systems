@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
@@ -8,9 +8,7 @@ use std::thread;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use mirage_container::{
-    ContainerHandle, ContainerRuntime, ExecRequest as ContainerExecRequest, StartContainerRequest,
-};
+use mirage_container::{ContainerHandle, ContainerRuntime, StartContainerRequest};
 use mirage_schema::common::{
     ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SessionPhase, SetEnv, SimulatorMode,
     Time, WorkloadDef,
@@ -37,6 +35,7 @@ use mirage_schema::socket::{
     ShowWorkloadReply, ShowWorkloadRequest, ShutdownReply, ShutdownRequest, SimulatorSummary,
     StatusReply, StatusRequest, TimeReply, TimeRequest, WorkloadSummary,
 };
+use tokio::sync::watch;
 
 pub mod dashboard;
 
@@ -63,25 +62,27 @@ const LABEL_NODE_INDEX: &str = "mirage.node_index";
 /// Default port used for head-node communication (matches NCCL/torch defaults).
 const MIRAGE_HEAD_PORT: u16 = 29500;
 
+/// Maximum number of bytes kept in the rolling output buffer per exec.
+const EXEC_BUFFER_BYTES: usize = 256 * 1024;
+
 // ---------------------------------------------------------------------------
-//  Exec metadata persisted alongside I/O files.
+//  In-memory exec state
 // ---------------------------------------------------------------------------
 
-/// Serialisable record written to `meta.json` for every exec.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ExecMeta {
-    pub exec_id: String,
-    pub session_name: String,
-    pub command: Vec<String>,
-    pub interactive: bool,
-    pub emulator_session: Option<String>,
-    /// Node index the exec was targeted at.
-    #[serde(default)]
-    pub node_index: u32,
-    /// Container id (runtime handle) the exec will run in. Persisted so
-    /// `attach` can reconnect without re-querying the runtime.
-    #[serde(default)]
-    pub container_id: String,
+/// Live in-memory state for a running or completed exec.
+#[derive(Debug)]
+struct ExecState {
+    /// Combined stdout+stderr bytes, capped at [`EXEC_BUFFER_BYTES`].
+    buffer: Vec<u8>,
+    /// Whether each chunk was from stdout (true) or stderr (false).
+    buffer_flags: Vec<(usize, bool)>,
+    /// Sends a notification whenever the buffer grows or the exec finishes.
+    /// Attached clients wait on this.
+    notify: watch::Sender<()>,
+    /// Exit code once the exec finishes; `None` while still running.
+    exit_code: Option<i32>,
+    /// stdin sender; present while the process is alive.
+    stdin_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +108,7 @@ pub struct MirageDaemon {
     /// Root directory for on-disk configuration (profiles, workloads).
     /// Defaults to `paths::config_dir()` in production.
     config_root: PathBuf,
-    /// Root directory for per-session runtime state (exec FIFOs, metadata).
+    /// Root directory for per-session runtime state.
     /// Defaults to `paths::runtime_dir()` in production; tests override it
     /// to isolate state between runs.
     runtime_root: PathBuf,
@@ -126,7 +127,7 @@ impl fmt::Debug for MirageDaemon {
     }
 }
 
-/// Minimal in-memory state — only simulators and emulator-session mapping.
+/// Minimal in-memory state.
 #[derive(Debug, Default)]
 struct State {
     /// Registered simulator plugins (name → info).
@@ -138,6 +139,8 @@ struct State {
     /// that finished in a failed state. Successfully booted sessions are
     /// removed from this map and discovered via the container runtime.
     pending_sessions: BTreeMap<String, PendingSession>,
+    /// Live exec state keyed by `exec_id` (`session/<s>/exec/<n>`).
+    execs: BTreeMap<String, Arc<tokio::sync::Mutex<ExecState>>>,
 }
 
 /// In-memory record describing a session that has been accepted for boot
@@ -298,6 +301,7 @@ impl MirageDaemon {
             let mut state = self.state.write().await;
             state.emulator_sessions.clear();
             state.pending_sessions.clear();
+            state.execs.clear();
         }
         // Tear down any containers the runtime knows about.
         if let Some(runtime) = &self.container_runtime {
@@ -309,49 +313,6 @@ impl MirageDaemon {
             }
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-//  Exec I/O helpers
-// ---------------------------------------------------------------------------
-
-/// Create the directory tree and I/O nodes for an exec.
-///
-/// Interactive execs get FIFOs; non-interactive execs get regular files.
-fn create_exec_io(dir: &Path, interactive: bool) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-
-    if interactive {
-        // Create named pipes (FIFOs) for stdin/stdout/stderr.
-        for name in &["stdin", "stdout", "stderr"] {
-            let path = dir.join(name);
-            // Remove pre-existing node if any.
-            let _ = std::fs::remove_file(&path);
-            // SAFETY: mkfifo is a standard POSIX call.
-            let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes())
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-            let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o660) };
-            if rc != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-        }
-    } else {
-        // Non-interactive: plain files for stdout/stderr (no stdin).
-        for name in &["stdout", "stderr"] {
-            std::fs::write(dir.join(name), b"")?;
-        }
-    }
-
-    Ok(())
-}
-
-fn save_exec_meta(path: &Path, meta: &ExecMeta) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(meta)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    std::fs::write(path, json)
 }
 
 // ---------------------------------------------------------------------------
@@ -390,12 +351,6 @@ impl MirageDaemon {
     /// Useful for tests that need an isolated filesystem.
     pub fn set_config_root(&mut self, root: PathBuf) {
         self.config_root = root;
-    }
-
-    /// Generate a unique exec identifier.
-    fn next_exec_id(&self) -> String {
-        let id = self.next_exec_id.fetch_add(1, Ordering::Relaxed);
-        format!("exec-{id}")
     }
 
     /// Generate a unique emulator session id for crash-recovery labelling.
@@ -456,21 +411,9 @@ impl MirageDaemon {
         self.sessions_root().join(session)
     }
 
-    /// Per-exec I/O directory under a session.
-    fn exec_io_dir(&self, session: &str, exec_id: &str) -> PathBuf {
-        self.session_dir(session)
-            .join("exec")
-            .join(exec_id)
-            .join("node")
-            .join("0")
-    }
-
-    /// Per-exec metadata file under a session.
-    fn exec_meta_path(&self, session: &str, exec_id: &str) -> PathBuf {
-        self.session_dir(session)
-            .join("exec")
-            .join(exec_id)
-            .join("meta.json")
+    /// Build a path-format exec id: `session/<session>/exec/<n>`.
+    fn make_exec_id(session: &str, n: u64) -> String {
+        format!("session/{session}/exec/{n}")
     }
 
     fn simulator_summary(_state: &State, info: &SimulatorInfo, active: u32) -> SimulatorSummary {
@@ -630,191 +573,89 @@ impl MirageDaemonAttach for MirageDaemon {
     async fn attach(
         &self,
         request: AttachRequest,
-        input: tokio::sync::mpsc::Receiver<AttachInput>,
+        mut input: tokio::sync::mpsc::Receiver<AttachInput>,
         output: tokio::sync::mpsc::Sender<AttachOutput>,
     ) -> MirageDaemonResult<AttachReply> {
-        // Look up the exec metadata written by `exec()` to learn which
-        // container the exec should run inside and what command to invoke.
-        let meta = match self.load_exec_meta(&request.exec_id) {
-            Ok(m) => m,
-            Err(e) => {
-                let _ = output
-                    .send(AttachOutput {
-                        is_stdout: false,
-                        output: format!("attach: {e}\n").into_bytes(),
-                    })
-                    .await;
-                return Ok(AttachReply { exit_code: -1 });
-            }
+        let exec_state = {
+            let state = self.state.read().await;
+            state.execs.get(&request.exec_id).cloned()
         };
-
-        // Spawn `docker exec -i <container_id> <command...>`, piping
-        // stdin/stdout/stderr through the attach channels so the
-        // dashboard's WebSocket can drive a live shell.
-        let exit_code = run_interactive_exec(&meta, input, output).await;
-        Ok(AttachReply { exit_code })
-    }
-}
-
-impl MirageDaemon {
-    fn load_exec_meta(&self, exec_id: &str) -> std::io::Result<ExecMeta> {
-        // We don't know the session up front, so scan all session dirs
-        // until we find a meta.json with the matching exec id.
-        let root = self.sessions_root();
-        let entries = std::fs::read_dir(&root).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("no session runtime directory at {root:?}: {e}"),
-            )
-        })?;
-        for session_entry in entries.flatten() {
-            let meta_path = session_entry
-                .path()
-                .join("exec")
-                .join(exec_id)
-                .join("meta.json");
-            if meta_path.is_file() {
-                let data = std::fs::read_to_string(&meta_path)?;
-                let meta: ExecMeta = serde_json::from_str(&data)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-                return Ok(meta);
-            }
-        }
-        Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("unknown exec id '{exec_id}'"),
-        ))
-    }
-}
-
-/// Drive an interactive `docker exec -i <container_id> <cmd...>` session,
-/// bridging stdin/stdout/stderr to the supplied attach channels.
-async fn run_interactive_exec(
-    meta: &ExecMeta,
-    mut input: tokio::sync::mpsc::Receiver<AttachInput>,
-    output: tokio::sync::mpsc::Sender<AttachOutput>,
-) -> i32 {
-    use std::process::Stdio;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::process::Command;
-
-    if meta.container_id.is_empty() {
-        let _ = output
-            .send(AttachOutput {
-                is_stdout: false,
-                output: b"attach: exec has no container id\n".to_vec(),
-            })
-            .await;
-        return -1;
-    }
-    if meta.command.is_empty() {
-        let _ = output
-            .send(AttachOutput {
-                is_stdout: false,
-                output: b"attach: exec has no command\n".to_vec(),
-            })
-            .await;
-        return -1;
-    }
-
-    let mut cmd = Command::new("docker");
-    cmd.arg("exec").arg("-i").arg(&meta.container_id);
-    for part in &meta.command {
-        cmd.arg(part);
-    }
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
+        let Some(exec_state) = exec_state else {
             let _ = output
                 .send(AttachOutput {
                     is_stdout: false,
-                    output: format!("attach: failed to spawn docker exec: {e}\n").into_bytes(),
+                    output: format!("attach: unknown exec id '{}'\n", request.exec_id).into_bytes(),
                 })
                 .await;
-            return -1;
-        }
-    };
+            return Ok(AttachReply { exit_code: -1 });
+        };
 
-    let mut stdin = child.stdin.take();
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
+        // Forward client stdin to the running process.
+        let stdin_tx = {
+            let es = exec_state.lock().await;
+            es.stdin_tx.clone()
+        };
+        let input_task = tokio::spawn(async move {
+            while let Some(frame) = input.recv().await {
+                let Some(ref tx) = stdin_tx else { break };
+                if tx.send(frame.stream).await.is_err() {
+                    break;
+                }
+            }
+        });
 
-    // Pump client input → child stdin.
-    let stdin_task = tokio::spawn(async move {
-        while let Some(frame) = input.recv().await {
-            let Some(pipe) = stdin.as_mut() else { break };
-            if pipe.write_all(&frame.stream).await.is_err() {
+        // Stream buffered output + live output to the caller.
+        let mut notify_rx = {
+            let es = exec_state.lock().await;
+            es.notify.subscribe()
+        };
+        let mut offset: usize = 0;
+        loop {
+            // Send any buffered output we haven't sent yet.
+            let (chunks, done, exit_code) = {
+                let es = exec_state.lock().await;
+                // Collect (data, is_stdout) pairs for bytes at positions >= offset.
+                let mut pos = 0usize;
+                let mut chunks: Vec<(Vec<u8>, bool)> = Vec::new();
+                for &(len, is_stdout) in &es.buffer_flags {
+                    let end = pos + len;
+                    if end > offset {
+                        let start_in_chunk = if pos < offset { offset - pos } else { 0 };
+                        let slice = es.buffer[pos + start_in_chunk..end].to_vec();
+                        chunks.push((slice, is_stdout));
+                    }
+                    pos = end;
+                }
+                offset = es.buffer.len();
+                (chunks, es.exit_code.is_some(), es.exit_code)
+            };
+            for (data, is_stdout) in chunks {
+                if output
+                    .send(AttachOutput {
+                        is_stdout,
+                        output: data,
+                    })
+                    .await
+                    .is_err()
+                {
+                    input_task.abort();
+                    return Ok(AttachReply { exit_code: -1 });
+                }
+            }
+            if done {
+                input_task.abort();
+                return Ok(AttachReply {
+                    exit_code: exit_code.unwrap_or(-1),
+                });
+            }
+            // Wait for more output or process exit.
+            if notify_rx.changed().await.is_err() {
                 break;
             }
-            let _ = pipe.flush().await;
         }
-        // Closing stdin signals EOF to the child.
-        drop(stdin);
-    });
-
-    // Pump child stdout → client.
-    let stdout_tx = output.clone();
-    let stdout_task = tokio::spawn(async move {
-        if let Some(mut pipe) = stdout {
-            let mut buf = [0u8; 4096];
-            loop {
-                match pipe.read(&mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if stdout_tx
-                            .send(AttachOutput {
-                                is_stdout: true,
-                                output: buf[..n].to_vec(),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    // Pump child stderr → client.
-    let stderr_tx = output.clone();
-    let stderr_task = tokio::spawn(async move {
-        if let Some(mut pipe) = stderr {
-            let mut buf = [0u8; 4096];
-            loop {
-                match pipe.read(&mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if stderr_tx
-                            .send(AttachOutput {
-                                is_stdout: false,
-                                output: buf[..n].to_vec(),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    let status = child.wait().await;
-    // Stop the input pump so it doesn't hang forever if the client never closes.
-    stdin_task.abort();
-    let _ = stdout_task.await;
-    let _ = stderr_task.await;
-
-    match status {
-        Ok(s) => s.code().unwrap_or(-1),
-        Err(_) => -1,
+        input_task.abort();
+        let exit_code = exec_state.lock().await.exit_code.unwrap_or(-1);
+        Ok(AttachReply { exit_code })
     }
 }
 
@@ -1675,7 +1516,7 @@ async fn boot_session_task(
 }
 
 // ---------------------------------------------------------------------------
-//  Exec — returns exec_id, sets up FIFO/file I/O
+//  Exec — spawns immediately, buffers output in memory
 // ---------------------------------------------------------------------------
 
 #[async_trait]
@@ -1707,47 +1548,10 @@ impl MirageDaemonExec for MirageDaemon {
             )));
         };
 
-        let Some(runtime) = &self.container_runtime else {
-            return Err(mirage_schema::daemon::MirageDaemonError::Remote(
-                "no container runtime configured".to_string(),
-            ));
-        };
-
-        let exec_id = self.next_exec_id();
-
-        // Prepare I/O paths.
-        let io_dir = self.exec_io_dir(&request.session, &exec_id);
-        if let Err(e) = create_exec_io(&io_dir, request.interactive) {
-            return Err(mirage_schema::daemon::MirageDaemonError::Remote(format!(
-                "failed to create exec I/O: {e}"
-            )));
-        }
-
-        let emulator_session = {
-            let state = self.state.read().await;
-            state.emulator_sessions.get(&request.session).cloned()
-        };
-
-        // Persist exec metadata.
-        let meta = ExecMeta {
-            exec_id: exec_id.clone(),
-            session_name: request.session.clone(),
-            command: request.command.clone(),
-            interactive: request.interactive,
-            emulator_session,
-            node_index: target_node,
-            container_id: head.handle.id.clone(),
-        };
-        if let Err(e) = save_exec_meta(&self.exec_meta_path(&request.session, &exec_id), &meta) {
-            tracing::warn!(%e, "failed to persist exec metadata");
-        }
-
-        // Build the container exec and spawn it.
+        // Build the container exec args.
         let mut exec_args = Self::exec_from_command(request.command)?;
 
         // Inject interceptor env vars if present in the container's labels.
-        // (The boot step sets LD_PRELOAD/MIRAGE_INTERCEPTOR_SOCKET on the
-        // container entrypoint env; for exec we replicate them.)
         if let Some(so_path) = head.labels.get("mirage.interceptor_path") {
             exec_args.env.push(SetEnv {
                 key: "LD_PRELOAD".to_string(),
@@ -1761,42 +1565,177 @@ impl MirageDaemonExec for MirageDaemon {
             });
         }
 
-        let handle = head.handle.clone();
-        let exec_request = ContainerExecRequest {
-            container: handle,
-            exec: exec_args,
-            working_dir: None,
+        // Build exec_id path.
+        let n = self.next_exec_id.fetch_add(1, Ordering::Relaxed);
+        let exec_id = Self::make_exec_id(&request.session, n);
+
+        // Create the in-memory exec state.
+        let (notify_tx, _) = watch::channel(());
+        let (stdin_tx, stdin_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
+        let exec_state = Arc::new(tokio::sync::Mutex::new(ExecState {
+            buffer: Vec::new(),
+            buffer_flags: Vec::new(),
+            notify: notify_tx,
+            exit_code: None,
+            stdin_tx: Some(stdin_tx),
+        }));
+        {
+            let mut state = self.state.write().await;
+            state.execs.insert(exec_id.clone(), exec_state.clone());
+        }
+
+        let container_id = head.handle.id.clone();
+        let command = {
+            let ExecArgs { command, args, .. } = &exec_args;
+            let mut v = vec![command.clone()];
+            v.extend(args.iter().cloned());
+            v
         };
 
-        // For non-interactive execs, run to completion and write output files.
-        // For interactive execs, the client should use `attach` with the exec_id.
-        if !request.interactive {
-            let session_name = request.session.clone();
-            let eid = exec_id.clone();
-            let rt = Arc::clone(runtime);
-            let async_io_dir = self.exec_io_dir(&session_name, &eid);
-            tokio::spawn(async move {
-                match rt.exec(exec_request, None).await {
-                    Ok(result) => {
-                        let _ = std::fs::write(async_io_dir.join("stdout"), &result.stdout);
-                        let _ = std::fs::write(async_io_dir.join("stderr"), &result.stderr);
-                        let _ = std::fs::write(
-                            async_io_dir.join("exit_code"),
-                            result.exit_code.to_string().as_bytes(),
-                        );
+        // Spawn the docker exec process and pump output into the buffer.
+        let eid = exec_id.clone();
+        let state_clone = self.state.clone();
+        tokio::spawn(async move {
+            use std::process::Stdio;
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            use tokio::process::Command;
+
+            let mut cmd = Command::new("docker");
+            cmd.arg("exec").arg("-i").arg(&container_id);
+            for part in &command {
+                cmd.arg(part);
+            }
+            cmd.stdin(Stdio::piped());
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
+
+            let mut child = match cmd.spawn() {
+                Ok(c) => c,
+                Err(e) => {
+                    let msg = format!("exec: failed to spawn docker exec: {e}\n");
+                    let mut es = exec_state.lock().await;
+                    append_to_exec_buffer(&mut es, msg.as_bytes(), false);
+                    es.stdin_tx = None;
+                    es.exit_code = Some(-1);
+                    let _ = es.notify.send(());
+                    return;
+                }
+            };
+
+            let mut child_stdin = child.stdin.take();
+            let child_stdout = child.stdout.take();
+            let child_stderr = child.stderr.take();
+
+            // Pump stdin_rx → child stdin.
+            let stdin_task = tokio::spawn(async move {
+                let mut rx = stdin_rx;
+                while let Some(bytes) = rx.recv().await {
+                    let Some(pipe) = child_stdin.as_mut() else {
+                        break;
+                    };
+                    if pipe.write_all(&bytes).await.is_err() {
+                        break;
                     }
-                    Err(e) => {
-                        tracing::warn!(%e, "non-interactive exec failed");
-                        let _ =
-                            std::fs::write(async_io_dir.join("stderr"), e.to_string().as_bytes());
-                        let _ = std::fs::write(async_io_dir.join("exit_code"), b"-1");
+                    let _ = pipe.flush().await;
+                }
+                drop(child_stdin);
+            });
+
+            // Pump child stdout → buffer.
+            let es_stdout = exec_state.clone();
+            let stdout_task = tokio::spawn(async move {
+                if let Some(mut pipe) = child_stdout {
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        match pipe.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                let mut es = es_stdout.lock().await;
+                                append_to_exec_buffer(&mut es, &buf[..n], true);
+                                let _ = es.notify.send(());
+                            }
+                        }
                     }
                 }
             });
-        }
+
+            // Pump child stderr → buffer.
+            let es_stderr = exec_state.clone();
+            let stderr_task = tokio::spawn(async move {
+                if let Some(mut pipe) = child_stderr {
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        match pipe.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                let mut es = es_stderr.lock().await;
+                                append_to_exec_buffer(&mut es, &buf[..n], false);
+                                let _ = es.notify.send(());
+                            }
+                        }
+                    }
+                }
+            });
+
+            let status = child.wait().await;
+            stdin_task.abort();
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+
+            let code = match status {
+                Ok(s) => s.code().unwrap_or(-1),
+                Err(_) => -1,
+            };
+            {
+                let mut es = exec_state.lock().await;
+                es.stdin_tx = None;
+                es.exit_code = Some(code);
+                let _ = es.notify.send(());
+            }
+            // Remove the exec state from the global map after a short delay
+            // so late-arriving attach calls can still read the final exit code.
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            let mut st = state_clone.write().await;
+            st.execs.remove(&eid);
+        });
 
         Ok(ExecReply { exec_id })
     }
+}
+
+/// Append bytes to an exec's rolling output buffer, capping at
+/// [`EXEC_BUFFER_BYTES`]. Merges consecutive chunks from the same stream.
+fn append_to_exec_buffer(es: &mut ExecState, data: &[u8], is_stdout: bool) {
+    // Trim from the front if over budget.
+    let incoming = data.len();
+    let current = es.buffer.len();
+    if current + incoming > EXEC_BUFFER_BYTES {
+        let drop = (current + incoming) - EXEC_BUFFER_BYTES;
+        es.buffer.drain(..drop);
+        // Fix up buffer_flags to reflect the drain.
+        let mut removed = 0usize;
+        let mut keep_from = 0usize;
+        for (i, &(len, _)) in es.buffer_flags.iter().enumerate() {
+            if removed + len <= drop {
+                removed += len;
+                keep_from = i + 1;
+            } else {
+                // Partial chunk — shrink its length.
+                es.buffer_flags[i].0 -= drop - removed;
+                break;
+            }
+        }
+        es.buffer_flags.drain(..keep_from);
+    }
+    es.buffer.extend_from_slice(data);
+    // Merge with the last flag entry if it's the same stream.
+    if let Some(last) = es.buffer_flags.last_mut() {
+        if last.1 == is_stdout {
+            last.0 += incoming;
+            return;
+        }
+    }
+    es.buffer_flags.push((incoming, is_stdout));
 }
 
 // ---------------------------------------------------------------------------
@@ -2251,7 +2190,6 @@ mod tests {
         command.extend(exec.args);
         ExecRequest {
             session: session_name.into(),
-            interactive: false,
             node_index: 0,
             command,
         }

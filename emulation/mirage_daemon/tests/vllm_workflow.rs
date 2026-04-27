@@ -96,7 +96,7 @@ fn exec_req(session: &str, cmd: &str, args: &[&str]) -> ExecRequest {
     command.extend(args.iter().map(|s| s.to_string()));
     ExecRequest {
         session: session.into(),
-        interactive: false,
+        node_index: 0,
         command,
     }
 }

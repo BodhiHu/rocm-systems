@@ -146,14 +146,40 @@ struct FieldSpec {
     ident: Ident,
     ty: Type,
     optional: bool,
+    /// Field is included in the CLI args struct but excluded from the request
+    /// struct and from the generated dispatch run-arm mapping.
+    cli_only: bool,
 }
 
 impl Parse for FieldSpec {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let attrs = input.call(Attribute::parse_outer)?;
+        let raw_attrs = input.call(Attribute::parse_outer)?;
         let ident = input.parse()?;
         input.parse::<Token![:]>()?;
         let ty = input.parse()?;
+
+        // Strip `#[ctl(cli_only)]` from field attrs and record the flag.
+        let mut cli_only = false;
+        let attrs = raw_attrs
+            .into_iter()
+            .filter(|attr| {
+                if !attr.path().is_ident("ctl") {
+                    return true;
+                }
+                let mut found = false;
+                let _ = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("cli_only") {
+                        found = true;
+                        return Ok(());
+                    }
+                    Err(meta.error("unknown ctl field option"))
+                });
+                if found {
+                    cli_only = true;
+                }
+                !found
+            })
+            .collect::<Vec<_>>();
 
         let optional = if input.peek(Token![=]) {
             input.parse::<Token![=]>()?;
@@ -174,6 +200,7 @@ impl Parse for FieldSpec {
             ident,
             ty,
             optional,
+            cli_only,
         })
     }
 }
@@ -1002,13 +1029,14 @@ fn expand_ctl_module(module: CtlModule) -> Result<TokenStream2> {
 }
 
 fn expand_struct(attrs: &[Attribute], name: &Ident, block: &FieldBlock) -> TokenStream2 {
+    let non_cli_only: Vec<_> = block.fields.iter().filter(|f| !f.cli_only).collect();
     let default_derive =
-        if block.fields.is_empty() || block.fields.iter().all(|field| field.optional) {
+        if non_cli_only.is_empty() || non_cli_only.iter().all(|field| field.optional) {
             Some(quote! { Default, })
         } else {
             None
         };
-    let fields = block.fields.iter().map(|field| {
+    let fields = non_cli_only.iter().map(|field| {
         let field_attrs = filter_clap_attrs(&field.attrs);
         let ident = &field.ident;
         let ty = if field.optional {
@@ -1424,10 +1452,14 @@ fn expand_unary_run_arm(
     call_enum: &Ident,
     request_block: &FieldBlock,
 ) -> TokenStream2 {
-    let fields = request_block.fields.iter().map(|field| {
-        let ident = &field.ident;
-        quote! { #ident: args.#ident, }
-    });
+    let fields = request_block
+        .fields
+        .iter()
+        .filter(|f| !f.cli_only)
+        .map(|field| {
+            let ident = &field.ident;
+            quote! { #ident: args.#ident, }
+        });
 
     quote! {
         #command_name::#variant_name(args) => {
@@ -1451,10 +1483,15 @@ fn expand_streaming_run_arm(
     output_enum: &Ident,
     endpoint: &Endpoint,
 ) -> TokenStream2 {
-    let request_fields = endpoint.request.fields.iter().map(|field| {
-        let ident = &field.ident;
-        quote! { #ident: args.#ident, }
-    });
+    let request_fields = endpoint
+        .request
+        .fields
+        .iter()
+        .filter(|f| !f.cli_only)
+        .map(|field| {
+            let ident = &field.ident;
+            quote! { #ident: args.#ident, }
+        });
 
     let enqueue_input = if let (Some(input_name), Some(input_block)) = (input_name, &endpoint.input)
     {
