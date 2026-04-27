@@ -34,12 +34,14 @@ endif()
 include(GNUInstallDirs)
 
 # add package search paths
-# ../../../ should resolve to /opt/rocm or another rocm install path
-# fall back to ROCM_DIR
-list(APPEND CMAKE_PREFIX_PATH ../../../ ${ROCM_DIR})
-list(APPEND CMAKE_LIBRARY_PATH ${ROCM_DIR}/${CMAKE_INSTALL_LIBDIR})
-
-find_package(amd_smi CONFIG REQUIRED)
+# When built as a subdirectory of the main project, the amd_smi target is already
+# available so find_package is not needed.  When built standalone (outside the
+# main project), search the build tree, the ROCm install prefix, or ROCM_DIR.
+if(NOT TARGET amd_smi AND NOT TARGET amd_smi_static)
+    list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR} ../../../ ${ROCM_DIR})
+    list(APPEND CMAKE_LIBRARY_PATH ${ROCM_DIR}/${CMAKE_INSTALL_LIBDIR})
+    find_package(amd_smi CONFIG REQUIRED)
+endif()
 find_package(Threads REQUIRED)
 
 #   --- When both shared and static are built (BUILD_BOTH_LIBS) ---
@@ -76,6 +78,12 @@ endif()
 
 add_executable(ainic amd_smi_nic.cc)
 target_compile_definitions(ainic PRIVATE ENABLE_ESMI_LIB)
-target_include_directories(ainic PRIVATE /opt/rocm/include /opt/rocm/include/amd_smi/impl/nic)
-target_link_directories(ainic PRIVATE /opt/rocm/lib)
+# When amd-smi-lib is installed, NIC headers are under /opt/rocm/include.
+# When building from source (no install), fall back to the source tree.
+target_include_directories(ainic PRIVATE
+    ${ROCM_DIR}/include
+    ${ROCM_DIR}/include/amd_smi/impl/nic
+    ${CMAKE_SOURCE_DIR}/src/nic/ai-nic
+)
+target_link_directories(ainic PRIVATE ${ROCM_DIR}/lib)
 target_link_libraries(ainic PRIVATE ${_AMDSMI_LINK_TARGET})
