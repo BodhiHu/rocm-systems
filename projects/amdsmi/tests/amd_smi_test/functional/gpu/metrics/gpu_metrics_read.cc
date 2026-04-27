@@ -30,10 +30,10 @@
 #include <map>
 #include <string>
 
-#include "test_common.h"
 #include "amd_smi/amdsmi.h"
 #include "amd_smi/impl/amd_smi_utils.h"
 #include "rocm_smi/rocm_smi_utils.h"
+#include "test_common.h"
 
 TestGpuMetricsRead::TestGpuMetricsRead() : TestBase() {
   set_title("AMDSMI GPU Metrics Read Test");
