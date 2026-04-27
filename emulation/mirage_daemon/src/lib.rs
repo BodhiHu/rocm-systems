@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -139,6 +139,10 @@ struct State {
     /// that finished in a failed state. Successfully booted sessions are
     /// removed from this map and discovered via the container runtime.
     pending_sessions: BTreeMap<String, PendingSession>,
+    /// Sessions successfully booted by *this* daemon instance. Containers
+    /// belonging to sessions not in this set were started by a previous
+    /// daemon instance and are treated as [`SessionPhase::Stale`].
+    booted_sessions: BTreeSet<String>,
     /// Live exec state keyed by `exec_id` (`session/<s>/exec/<n>`).
     execs: BTreeMap<String, Arc<tokio::sync::Mutex<ExecState>>>,
 }
@@ -301,6 +305,7 @@ impl MirageDaemon {
             let mut state = self.state.write().await;
             state.emulator_sessions.clear();
             state.pending_sessions.clear();
+            state.booted_sessions.clear();
             state.execs.clear();
         }
         // Tear down any containers the runtime knows about.
@@ -937,6 +942,10 @@ impl MirageDaemonListSessions for MirageDaemon {
         let containers = self.list_session_containers().await?;
         // Group by session name, pick the first container for summary info.
         let mut seen: BTreeMap<String, SessionSummary> = BTreeMap::new();
+        let booted = {
+            let state = self.state.read().await;
+            state.booted_sessions.clone()
+        };
         for c in &containers {
             let Some(session_name) = c.labels.get(LABEL_SESSION) else {
                 continue;
@@ -946,15 +955,31 @@ impl MirageDaemonListSessions for MirageDaemon {
                     continue;
                 }
             }
+            // Containers belonging to a session not booted by this daemon
+            // instance are stale — the new daemon has no in-memory state for
+            // them and cannot serve exec/attach reliably.
+            let phase = if booted.contains(session_name) {
+                SessionPhase::Running
+            } else {
+                SessionPhase::Stale
+            };
             seen.entry(session_name.clone())
                 .or_insert_with(|| SessionSummary {
                     name: Some(session_name.clone()),
                     profile: c.labels.get(LABEL_PROFILE).cloned(),
                     simulator: c.labels.get(LABEL_SIMULATOR).cloned(),
                     image: c.labels.get(LABEL_IMAGE).cloned(),
-                    health_status: HealthStatus::Healthy,
-                    phase: SessionPhase::Running,
-                    progress_message: None,
+                    health_status: if phase == SessionPhase::Running {
+                        HealthStatus::Healthy
+                    } else {
+                        HealthStatus::Unknown
+                    },
+                    phase,
+                    progress_message: if phase == SessionPhase::Stale {
+                        Some("session containers running but not registered with this daemon instance; shut down and re-boot to resume".to_string())
+                    } else {
+                        None
+                    },
                 });
         }
         // Merge pending sessions (still booting or boot-failed) that have
@@ -1077,6 +1102,32 @@ impl MirageDaemonStatus for MirageDaemon {
         let first = &session_containers[0];
         let profile_name = first.labels.get(LABEL_PROFILE).cloned();
         let profile = profile_name.and_then(|n| self.load_profiles_from_disk().remove(&n));
+
+        // If the containers are running but weren't booted by this daemon
+        // instance, report the session as Stale.
+        let is_booted = {
+            let state = self.state.read().await;
+            state.booted_sessions.contains(&request.name)
+        };
+        if !is_booted {
+            return Ok(StatusReply {
+                name: Some(request.name),
+                profile,
+                simulator: first.labels.get(LABEL_SIMULATOR).cloned(),
+                image: first.labels.get(LABEL_IMAGE).cloned(),
+                health: HealthStatus::Unknown,
+                uptime: None,
+                error_message: None,
+                ticks: 0,
+                ipc: 0.0,
+                simulation_speed: 0.0,
+                active_contexts: 0,
+                phase: SessionPhase::Stale,
+                progress_message: Some(
+                    "session containers running but not registered with this daemon instance; shut down and re-boot to resume".to_string(),
+                ),
+            });
+        }
 
         Ok(StatusReply {
             name: Some(request.name),
@@ -1240,6 +1291,7 @@ impl MirageDaemonBoot for MirageDaemon {
                     // On success, drop the pending entry; the session is now
                     // discoverable via the container runtime.
                     st.pending_sessions.remove(&boot_session);
+                    st.booted_sessions.insert(boot_session.clone());
                 }
                 Err(message) => {
                     let mut st = state.write().await;
@@ -1800,6 +1852,7 @@ impl MirageDaemonShutdown for MirageDaemon {
         {
             let mut state = self.state.write().await;
             state.emulator_sessions.remove(&request.name);
+            state.booted_sessions.remove(&request.name);
         }
 
         // Clean up session runtime directory (exec FIFOs, metadata, logs).
