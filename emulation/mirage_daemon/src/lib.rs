@@ -1637,33 +1637,94 @@ impl MirageDaemonExec for MirageDaemon {
         }
 
         let container_id = head.handle.id.clone();
-        let command = {
-            let ExecArgs { command, args, .. } = &exec_args;
-            let mut v = vec![command.clone()];
-            v.extend(args.iter().cloned());
-            v
+        let (command, exec_env) = {
+            let ExecArgs { command, args, env, .. } = exec_args;
+            let mut v = vec![command];
+            v.extend(args);
+            (v, env)
         };
 
         // Spawn the docker exec process and pump output into the buffer.
         let eid = exec_id.clone();
         let state_clone = self.state.clone();
         tokio::spawn(async move {
-            use std::process::Stdio;
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             use tokio::process::Command;
 
+            // Allocate a host-side PTY so docker exec sees a real TTY on its
+            // stdin/stdout.  This lets `-it` work and gives the container
+            // process proper echo and prompt behaviour.
+            let (master_fd, slave_fd) = unsafe {
+                let mut master: libc::c_int = -1;
+                let mut slave: libc::c_int = -1;
+                let ws = libc::winsize {
+                    ws_row: 24,
+                    ws_col: 80,
+                    ws_xpixel: 0,
+                    ws_ypixel: 0,
+                };
+                let rc = libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    &ws,
+                );
+                if rc != 0 {
+                    let msg = format!(
+                        "exec: openpty failed: {}\n",
+                        std::io::Error::last_os_error()
+                    );
+                    let mut es = exec_state.lock().await;
+                    append_to_exec_buffer(&mut es, msg.as_bytes(), false);
+                    es.stdin_tx = None;
+                    es.exit_code = Some(-1);
+                    let _ = es.notify.send(());
+                    return;
+                }
+                (master, slave)
+            };
+
+            // Build the docker exec command.  Use `-it` now that the slave
+            // PTY is a real TTY; stderr is merged by the PTY line discipline.
             let mut cmd = Command::new("docker");
-            cmd.arg("exec").arg("-i").arg(&container_id);
+            cmd.arg("exec").arg("-it").arg(&container_id);
+            for env_arg in &exec_env {
+                cmd.arg("-e");
+                cmd.arg(format!("{}={}", env_arg.key, env_arg.value));
+            }
             for part in &command {
                 cmd.arg(part);
             }
-            cmd.stdin(Stdio::piped());
-            cmd.stdout(Stdio::piped());
-            cmd.stderr(Stdio::piped());
+
+            // Hand the slave fd to docker as its stdin, stdout, and stderr.
+            // We must do this in `pre_exec` (before exec(), after fork()) so
+            // that the fds are duplicated onto 0/1/2 inside the child process.
+            unsafe {
+                cmd.pre_exec(move || {
+                    for target in [0, 1, 2] {
+                        if libc::dup2(slave_fd, target) < 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    // Close the extra copies of both fds in the child.
+                    libc::close(slave_fd);
+                    libc::close(master_fd);
+                    Ok(())
+                });
+            }
+            // Disable tokio's default piping so it doesn't touch stdin/stdout.
+            cmd.stdin(std::process::Stdio::null());
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::null());
 
             let mut child = match cmd.spawn() {
                 Ok(c) => c,
                 Err(e) => {
+                    unsafe {
+                        libc::close(master_fd);
+                        libc::close(slave_fd);
+                    }
                     let msg = format!("exec: failed to spawn docker exec: {e}\n");
                     let mut es = exec_state.lock().await;
                     append_to_exec_buffer(&mut es, msg.as_bytes(), false);
@@ -1674,56 +1735,39 @@ impl MirageDaemonExec for MirageDaemon {
                 }
             };
 
-            let mut child_stdin = child.stdin.take();
-            let child_stdout = child.stdout.take();
-            let child_stderr = child.stderr.take();
+            // Close the slave end in the parent — only the child should hold it.
+            unsafe { libc::close(slave_fd) };
 
-            // Pump stdin_rx → child stdin.
+            // Wrap the master fd for async I/O.
+            // Safety: master_fd is a valid, open fd that we own exclusively.
+            let master_file = unsafe {
+                use std::os::unix::io::FromRawFd;
+                tokio::fs::File::from_raw_fd(master_fd)
+            };
+            let (mut master_read, mut master_write) = tokio::io::split(master_file);
+
+            // Pump stdin_rx → PTY master (→ slave stdin → docker → container).
             let stdin_task = tokio::spawn(async move {
                 let mut rx = stdin_rx;
                 while let Some(bytes) = rx.recv().await {
-                    let Some(pipe) = child_stdin.as_mut() else {
-                        break;
-                    };
-                    if pipe.write_all(&bytes).await.is_err() {
+                    if master_write.write_all(&bytes).await.is_err() {
                         break;
                     }
-                    let _ = pipe.flush().await;
+                    let _ = master_write.flush().await;
                 }
-                drop(child_stdin);
             });
 
-            // Pump child stdout → buffer.
-            let es_stdout = exec_state.clone();
+            // Pump PTY master output → exec buffer (→ attach WebSocket → browser).
+            let es_out = exec_state.clone();
             let stdout_task = tokio::spawn(async move {
-                if let Some(mut pipe) = child_stdout {
-                    let mut buf = [0u8; 4096];
-                    loop {
-                        match pipe.read(&mut buf).await {
-                            Ok(0) | Err(_) => break,
-                            Ok(n) => {
-                                let mut es = es_stdout.lock().await;
-                                append_to_exec_buffer(&mut es, &buf[..n], true);
-                                let _ = es.notify.send(());
-                            }
-                        }
-                    }
-                }
-            });
-
-            // Pump child stderr → buffer.
-            let es_stderr = exec_state.clone();
-            let stderr_task = tokio::spawn(async move {
-                if let Some(mut pipe) = child_stderr {
-                    let mut buf = [0u8; 4096];
-                    loop {
-                        match pipe.read(&mut buf).await {
-                            Ok(0) | Err(_) => break,
-                            Ok(n) => {
-                                let mut es = es_stderr.lock().await;
-                                append_to_exec_buffer(&mut es, &buf[..n], false);
-                                let _ = es.notify.send(());
-                            }
+                let mut buf = [0u8; 4096];
+                loop {
+                    match master_read.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let mut es = es_out.lock().await;
+                            append_to_exec_buffer(&mut es, &buf[..n], true);
+                            let _ = es.notify.send(());
                         }
                     }
                 }
@@ -1732,7 +1776,6 @@ impl MirageDaemonExec for MirageDaemon {
             let status = child.wait().await;
             stdin_task.abort();
             let _ = stdout_task.await;
-            let _ = stderr_task.await;
 
             let code = match status {
                 Ok(s) => s.code().unwrap_or(-1),

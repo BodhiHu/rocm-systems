@@ -435,12 +435,14 @@ export async function listTerminals(): Promise<TerminalInfo[]> {
 export async function createTerminal(
   session: string,
   nodeIndex: number = 0,
+  program: string = "/bin/sh",
 ): Promise<{ ok: boolean; error: string; id: string }> {
   try {
+    const parts = program.trim().split(/\s+/).filter(Boolean);
     const r = await post<{ exec_id: string }>("/exec", {
       session,
       node_index: nodeIndex,
-      command: ["/bin/sh"],
+      command: parts.length ? parts : ["/bin/sh"],
     });
     const id = `term-${++terminalCounter}`;
     clientTerminals.set(id, { id, session, alive: true, exec_id: r.exec_id });

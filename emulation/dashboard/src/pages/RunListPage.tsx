@@ -32,9 +32,10 @@ export function RunListPage() {
     const session = fd.get("session") as string;
     const nodeRaw = fd.get("node_index") as string | null;
     const nodeIndex = Math.max(0, Number.parseInt(nodeRaw ?? "0", 10) || 0);
+    const program = (fd.get("program") as string | null)?.trim() || "/bin/sh";
 
     try {
-      const res = await createTerminal(session, nodeIndex);
+      const res = await createTerminal(session, nodeIndex, program);
       if (!res.ok) {
         setError(res.error ?? "Failed to create terminal");
       } else {
@@ -121,6 +122,16 @@ export function RunListPage() {
               type="number"
               min={0}
               defaultValue={0}
+            />
+          </div>
+          <div className="form-field">
+            <label htmlFor="tf-program">Program</label>
+            <input
+              id="tf-program"
+              name="program"
+              type="text"
+              placeholder="/bin/sh"
+              defaultValue="/bin/sh"
             />
           </div>
           <div className="form-field form-actions">
