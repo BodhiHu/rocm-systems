@@ -1638,7 +1638,9 @@ impl MirageDaemonExec for MirageDaemon {
 
         let container_id = head.handle.id.clone();
         let (command, exec_env) = {
-            let ExecArgs { command, args, env, .. } = exec_args;
+            let ExecArgs {
+                command, args, env, ..
+            } = exec_args;
             let mut v = vec![command];
             v.extend(args);
             (v, env)
