@@ -243,8 +243,7 @@ impl MirageDaemon {
         let dir = self.profile_dir();
         std::fs::create_dir_all(&dir)?;
         let path = self.profile_path(&profile.name);
-        let json = serde_json::to_string_pretty(profile)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = serde_json::to_string_pretty(profile).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 
@@ -310,12 +309,12 @@ impl MirageDaemon {
             state.execs.clear();
         }
         // Tear down any containers the runtime knows about.
-        if let Some(runtime) = &self.container_runtime {
-            if let Ok(containers) = runtime.list_containers(&BTreeMap::new(), None).await {
-                for c in containers {
-                    let _ = runtime.stop_container(&c.handle, 1, None).await;
-                    let _ = runtime.remove_container(&c.handle, true, None).await;
-                }
+        if let Some(runtime) = &self.container_runtime
+            && let Ok(containers) = runtime.list_containers(&BTreeMap::new(), None).await
+        {
+            for c in containers {
+                let _ = runtime.stop_container(&c.handle, 1, None).await;
+                let _ = runtime.remove_container(&c.handle, true, None).await;
             }
         }
     }
@@ -324,6 +323,12 @@ impl MirageDaemon {
 // ---------------------------------------------------------------------------
 //  Constructor helpers
 // ---------------------------------------------------------------------------
+
+impl Default for MirageDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl MirageDaemon {
     pub fn new() -> Self {
@@ -378,10 +383,7 @@ impl MirageDaemon {
         let mut labels = BTreeMap::new();
         labels.insert(LABEL_MANAGED.to_string(), "true".to_string());
         runtime.list_containers(&labels, None).await.map_err(|e| {
-            mirage_schema::daemon::MirageDaemonError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
+            mirage_schema::daemon::MirageDaemonError::Io(std::io::Error::other(e.to_string()))
         })
     }
 
@@ -537,7 +539,7 @@ impl MirageDaemonHealth for MirageDaemon {
             let found = containers.iter().any(|c| {
                 c.labels
                     .get(LABEL_SESSION)
-                    .map_or(false, |s| *s == session_id)
+                    .is_some_and(|s| *s == session_id)
             });
             if !found {
                 return Err(mirage_schema::daemon::MirageDaemonError::Remote(format!(
@@ -560,7 +562,7 @@ impl MirageDaemonTime for MirageDaemon {
             let found = containers.iter().any(|c| {
                 c.labels
                     .get(LABEL_SESSION)
-                    .map_or(false, |s| *s == session_id)
+                    .is_some_and(|s| *s == session_id)
             });
             if !found {
                 return Err(mirage_schema::daemon::MirageDaemonError::Remote(format!(
@@ -626,7 +628,7 @@ impl MirageDaemonAttach for MirageDaemon {
                 for &(len, is_stdout) in &es.buffer_flags {
                     let end = pos + len;
                     if end > offset {
-                        let start_in_chunk = if pos < offset { offset - pos } else { 0 };
+                        let start_in_chunk = offset.saturating_sub(pos);
                         let slice = es.buffer[pos + start_in_chunk..end].to_vec();
                         chunks.push((slice, is_stdout));
                     }
@@ -748,7 +750,7 @@ impl MirageDaemonListSimulators for MirageDaemon {
                     .filter(|c| {
                         c.labels
                             .get(LABEL_SIMULATOR)
-                            .map_or(false, |s| *s == info.name)
+                            .is_some_and(|s| *s == info.name)
                     })
                     .count() as u32;
                 Self::simulator_summary(&state, info, active)
@@ -772,7 +774,7 @@ impl MirageDaemonShowSimulator for MirageDaemon {
                 .filter(|c| {
                     c.labels
                         .get(LABEL_SIMULATOR)
-                        .map_or(false, |s| *s == info.name)
+                        .is_some_and(|s| *s == info.name)
                 })
                 .count() as u32;
             Self::simulator_summary(&state, info, active)
@@ -904,7 +906,7 @@ impl MirageDaemonDeleteProfile for MirageDaemon {
         let in_use = containers.iter().any(|c| {
             c.labels
                 .get(LABEL_PROFILE)
-                .map_or(false, |p| *p == request.name)
+                .is_some_and(|p| *p == request.name)
         });
         if in_use {
             return Ok(DeleteProfileReply {
@@ -951,10 +953,10 @@ impl MirageDaemonListSessions for MirageDaemon {
             let Some(session_name) = c.labels.get(LABEL_SESSION) else {
                 continue;
             };
-            if let Some(filter) = &request.profile {
-                if c.labels.get(LABEL_PROFILE).map_or(true, |p| p != filter) {
-                    continue;
-                }
+            if let Some(filter) = &request.profile
+                && c.labels.get(LABEL_PROFILE) != Some(filter)
+            {
+                continue;
             }
             // Containers belonging to a session not booted by this daemon
             // instance are stale — the new daemon has no in-memory state for
@@ -988,10 +990,10 @@ impl MirageDaemonListSessions for MirageDaemon {
         {
             let state = self.state.read().await;
             for (name, pending) in &state.pending_sessions {
-                if let Some(filter) = &request.profile {
-                    if pending.profile != *filter {
-                        continue;
-                    }
+                if let Some(filter) = &request.profile
+                    && pending.profile != *filter
+                {
+                    continue;
                 }
                 seen.entry(name.clone()).or_insert_with(|| SessionSummary {
                     name: Some(name.clone()),
@@ -1069,7 +1071,7 @@ impl MirageDaemonStatus for MirageDaemon {
             .filter(|c| {
                 c.labels
                     .get(LABEL_SESSION)
-                    .map_or(false, |s| *s == request.name)
+                    .is_some_and(|s| *s == request.name)
             })
             .collect();
 
@@ -1191,7 +1193,7 @@ impl MirageDaemonBoot for MirageDaemon {
         let already_running = containers.iter().any(|c| {
             c.labels
                 .get(LABEL_SESSION)
-                .map_or(false, |s| *s == session_name)
+                .is_some_and(|s| *s == session_name)
         });
         if already_running {
             return Ok(BootReply {
@@ -1338,73 +1340,72 @@ async fn boot_session_task(
     }];
     let devices = Vec::new();
 
-    if let Some(ref so_path) = interceptor_so {
-        if mirage_real::RealEmulator::hardware_available() {
-            if let Ok(Some(real)) = mirage_real::RealEmulator::detect() {
-                use mirage_schema::topology::ProvideTopology;
-                let topology = real.get_topology().ok();
+    if let Some(ref so_path) = interceptor_so
+        && mirage_real::RealEmulator::hardware_available()
+        && let Ok(Some(real)) = mirage_real::RealEmulator::detect()
+    {
+        use mirage_schema::topology::ProvideTopology;
+        let topology = real.get_topology().ok();
 
-                let socket_path = unique_emulator_socket(&session_name);
-                let server = mirage_remote::EmulatorServer::new(socket_path.clone(), real);
-                let listener = server
-                    .bind()
-                    .map_err(|e| format!("failed to bind emulator socket: {e}"))?;
-                thread::spawn(move || {
-                    let _ = server.serve_on(listener);
-                });
+        let socket_path = unique_emulator_socket(&session_name);
+        let server = mirage_remote::EmulatorServer::new(socket_path.clone(), real);
+        let listener = server
+            .bind()
+            .map_err(|e| format!("failed to bind emulator socket: {e}"))?;
+        thread::spawn(move || {
+            let _ = server.serve_on(listener);
+        });
 
-                let container_so = "/opt/mirage/libmirage_interceptor.so".to_string();
-                let container_sock = "/opt/mirage/emulator.sock".to_string();
+        let container_so = "/opt/mirage/libmirage_interceptor.so".to_string();
+        let container_sock = "/opt/mirage/emulator.sock".to_string();
 
-                base_mounts.push(BindMount {
-                    host_path: so_path.to_string_lossy().to_string(),
-                    container_path: container_so.clone(),
-                    readonly: true,
-                });
-                base_mounts.push(BindMount {
-                    host_path: socket_path.to_string_lossy().to_string(),
-                    container_path: container_sock.clone(),
-                    readonly: false,
-                });
+        base_mounts.push(BindMount {
+            host_path: so_path.to_string_lossy().to_string(),
+            container_path: container_so.clone(),
+            readonly: true,
+        });
+        base_mounts.push(BindMount {
+            host_path: socket_path.to_string_lossy().to_string(),
+            container_path: container_sock.clone(),
+            readonly: false,
+        });
 
-                if let Some(ref topo) = topology {
-                    if let Ok(topo_dir) = create_synthetic_topology(&session_name, topo) {
-                        base_mounts.push(BindMount {
-                            host_path: topo_dir.join("sys/class/kfd").to_string_lossy().to_string(),
-                            container_path: "/sys/class/kfd".to_string(),
-                            readonly: true,
-                        });
-                        base_mounts.push(BindMount {
-                            host_path: topo_dir
-                                .join("sys/class/kfd/kfd/topology")
-                                .to_string_lossy()
-                                .to_string(),
-                            container_path: "/sys/devices/virtual/kfd/kfd/topology".to_string(),
-                            readonly: true,
-                        });
-                        base_mounts.push(BindMount {
-                            host_path: topo_dir.join("dev/dri").to_string_lossy().to_string(),
-                            container_path: "/dev/dri".to_string(),
-                            readonly: true,
-                        });
-                        base_mounts.push(BindMount {
-                            host_path: topo_dir.join("dev/kfd").to_string_lossy().to_string(),
-                            container_path: "/dev/kfd".to_string(),
-                            readonly: true,
-                        });
-                    }
-                }
-
-                base_env.push(SetEnv {
-                    key: "LD_PRELOAD".to_string(),
-                    value: container_so,
-                });
-                base_env.push(SetEnv {
-                    key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
-                    value: container_sock,
-                });
-            }
+        if let Some(ref topo) = topology
+            && let Ok(topo_dir) = create_synthetic_topology(&session_name, topo)
+        {
+            base_mounts.push(BindMount {
+                host_path: topo_dir.join("sys/class/kfd").to_string_lossy().to_string(),
+                container_path: "/sys/class/kfd".to_string(),
+                readonly: true,
+            });
+            base_mounts.push(BindMount {
+                host_path: topo_dir
+                    .join("sys/class/kfd/kfd/topology")
+                    .to_string_lossy()
+                    .to_string(),
+                container_path: "/sys/devices/virtual/kfd/kfd/topology".to_string(),
+                readonly: true,
+            });
+            base_mounts.push(BindMount {
+                host_path: topo_dir.join("dev/dri").to_string_lossy().to_string(),
+                container_path: "/dev/dri".to_string(),
+                readonly: true,
+            });
+            base_mounts.push(BindMount {
+                host_path: topo_dir.join("dev/kfd").to_string_lossy().to_string(),
+                container_path: "/dev/kfd".to_string(),
+                readonly: true,
+            });
         }
+
+        base_env.push(SetEnv {
+            key: "LD_PRELOAD".to_string(),
+            value: container_so,
+        });
+        base_env.push(SetEnv {
+            key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
+            value: container_sock,
+        });
     }
 
     // --- Image pull with progress streaming ---
@@ -1455,7 +1456,7 @@ async fn boot_session_task(
     // Append user-supplied extra volumes (syntax was validated by boot()).
     for vol in &extra_volumes {
         let parts: Vec<&str> = vol.splitn(3, ':').collect();
-        let readonly = parts.get(2).map_or(false, |opt| *opt == "ro");
+        let readonly = parts.get(2).is_some_and(|opt| *opt == "ro");
         base_mounts.push(BindMount {
             host_path: parts[0].to_string(),
             container_path: parts[1].to_string(),
@@ -1584,7 +1585,7 @@ impl MirageDaemonExec for MirageDaemon {
             .filter(|c| {
                 c.labels
                     .get(LABEL_SESSION)
-                    .map_or(false, |s| *s == request.session)
+                    .is_some_and(|s| *s == request.session)
             })
             .find(|c| {
                 c.labels
@@ -1832,11 +1833,11 @@ fn append_to_exec_buffer(es: &mut ExecState, data: &[u8], is_stdout: bool) {
     }
     es.buffer.extend_from_slice(data);
     // Merge with the last flag entry if it's the same stream.
-    if let Some(last) = es.buffer_flags.last_mut() {
-        if last.1 == is_stdout {
-            last.0 += incoming;
-            return;
-        }
+    if let Some(last) = es.buffer_flags.last_mut()
+        && last.1 == is_stdout
+    {
+        last.0 += incoming;
+        return;
     }
     es.buffer_flags.push((incoming, is_stdout));
 }
@@ -1856,10 +1857,7 @@ impl MirageDaemonShutdown for MirageDaemon {
             let mut filter = BTreeMap::new();
             filter.insert(LABEL_SESSION.to_string(), request.name.clone());
             runtime.list_containers(&filter, None).await.map_err(|e| {
-                mirage_schema::daemon::MirageDaemonError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
+                mirage_schema::daemon::MirageDaemonError::Io(std::io::Error::other(e.to_string()))
             })?
         } else {
             Vec::new()
@@ -1964,8 +1962,7 @@ impl MirageDaemon {
         let dir = self.workload_dir();
         std::fs::create_dir_all(&dir)?;
         let path = self.workload_path(&workload.name);
-        let json = serde_json::to_string_pretty(workload)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = serde_json::to_string_pretty(workload).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 
@@ -2146,16 +2143,15 @@ fn create_synthetic_topology(
         }
         std::fs::write(&dst, data)?;
 
-        if rel_path.ends_with("/properties") {
-            if let Ok(text) = std::str::from_utf8(data) {
-                for line in text.lines() {
-                    if let Some(rest) = line.strip_prefix("drm_render_minor ") {
-                        if let Ok(minor) = rest.trim().parse::<u32>() {
-                            if minor > 0 {
-                                render_minors.push(minor);
-                            }
-                        }
-                    }
+        if rel_path.ends_with("/properties")
+            && let Ok(text) = std::str::from_utf8(data)
+        {
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("drm_render_minor ")
+                    && let Ok(minor) = rest.trim().parse::<u32>()
+                    && minor > 0
+                {
+                    render_minors.push(minor);
                 }
             }
         }
@@ -2893,7 +2889,7 @@ mod tests {
             .list_workloads(ListWorkloadsRequest::default())
             .await
             .unwrap();
-        assert_eq!(list.workloads[0].has_startup, true);
+        assert!(list.workloads[0].has_startup);
         assert_eq!(list.workloads[0].exec_count, 2);
         assert_eq!(
             list.workloads[0].cleanup,
@@ -3739,7 +3735,7 @@ mod tests {
             ),
         ];
 
-        for (_i, (_desc, output)) in steps.iter().enumerate() {
+        for (_desc, output) in steps.iter() {
             mock.queue_exec_result(
                 &handle,
                 mirage_container::ExecResult {

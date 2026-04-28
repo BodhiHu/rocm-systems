@@ -674,12 +674,11 @@ impl TypedTopology {
         // Collect all node indices present in the file map.
         let mut node_indices = std::collections::BTreeSet::new();
         for key in topo.files.keys() {
-            if let Some(rest) = key.strip_prefix("nodes/") {
-                if let Some(idx_str) = rest.split('/').next() {
-                    if let Ok(idx) = idx_str.parse::<u32>() {
-                        node_indices.insert(idx);
-                    }
-                }
+            if let Some(rest) = key.strip_prefix("nodes/")
+                && let Some(idx_str) = rest.split('/').next()
+                && let Ok(idx) = idx_str.parse::<u32>()
+            {
+                node_indices.insert(idx);
             }
         }
 
@@ -711,12 +710,11 @@ impl TypedTopology {
             let mb_prefix = format!("{prefix}mem_banks/");
             let mut mb_indices = std::collections::BTreeSet::new();
             for key in topo.files.keys().filter(|k| k.starts_with(&mb_prefix)) {
-                if let Some(rest) = key.strip_prefix(&mb_prefix) {
-                    if let Some(i_str) = rest.split('/').next() {
-                        if let Ok(i) = i_str.parse::<u32>() {
-                            mb_indices.insert(i);
-                        }
-                    }
+                if let Some(rest) = key.strip_prefix(&mb_prefix)
+                    && let Some(i_str) = rest.split('/').next()
+                    && let Ok(i) = i_str.parse::<u32>()
+                {
+                    mb_indices.insert(i);
                 }
             }
             for mi in mb_indices {
@@ -751,12 +749,11 @@ impl TypedTopology {
             let cache_prefix = format!("{prefix}caches/");
             let mut cache_indices = std::collections::BTreeSet::new();
             for key in topo.files.keys().filter(|k| k.starts_with(&cache_prefix)) {
-                if let Some(rest) = key.strip_prefix(&cache_prefix) {
-                    if let Some(i_str) = rest.split('/').next() {
-                        if let Ok(i) = i_str.parse::<u32>() {
-                            cache_indices.insert(i);
-                        }
-                    }
+                if let Some(rest) = key.strip_prefix(&cache_prefix)
+                    && let Some(i_str) = rest.split('/').next()
+                    && let Ok(i) = i_str.parse::<u32>()
+                {
+                    cache_indices.insert(i);
                 }
             }
             let mut caches = BTreeMap::new();
@@ -856,12 +853,11 @@ fn parse_link_map(
 ) -> ParseResult<BTreeMap<u32, LinkProperties>> {
     let mut indices = std::collections::BTreeSet::new();
     for key in files.keys().filter(|k| k.starts_with(prefix)) {
-        if let Some(rest) = key.strip_prefix(prefix) {
-            if let Some(i_str) = rest.split('/').next() {
-                if let Ok(i) = i_str.parse::<u32>() {
-                    indices.insert(i);
-                }
-            }
+        if let Some(rest) = key.strip_prefix(prefix)
+            && let Some(i_str) = rest.split('/').next()
+            && let Ok(i) = i_str.parse::<u32>()
+        {
+            indices.insert(i);
         }
     }
     let mut map = BTreeMap::new();

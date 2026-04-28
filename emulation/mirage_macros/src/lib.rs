@@ -1110,6 +1110,7 @@ fn module_protocol_error_tokens(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn expand_impl_trait(
     attrs: &[Attribute],
     trait_name: &Ident,
@@ -1145,6 +1146,7 @@ fn expand_impl_trait(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn expand_transport_impl(
     module_options: &ModuleOptions,
     transport_trait: &Ident,
@@ -1474,6 +1476,7 @@ fn expand_unary_run_arm(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn expand_streaming_run_arm(
     command_name: &Ident,
     variant_name: &Ident,

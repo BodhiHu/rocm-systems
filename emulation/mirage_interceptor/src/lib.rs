@@ -101,7 +101,7 @@ fn is_topology_path(path: &str) -> bool {
 /// see the cached topology file contents.
 fn memfd_from_topology_data(data: &[u8]) -> c_int {
     let name = CString::new("mirage-topo").unwrap();
-    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC as u32) };
+    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
     if fd < 0 {
         return -1;
     }
@@ -1182,8 +1182,8 @@ fn create_cookie_fd() -> c_int {
     // A `memfd` is a convenient, non-conflicting source.
     let name = CString::new("mirage-cookie").unwrap();
     // SAFETY: memfd_create is a standard glibc call.
-    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC as u32) };
-    fd
+
+    unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) }
 }
 
 /// Attempt to open the real device node.  Returns `(fd, synthetic)` where
@@ -1201,14 +1201,13 @@ fn open_host_path_or_memfd(
     kind: DeviceKind,
 ) -> (c_int, bool) {
     // KFD fds are always synthetic — the daemon owns /dev/kfd.
-    if kind != DeviceKind::Kfd {
-        if let Some(real) =
+    if kind != DeviceKind::Kfd
+        && let Some(real) =
             next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
-        {
-            let fd = unsafe { real(path, flags, mode) };
-            if fd >= 0 {
-                return (fd, false);
-            }
+    {
+        let fd = unsafe { real(path, flags, mode) };
+        if fd >= 0 {
+            return (fd, false);
         }
     }
     // Real device not available or deliberately skipped — create a memfd
@@ -1216,7 +1215,7 @@ fn open_host_path_or_memfd(
     // remote emulator) still works.  mmap on this fd will use
     // MAP_ANONYMOUS instead.
     let name = CString::new("mirage-hostfd").unwrap();
-    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC as u32) };
+    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
     (fd, true)
 }
 
@@ -1228,18 +1227,17 @@ fn openat_host_path_or_memfd(
     kind: DeviceKind,
 ) -> (c_int, bool) {
     // KFD fds are always synthetic — the daemon owns /dev/kfd.
-    if kind != DeviceKind::Kfd {
-        if let Some(real) =
+    if kind != DeviceKind::Kfd
+        && let Some(real) =
             next_fn!(openat : fn(d: c_int, p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
-        {
-            let fd = unsafe { real(dirfd, path, flags, mode) };
-            if fd >= 0 {
-                return (fd, false);
-            }
+    {
+        let fd = unsafe { real(dirfd, path, flags, mode) };
+        if fd >= 0 {
+            return (fd, false);
         }
     }
     let name = CString::new("mirage-hostfd").unwrap();
-    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC as u32) };
+    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
     (fd, true)
 }
 
@@ -1302,15 +1300,15 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
         }
         // Serve topology files from cached Topology instead of hitting
         // the filesystem or forwarding to the daemon.
-        if is_topology_path(ps) {
-            if let Some(data) = topology_lookup(ps) {
-                let fd = memfd_from_topology_data(data);
-                if fd >= 0 {
-                    return fd;
-                }
+        if is_topology_path(ps)
+            && let Some(data) = topology_lookup(ps)
+        {
+            let fd = memfd_from_topology_data(data);
+            if fd >= 0 {
+                return fd;
             }
-            // Fall through to real open (may hit bind-mounted topology).
         }
+        // Fall through to real open (may hit bind-mounted topology).
         if let Some(kind) = DeviceKind::classify(&p)
             && let Some(remote) = remote()
         {
@@ -1333,7 +1331,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
                 syscalls::SyscallOpenRequest {
                     path: tracked_path_request(kind, &p),
                     flags: flags as u32,
-                    mode: mode as u32,
+                    mode,
                     class: kind.device_class(),
                 },
             ) {
@@ -1375,7 +1373,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
         return errno_to_rc(libc::ENOSYS);
     };
     // SAFETY: forwarded to libc with identical signature.
-    unsafe { real(path, flags | O_CLOEXEC & O_CLOEXEC, mode) }
+    unsafe { real(path, flags | O_CLOEXEC, mode) }
 }
 
 #[unsafe(no_mangle)]
@@ -1391,12 +1389,13 @@ pub unsafe extern "C" fn openat(
             tracing::debug!(dirfd, path = %p.display(), "openat ALL");
         }
         // Serve topology files from cached Topology.
-        if dirfd == libc::AT_FDCWD && is_topology_path(ps) {
-            if let Some(data) = topology_lookup(ps) {
-                let fd = memfd_from_topology_data(data);
-                if fd >= 0 {
-                    return fd;
-                }
+        if dirfd == libc::AT_FDCWD
+            && is_topology_path(ps)
+            && let Some(data) = topology_lookup(ps)
+        {
+            let fd = memfd_from_topology_data(data);
+            if fd >= 0 {
+                return fd;
             }
         }
     }
@@ -1424,7 +1423,7 @@ pub unsafe extern "C" fn openat(
             syscalls::SyscallOpenRequest {
                 path: tracked_path_request(kind, &p),
                 flags: flags as u32,
-                mode: mode as u32,
+                mode,
                 class: kind.device_class(),
             },
         ) {

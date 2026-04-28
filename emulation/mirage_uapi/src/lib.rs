@@ -40,10 +40,12 @@ pub mod marshal;
 
 pub use marshal::{FromC, FromCWith, ToBytes, ToC};
 
+#[allow(clippy::missing_safety_doc)]
 pub mod kfd {
     include!(concat!(env!("OUT_DIR"), "/kfd.rs"));
 }
 
+#[allow(clippy::missing_safety_doc)]
 pub mod drm {
     include!(concat!(env!("OUT_DIR"), "/drm.rs"));
 }

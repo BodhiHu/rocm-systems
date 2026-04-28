@@ -441,7 +441,7 @@ impl ContainerRuntime for MockContainerRuntime {
         for container in state.containers.values() {
             let matches = labels
                 .iter()
-                .all(|(k, v)| container.labels.get(k).map_or(false, |cv| cv == v));
+                .all(|(k, v)| container.labels.get(k) == Some(v));
             if matches {
                 result.push(ListedContainer {
                     handle: container.inspection.handle.clone(),

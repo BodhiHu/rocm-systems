@@ -207,6 +207,12 @@ struct ManagedContainer {
     port_labels: HashMap<(u16, Protocol), Option<String>>,
 }
 
+impl Default for DockerCli<TokioCommandRunner> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DockerCli<TokioCommandRunner> {
     pub fn new() -> Self {
         Self::with_program_and_runner("docker", Arc::new(TokioCommandRunner))

@@ -123,18 +123,14 @@ impl RealEmulator {
             // Found the node; read drm_render_minor from properties.
             let props = std::fs::read_to_string(&props_path).ok()?;
             for line in props.lines() {
-                if let Some(rest) = line.strip_prefix("drm_render_minor ") {
-                    if let Ok(minor) = rest.trim().parse::<u32>() {
-                        let target = format!("renderD{minor}");
-                        let nodes = self.render_nodes.lock().unwrap();
-                        for node in nodes.iter() {
-                            if node
-                                .path
-                                .file_name()
-                                .map_or(false, |n| n == target.as_str())
-                            {
-                                return Some(node.fd.as_raw_fd());
-                            }
+                if let Some(rest) = line.strip_prefix("drm_render_minor ")
+                    && let Ok(minor) = rest.trim().parse::<u32>()
+                {
+                    let target = format!("renderD{minor}");
+                    let nodes = self.render_nodes.lock().unwrap();
+                    for node in nodes.iter() {
+                        if node.path.file_name().is_some_and(|n| n == target.as_str()) {
+                            return Some(node.fd.as_raw_fd());
                         }
                     }
                 }

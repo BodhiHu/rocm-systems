@@ -49,6 +49,7 @@ pub enum WireRequest {
 
 /// Response returned by the daemon.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum WireResponse {
     Kfd(WireResult<AnyKfdIoctlResponse>),
     Drm(WireResult<AnyDrmIoctlResponse>),

@@ -82,6 +82,7 @@ macro_rules! ioctl_dsl {
                 // --- dispatch enums ---
 
                 #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+                #[allow(clippy::large_enum_variant)]
                 pub enum [< Any $subsys:camel IoctlRequest >] {
                     $(
                         [< $name:camel >]([< $name:camel Request >]),
@@ -89,6 +90,7 @@ macro_rules! ioctl_dsl {
                 }
 
                 #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+                #[allow(clippy::large_enum_variant)]
                 pub enum [< Any $subsys:camel IoctlResponse >] {
                     $(
                         [< $name:camel >]([< $name:camel Response >]),

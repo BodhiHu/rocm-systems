@@ -509,10 +509,7 @@ impl HandleDrmIoctl for RealEmulator {
         )?;
         fences.truncate(args.num_fences as usize);
         Ok(DrmAmdgpuUserqWaitResponse {
-            fences: fences
-                .into_iter()
-                .map(|fence| FromC::from_c(fence))
-                .collect(),
+            fences: fences.into_iter().map(FromC::from_c).collect(),
         })
     }
 
@@ -534,10 +531,7 @@ impl HandleDrmIoctl for RealEmulator {
         )?;
         entries.truncate(args.num_entries as usize);
         Ok(DrmAmdgpuGemListHandlesResponse {
-            entries: entries
-                .into_iter()
-                .map(|entry| FromC::from_c(entry))
-                .collect(),
+            entries: entries.into_iter().map(FromC::from_c).collect(),
             num_entries: args.num_entries,
         })
     }

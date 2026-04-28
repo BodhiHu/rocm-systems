@@ -158,10 +158,10 @@ fn build_rocjitsu(source_dir: &Path) -> PathBuf {
     // Prefer an explicit toolchain if the caller set one; otherwise
     // pick a known-good in-tree compiler when the default (e.g. gcc-11
     // on Ubuntu 22.04) is too old.
-    if env::var_os("CXX").is_none() {
-        if let Some(cxx) = pick_cxx_compiler() {
-            config.define("CMAKE_CXX_COMPILER", &cxx);
-        }
+    if env::var_os("CXX").is_none()
+        && let Some(cxx) = pick_cxx_compiler()
+    {
+        config.define("CMAKE_CXX_COMPILER", &cxx);
     }
 
     let dst = config

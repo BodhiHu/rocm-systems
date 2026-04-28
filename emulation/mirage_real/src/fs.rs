@@ -182,12 +182,11 @@ fn read_topology_recursive(root: &Path, dir: &Path, files: &mut BTreeMap<String,
         };
         if ft.is_dir() {
             read_topology_recursive(root, &path, files);
-        } else if ft.is_file() {
-            if let Ok(data) = std::fs::read(&path) {
-                if let Ok(rel) = path.strip_prefix(root) {
-                    files.insert(rel.to_string_lossy().into_owned(), data);
-                }
-            }
+        } else if ft.is_file()
+            && let Ok(data) = std::fs::read(&path)
+            && let Ok(rel) = path.strip_prefix(root)
+        {
+            files.insert(rel.to_string_lossy().into_owned(), data);
         }
     }
 }
