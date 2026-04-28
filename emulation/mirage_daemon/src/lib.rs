@@ -1740,11 +1740,30 @@ impl MirageDaemonExec for MirageDaemon {
 
             // Wrap the master fd for async I/O.
             // Safety: master_fd is a valid, open fd that we own exclusively.
-            let master_file = unsafe {
-                use std::os::unix::io::FromRawFd;
-                tokio::fs::File::from_raw_fd(master_fd)
+            use std::os::unix::io::FromRawFd;
+            let master_file = unsafe { tokio::fs::File::from_raw_fd(master_fd) };
+            // dup the master fd so the read and write halves are independent
+            // tokio::fs::File objects.  A single File allows only one in-flight
+            // spawn_blocking at a time; sharing it via io::split causes the
+            // blocking PTY read to hold the exclusive state, starving writes.
+            let master_write_file = unsafe {
+                let dup_fd = libc::dup(master_fd);
+                if dup_fd < 0 {
+                    let msg = format!(
+                        "exec: dup(master_fd) failed: {}\n",
+                        std::io::Error::last_os_error()
+                    );
+                    let mut es = exec_state.lock().await;
+                    append_to_exec_buffer(&mut es, msg.as_bytes(), false);
+                    es.stdin_tx = None;
+                    es.exit_code = Some(-1);
+                    let _ = es.notify.send(());
+                    return;
+                }
+                tokio::fs::File::from_raw_fd(dup_fd)
             };
-            let (mut master_read, mut master_write) = tokio::io::split(master_file);
+            let mut master_read = master_file;
+            let mut master_write = master_write_file;
 
             // Pump stdin_rx → PTY master (→ slave stdin → docker → container).
             let stdin_task = tokio::spawn(async move {
