@@ -37,6 +37,11 @@
 #include <unordered_set>
 #include <vector>
 
+namespace YAML
+{
+class Node;
+}
+
 namespace rocprofiler
 {
 namespace counters
@@ -129,6 +134,13 @@ checkValidMetric(const std::string& agent, const Metric& metric);
  */
 rocprofiler_status_t
 setCustomCounterDefinition(const CustomCounterDefinition& def);
+
+/**
+ * Validate extra counter YAML structure
+ * Returns std::nullopt if valid, or error message if invalid
+ */
+std::optional<std::string>
+validateExtraCounterYAML(const YAML::Node& root);
 }  // namespace counters
 }  // namespace rocprofiler
 
