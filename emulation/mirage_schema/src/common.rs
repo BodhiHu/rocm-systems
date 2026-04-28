@@ -431,9 +431,12 @@ pub enum SessionPhase {
     Running,
     /// Boot failed; consult the error message for details.
     Failed,
+    /// `shutdown` has been ordered for this session; containers are being
+    /// stopped and the session state is being cleaned up.
+    ShuttingDown,
     /// Leftover state was found on disk but no containers are running.
+    /// Or containers exsist, but their simulator is no longer available.
     /// A stale session can be removed via `shutdown` to clean up the state
-    /// directory.
     Stale,
 }
 

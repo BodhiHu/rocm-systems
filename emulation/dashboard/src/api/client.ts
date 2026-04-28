@@ -77,6 +77,7 @@ const PHASE_FROM_WIRE: Record<string, SessionPhase> = {
   starting: "Starting",
   running: "Running",
   failed: "Failed",
+  shutting_down: "ShuttingDown",
   stale: "Stale",
 };
 

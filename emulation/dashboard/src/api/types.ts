@@ -14,6 +14,7 @@ export type SessionPhase =
   | "Starting"
   | "Running"
   | "Failed"
+  | "ShuttingDown"
   | "Stale";
 
 // ── Core types (from common.fbs) ───────────────────────────────────────────

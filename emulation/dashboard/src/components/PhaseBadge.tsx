@@ -5,6 +5,7 @@ const colors: Record<SessionPhase, string> = {
   Starting: "#f0a020",
   Running: "var(--status-healthy)",
   Failed: "var(--status-unhealthy)",
+  ShuttingDown: "#b06030",
   Stale: "#888888",
 };
 

@@ -144,6 +144,10 @@ struct State {
     /// belonging to sessions not in this set were started by a previous
     /// daemon instance and are treated as [`SessionPhase::Stale`].
     booted_sessions: BTreeSet<String>,
+    /// Sessions for which `shutdown` has been called and whose teardown is
+    /// still in progress. Reported as [`SessionPhase::ShuttingDown`] until
+    /// the entry is removed at the end of `shutdown`.
+    shutting_down_sessions: BTreeSet<String>,
     /// Live exec state keyed by `exec_id` (`session/<s>/exec/<n>`).
     execs: BTreeMap<String, Arc<tokio::sync::Mutex<ExecState>>>,
 }
@@ -306,6 +310,7 @@ impl MirageDaemon {
             state.emulator_sessions.clear();
             state.pending_sessions.clear();
             state.booted_sessions.clear();
+            state.shutting_down_sessions.clear();
             state.execs.clear();
         }
         // Tear down any containers the runtime knows about.
@@ -945,9 +950,12 @@ impl MirageDaemonListSessions for MirageDaemon {
         let containers = self.list_session_containers().await?;
         // Group by session name, pick the first container for summary info.
         let mut seen: BTreeMap<String, SessionSummary> = BTreeMap::new();
-        let booted = {
+        let (booted, shutting_down) = {
             let state = self.state.read().await;
-            state.booted_sessions.clone()
+            (
+                state.booted_sessions.clone(),
+                state.shutting_down_sessions.clone(),
+            )
         };
         for c in &containers {
             let Some(session_name) = c.labels.get(LABEL_SESSION) else {
@@ -961,7 +969,9 @@ impl MirageDaemonListSessions for MirageDaemon {
             // Containers belonging to a session not booted by this daemon
             // instance are stale — the new daemon has no in-memory state for
             // them and cannot serve exec/attach reliably.
-            let phase = if booted.contains(session_name) {
+            let phase = if shutting_down.contains(session_name) {
+                SessionPhase::ShuttingDown
+            } else if booted.contains(session_name) {
                 SessionPhase::Running
             } else {
                 SessionPhase::Stale
@@ -978,10 +988,10 @@ impl MirageDaemonListSessions for MirageDaemon {
                         HealthStatus::Unknown
                     },
                     phase,
-                    progress_message: if phase == SessionPhase::Stale {
-                        Some("session containers running but not registered with this daemon instance; shut down and re-boot to resume".to_string())
-                    } else {
-                        None
+                    progress_message: match phase {
+                        SessionPhase::Stale => Some("session containers running but not registered with this daemon instance; shut down and re-boot to resume".to_string()),
+                        SessionPhase::ShuttingDown => Some("session is shutting down".to_string()),
+                        _ => None,
                     },
                 });
         }
@@ -1016,16 +1026,40 @@ impl MirageDaemonListSessions for MirageDaemon {
         // process; the caller can clean them up via `shutdown`.
         if request.profile.is_none() {
             for name in self.list_session_state_dirs() {
+                let is_shutting_down = shutting_down.contains(&name);
                 seen.entry(name.clone()).or_insert_with(|| SessionSummary {
                     name: Some(name),
                     profile: None,
                     simulator: None,
                     image: None,
                     health_status: HealthStatus::Unknown,
-                    phase: SessionPhase::Stale,
-                    progress_message: Some(
-                        "state directory present but no running container".to_string(),
-                    ),
+                    phase: if is_shutting_down {
+                        SessionPhase::ShuttingDown
+                    } else {
+                        SessionPhase::Stale
+                    },
+                    progress_message: Some(if is_shutting_down {
+                        "session is shutting down".to_string()
+                    } else {
+                        "state directory present but no running container".to_string()
+                    }),
+                });
+            }
+        }
+        // Sessions whose containers and state directory have already been
+        // removed but whose `shutdown` call is still in flight: ensure they
+        // are still listed with the `ShuttingDown` phase until cleanup
+        // finishes.
+        if request.profile.is_none() {
+            for name in &shutting_down {
+                seen.entry(name.clone()).or_insert_with(|| SessionSummary {
+                    name: Some(name.clone()),
+                    profile: None,
+                    simulator: None,
+                    image: None,
+                    health_status: HealthStatus::Unknown,
+                    phase: SessionPhase::ShuttingDown,
+                    progress_message: Some("session is shutting down".to_string()),
                 });
             }
         }
@@ -1065,6 +1099,12 @@ impl MirageDaemonStatus for MirageDaemon {
             }
         }
 
+        // If a shutdown is currently in progress for this session, surface
+        // the transient `ShuttingDown` phase regardless of container state.
+        let is_shutting_down = {
+            let state = self.state.read().await;
+            state.shutting_down_sessions.contains(&request.name)
+        };
         let containers = self.list_session_containers().await?;
         let session_containers: Vec<_> = containers
             .iter()
@@ -1074,6 +1114,27 @@ impl MirageDaemonStatus for MirageDaemon {
                     .is_some_and(|s| *s == request.name)
             })
             .collect();
+
+        if is_shutting_down {
+            let first = session_containers.first();
+            let profile_name = first.and_then(|c| c.labels.get(LABEL_PROFILE).cloned());
+            let profile = profile_name.and_then(|n| self.load_profiles_from_disk().remove(&n));
+            return Ok(StatusReply {
+                name: Some(request.name),
+                profile,
+                simulator: first.and_then(|c| c.labels.get(LABEL_SIMULATOR).cloned()),
+                image: first.and_then(|c| c.labels.get(LABEL_IMAGE).cloned()),
+                health: HealthStatus::Unknown,
+                uptime: None,
+                error_message: None,
+                ticks: 0,
+                ipc: 0.0,
+                simulation_speed: 0.0,
+                active_contexts: 0,
+                phase: SessionPhase::ShuttingDown,
+                progress_message: Some("session is shutting down".to_string()),
+            });
+        }
 
         if session_containers.is_empty() {
             // Fall back to checking for a stale state directory on disk.
@@ -1885,6 +1946,14 @@ impl MirageDaemonShutdown for MirageDaemon {
             });
         }
 
+        // Mark the session as shutting down so concurrent status / list
+        // queries observe the transition immediately, before the (slow)
+        // container stop+remove calls run.
+        {
+            let mut state = self.state.write().await;
+            state.shutting_down_sessions.insert(request.name.clone());
+        }
+
         if let Some(runtime) = &self.container_runtime {
             for c in &session_containers {
                 let _ = runtime.stop_container(&c.handle, 10, None).await;
@@ -1902,6 +1971,7 @@ impl MirageDaemonShutdown for MirageDaemon {
             let mut state = self.state.write().await;
             state.emulator_sessions.remove(&request.name);
             state.booted_sessions.remove(&request.name);
+            state.shutting_down_sessions.remove(&request.name);
         }
 
         // Clean up session runtime directory (exec FIFOs, metadata, logs).
