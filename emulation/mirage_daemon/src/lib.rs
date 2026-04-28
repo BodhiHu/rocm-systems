@@ -1650,33 +1650,26 @@ impl MirageDaemonExec for MirageDaemon {
         let eid = exec_id.clone();
         let state_clone = self.state.clone();
         tokio::spawn(async move {
+            use std::fs::File;
+            use std::process::Stdio;
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             use tokio::process::Command;
 
             // Allocate a host-side PTY so docker exec sees a real TTY on its
             // stdin/stdout.  This lets `-it` work and gives the container
             // process proper echo and prompt behaviour.
-            let (master_fd, slave_fd) = unsafe {
-                let mut master: libc::c_int = -1;
-                let mut slave: libc::c_int = -1;
-                let ws = libc::winsize {
+            let pty = match nix::pty::openpty(
+                Some(&nix::pty::Winsize {
                     ws_row: 24,
                     ws_col: 80,
                     ws_xpixel: 0,
                     ws_ypixel: 0,
-                };
-                let rc = libc::openpty(
-                    &mut master,
-                    &mut slave,
-                    std::ptr::null_mut(),
-                    std::ptr::null(),
-                    &ws,
-                );
-                if rc != 0 {
-                    let msg = format!(
-                        "exec: openpty failed: {}\n",
-                        std::io::Error::last_os_error()
-                    );
+                }),
+                None,
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    let msg = format!("exec: openpty failed: {e}\n");
                     let mut es = exec_state.lock().await;
                     append_to_exec_buffer(&mut es, msg.as_bytes(), false);
                     es.stdin_tx = None;
@@ -1684,11 +1677,47 @@ impl MirageDaemonExec for MirageDaemon {
                     let _ = es.notify.send(());
                     return;
                 }
-                (master, slave)
             };
 
-            // Build the docker exec command.  Use `-it` now that the slave
-            // PTY is a real TTY; stderr is merged by the PTY line discipline.
+            // Convert OwnedFds to std::fs::File (safe, RAII-managed).
+            let master_file = File::from(pty.master);
+            let slave_file = File::from(pty.slave);
+
+            // Clone master so reader and writer have independent file objects
+            // (a single tokio::fs::File can only run one spawn_blocking at a
+            // time, so sharing via io::split would deadlock).
+            let master_write_file = match master_file.try_clone() {
+                Ok(f) => f,
+                Err(e) => {
+                    let msg = format!("exec: dup master failed: {e}\n");
+                    let mut es = exec_state.lock().await;
+                    append_to_exec_buffer(&mut es, msg.as_bytes(), false);
+                    es.stdin_tx = None;
+                    es.exit_code = Some(-1);
+                    let _ = es.notify.send(());
+                    return;
+                }
+            };
+
+            // Clone slave for stdout and stderr: docker exec needs a TTY on
+            // all three streams so the shell sees a proper controlling terminal.
+            let (slave_stdout, slave_stderr) = match slave_file
+                .try_clone()
+                .and_then(|o| slave_file.try_clone().map(|e| (o, e)))
+            {
+                Ok(pair) => pair,
+                Err(e) => {
+                    let msg = format!("exec: dup slave failed: {e}\n");
+                    let mut es = exec_state.lock().await;
+                    append_to_exec_buffer(&mut es, msg.as_bytes(), false);
+                    es.stdin_tx = None;
+                    es.exit_code = Some(-1);
+                    let _ = es.notify.send(());
+                    return;
+                }
+            };
+
+            // Build the docker exec command.
             let mut cmd = Command::new("docker");
             cmd.arg("exec").arg("-it").arg(&container_id);
             for env_arg in &exec_env {
@@ -1699,34 +1728,17 @@ impl MirageDaemonExec for MirageDaemon {
                 cmd.arg(part);
             }
 
-            // Hand the slave fd to docker as its stdin, stdout, and stderr.
-            // We must do this in `pre_exec` (before exec(), after fork()) so
-            // that the fds are duplicated onto 0/1/2 inside the child process.
-            unsafe {
-                cmd.pre_exec(move || {
-                    for target in [0, 1, 2] {
-                        if libc::dup2(slave_fd, target) < 0 {
-                            return Err(std::io::Error::last_os_error());
-                        }
-                    }
-                    // Close the extra copies of both fds in the child.
-                    libc::close(slave_fd);
-                    libc::close(master_fd);
-                    Ok(())
-                });
-            }
-            // Disable tokio's default piping so it doesn't touch stdin/stdout.
-            cmd.stdin(std::process::Stdio::null());
-            cmd.stdout(std::process::Stdio::null());
-            cmd.stderr(std::process::Stdio::null());
+            // Give docker the slave PTY as its stdin/stdout/stderr so it sees
+            // a real TTY.  Stdio::from(File) is safe and has the OS set up the
+            // fds in the child; the slave Files are consumed (and closed in the
+            // parent) when Command::spawn() returns.
+            cmd.stdin(Stdio::from(slave_file));
+            cmd.stdout(Stdio::from(slave_stdout));
+            cmd.stderr(Stdio::from(slave_stderr));
 
             let mut child = match cmd.spawn() {
                 Ok(c) => c,
                 Err(e) => {
-                    unsafe {
-                        libc::close(master_fd);
-                        libc::close(slave_fd);
-                    }
                     let msg = format!("exec: failed to spawn docker exec: {e}\n");
                     let mut es = exec_state.lock().await;
                     append_to_exec_buffer(&mut es, msg.as_bytes(), false);
@@ -1737,35 +1749,9 @@ impl MirageDaemonExec for MirageDaemon {
                 }
             };
 
-            // Close the slave end in the parent — only the child should hold it.
-            unsafe { libc::close(slave_fd) };
-
-            // Wrap the master fd for async I/O.
-            // Safety: master_fd is a valid, open fd that we own exclusively.
-            use std::os::unix::io::FromRawFd;
-            let master_file = unsafe { tokio::fs::File::from_raw_fd(master_fd) };
-            // dup the master fd so the read and write halves are independent
-            // tokio::fs::File objects.  A single File allows only one in-flight
-            // spawn_blocking at a time; sharing it via io::split causes the
-            // blocking PTY read to hold the exclusive state, starving writes.
-            let master_write_file = unsafe {
-                let dup_fd = libc::dup(master_fd);
-                if dup_fd < 0 {
-                    let msg = format!(
-                        "exec: dup(master_fd) failed: {}\n",
-                        std::io::Error::last_os_error()
-                    );
-                    let mut es = exec_state.lock().await;
-                    append_to_exec_buffer(&mut es, msg.as_bytes(), false);
-                    es.stdin_tx = None;
-                    es.exit_code = Some(-1);
-                    let _ = es.notify.send(());
-                    return;
-                }
-                tokio::fs::File::from_raw_fd(dup_fd)
-            };
-            let mut master_read = master_file;
-            let mut master_write = master_write_file;
+            // Wrap master halves for async I/O.
+            let mut master_read = tokio::fs::File::from_std(master_file);
+            let mut master_write = tokio::fs::File::from_std(master_write_file);
 
             // Pump stdin_rx → PTY master (→ slave stdin → docker → container).
             let stdin_task = tokio::spawn(async move {
