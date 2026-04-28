@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Idiomatic Rust types for the Mirage schema.
 
 pub mod common;

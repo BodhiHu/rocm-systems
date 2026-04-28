@@ -578,6 +578,8 @@ mod tests {
                 ipc: 0.0,
                 simulation_speed: 0.0,
                 active_contexts: 0,
+                phase: crate::common::SessionPhase::default(),
+                progress_message: None,
             })
         }
     }

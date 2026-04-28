@@ -750,12 +750,13 @@ dependencies = [
  "axum",
  "clap",
  "futures-util",
- "libc",
  "mirage_macros",
  "mirage_uapi",
+ "nix",
  "paste",
  "serde",
  "serde_json",
+ "temp-env",
  "thiserror",
  "tokio",
  "tracing",
@@ -1172,6 +1173,15 @@ name = "sync_wrapper"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
+
+[[package]]
+name = "temp-env"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45107136c2ddf8c4b87453c02294fd0adf41751796e81e8ba3f7fd951977ab57"
+dependencies = [
+ "once_cell",
+]
 
 [[package]]
 name = "thiserror"

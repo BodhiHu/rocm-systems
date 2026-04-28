@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Unix-socket remote transport for the Mirage [`Emulator`] trait.
 //!
 //! * [`RemoteEmulator`] is a client-side [`Emulator`] implementation that

@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 pub mod docker_cli;
 pub mod mock;
 

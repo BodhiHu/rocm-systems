@@ -9,7 +9,7 @@ paste = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }
-libc = { workspace = true }
+nix = { workspace = true }
 mirage_macros = { workspace = true }
 mirage_uapi = { workspace = true }
 serde_json = { workspace = true }
@@ -20,3 +20,4 @@ futures-util = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+temp-env = "0.2"

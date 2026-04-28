@@ -31,7 +31,7 @@ fn xdg_env(var: &str) -> Option<PathBuf> {
         .filter(|p| p.is_absolute())
 }
 
-fn fallback_runtime_dir(uid: libc::uid_t, run_root: &Path, tmp_root: &Path) -> PathBuf {
+fn fallback_runtime_dir(uid: u32, run_root: &Path, tmp_root: &Path) -> PathBuf {
     let run_user_dir = run_root.join(uid.to_string());
     if run_user_dir.is_dir() {
         return run_user_dir.join(APP_DIR);
@@ -51,8 +51,7 @@ pub fn runtime_dir() -> PathBuf {
         return dir.join(APP_DIR);
     }
     // Safe fallback: prefer the standard per-user runtime base, then /tmp.
-    // SAFETY: `getuid` is always safe to call; it cannot fail.
-    let uid = unsafe { libc::getuid() };
+    let uid = nix::unistd::getuid().as_raw();
     fallback_runtime_dir(uid, Path::new("/run/user"), Path::new("/tmp"))
 }
 
@@ -151,43 +150,43 @@ mod tests {
     #[test]
     fn socket_path_uses_xdg_runtime_dir() {
         let _g = env_lock();
-        // SAFETY: guarded by `env_lock`.
-        unsafe { env::set_var("XDG_RUNTIME_DIR", "/run/user/1000") };
-        assert_eq!(
-            socket_path(),
-            PathBuf::from("/run/user/1000/mirage/mirage.sock")
-        );
+        temp_env::with_var("XDG_RUNTIME_DIR", Some("/run/user/1000"), || {
+            assert_eq!(
+                socket_path(),
+                PathBuf::from("/run/user/1000/mirage/mirage.sock")
+            );
+        });
     }
 
     #[test]
     fn socket_path_falls_back_when_runtime_dir_missing() {
         let _g = env_lock();
-        // SAFETY: guarded by `env_lock`.
-        unsafe { env::remove_var("XDG_RUNTIME_DIR") };
-        let p = socket_path();
-        let uid = unsafe { libc::getuid() };
-        let run_user = PathBuf::from(format!("/run/user/{uid}/mirage/mirage.sock"));
-        let tmp_fallback = PathBuf::from(format!("/tmp/mirage-{uid}/mirage.sock"));
-        assert!(p == run_user || p == tmp_fallback);
+        temp_env::with_var("XDG_RUNTIME_DIR", None::<&str>, || {
+            let p = socket_path();
+            let uid = nix::unistd::getuid().as_raw();
+            let run_user = PathBuf::from(format!("/run/user/{uid}/mirage/mirage.sock"));
+            let tmp_fallback = PathBuf::from(format!("/tmp/mirage-{uid}/mirage.sock"));
+            assert!(p == run_user || p == tmp_fallback);
+        });
     }
 
     #[test]
     fn socket_path_ignores_relative_runtime_dir() {
         let _g = env_lock();
-        // SAFETY: guarded by `env_lock`.
-        unsafe { env::set_var("XDG_RUNTIME_DIR", "relative/path") };
-        let p = socket_path();
-        let uid = unsafe { libc::getuid() };
-        let run_user = PathBuf::from(format!("/run/user/{uid}/mirage/mirage.sock"));
-        let tmp_fallback = PathBuf::from(format!("/tmp/mirage-{uid}/mirage.sock"));
-        assert!(p == run_user || p == tmp_fallback);
+        temp_env::with_var("XDG_RUNTIME_DIR", Some("relative/path"), || {
+            let p = socket_path();
+            let uid = nix::unistd::getuid().as_raw();
+            let run_user = PathBuf::from(format!("/run/user/{uid}/mirage/mirage.sock"));
+            let tmp_fallback = PathBuf::from(format!("/tmp/mirage-{uid}/mirage.sock"));
+            assert!(p == run_user || p == tmp_fallback);
+        });
     }
 
     #[test]
     fn runtime_dir_prefers_run_user_when_available() {
         let run_root = unique_temp_dir("run_root");
         let tmp_root = unique_temp_dir("tmp_root");
-        let uid: libc::uid_t = 4242;
+        let uid: u32 = 4242;
         let run_user_dir = run_root.join(uid.to_string());
 
         fs::create_dir_all(&run_user_dir).unwrap();
@@ -205,7 +204,7 @@ mod tests {
     fn runtime_dir_falls_back_to_tmp_when_run_user_missing() {
         let run_root = unique_temp_dir("run_root_missing");
         let tmp_root = unique_temp_dir("tmp_root_missing");
-        let uid: libc::uid_t = 5252;
+        let uid: u32 = 5252;
 
         assert_eq!(
             fallback_runtime_dir(uid, &run_root, &tmp_root),
@@ -219,25 +218,25 @@ mod tests {
     #[test]
     fn config_path_uses_xdg_config_home() {
         let _g = env_lock();
-        // SAFETY: guarded by `env_lock`.
-        unsafe { env::set_var("XDG_CONFIG_HOME", "/custom/config") };
-        assert_eq!(
-            config_path(),
-            PathBuf::from("/custom/config/mirage/config.mcfg")
-        );
+        temp_env::with_var("XDG_CONFIG_HOME", Some("/custom/config"), || {
+            assert_eq!(
+                config_path(),
+                PathBuf::from("/custom/config/mirage/config.mcfg")
+            );
+        });
     }
 
     #[test]
     fn config_path_falls_back_to_home() {
         let _g = env_lock();
-        // SAFETY: guarded by `env_lock`.
-        unsafe {
-            env::remove_var("XDG_CONFIG_HOME");
-            env::set_var("HOME", "/home/tester");
-        }
-        assert_eq!(
-            config_path(),
-            PathBuf::from("/home/tester/.config/mirage/config.mcfg"),
+        temp_env::with_vars(
+            vec![("XDG_CONFIG_HOME", None), ("HOME", Some("/home/tester"))],
+            || {
+                assert_eq!(
+                    config_path(),
+                    PathBuf::from("/home/tester/.config/mirage/config.mcfg"),
+                );
+            },
         );
     }
 }

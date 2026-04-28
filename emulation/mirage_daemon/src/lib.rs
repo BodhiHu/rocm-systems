@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;

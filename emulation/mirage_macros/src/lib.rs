@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use std::collections::BTreeMap;
 
 use proc_macro::TokenStream;
