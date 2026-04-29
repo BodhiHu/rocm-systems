@@ -156,7 +156,11 @@ class AMDSMICommands:
                 )
                 exit_flag = True
 
-        if self.helpers.is_ainic_initialized() or self.helpers.is_brcm_nic_initialized():
+        if (
+            self.helpers.is_ainic_initialized()
+            or self.helpers.is_brcm_nic_initialized()
+            or self.helpers.is_brcm_switch_initialized()
+        ):
             try:
                 self.device_handles_brcm_nics = amdsmi_interface.get_nic_handles()
                 self.device_handles_ainics = amdsmi_interface.get_ainic_handles()
@@ -6606,7 +6610,12 @@ class AMDSMICommands:
         niccount = 0
         switchcount = 0
 
-        if args.nic == None:
+        # The topology parser conditionally registers --nic / --switch based on
+        # is_brcm_nic_initialized() / is_brcm_switch_initialized(). On hosts
+        # where one is gated off, the corresponding argparse attribute is
+        # absent on the namespace; getattr() guards the unconditional access
+        # below to prevent AttributeError on single-subsystem hosts.
+        if getattr(args, "nic", None) is None:
             args.nic = self.device_handles_brcm_nics
         if not isinstance(args.nic, list):
             args.nic = [args.nic]
@@ -6614,7 +6623,7 @@ class AMDSMICommands:
             is_single_nic_request = True
         niccount = len(args.nic)
 
-        if args.switch is None:
+        if getattr(args, "switch", None) is None:
             args.switch = self.device_handles_switchs
         if not isinstance(args.switch, list):
             args.switch = [args.switch]
@@ -6945,11 +6954,11 @@ class AMDSMICommands:
                 args,
                 multiple_devices,
                 args.gpu,
-                args.nic,
+                getattr(args, "nic", None),
                 args.nic_topo,
                 args.nic_switch,
                 multiple_device_enabled,
-                args.switch,
+                getattr(args, "switch", None),
             )
             return
 
