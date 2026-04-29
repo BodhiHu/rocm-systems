@@ -4,6 +4,15 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
 
 ***All information listed below is for reference and subject to change.***
 
+## amd_smi_lib for ROCm 7.14.0
+
+### Resolved Issues
+
+- **Fixed manufacturer name display for AMD GPUs**.  
+  - Updated `amdsmi_get_gpu_board_info()` to correctly detect vendor ID `0x1002` and display
+    "Advanced Micro Devices Inc. [AMD/ATI]" instead of the raw ID.
+  - Fixes `amd-smi static --board` output.
+
 ## amd_smi_lib for ROCm 7.13.0
 
 ### Changed
