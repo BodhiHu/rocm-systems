@@ -289,39 +289,6 @@ void ComputeUnitCore::issue_local_mem(const std::array<uint64_t, 64> &addrs, uin
 bool ComputeUnitCore::step() {
   tick_pipelines();
 
-  // Periodic heartbeat: every 2M steps, show active WGs per CU with dispatch ID.
-  {
-    static thread_local uint64_t step_count = 0;
-    if ((++step_count % 2000000) == 0) {
-      std::string dump;
-      for (auto &w : wfs_) {
-        if (w->sgpr_alloc().count == 0)
-          continue;
-        const char *st = "?";
-        switch (w->state()) {
-        case WfState::HALTED:
-          st = "H";
-          break;
-        case WfState::RUNNING:
-          st = "R";
-          break;
-        case WfState::WAITCNT:
-          st = "W";
-          break;
-        case WfState::BARRIER:
-          st = "B";
-          break;
-        case WfState::ENDING:
-          st = "E";
-          break;
-        }
-        dump += std::format("wf{}[d={} wg={} {}] ", w->wf_id(), w->dispatch_id(), w->wg_id(), st);
-      }
-      if (!dump.empty())
-        std::cerr << std::format("[heartbeat] {} {}\n", this->name(), dump) << std::flush;
-    }
-  }
-
   if (!has_active_wfs()) {
     // Final pipeline drain: complete deferred load writebacks for wavefronts
     // that halted on the previous step (after tick_pipelines ran but before

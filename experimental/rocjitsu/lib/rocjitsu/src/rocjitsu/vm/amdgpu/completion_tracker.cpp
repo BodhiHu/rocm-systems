@@ -7,7 +7,6 @@
 
 #include <atomic>
 #include <cstring>
-#include <format>
 
 namespace rocjitsu {
 namespace amdgpu {
@@ -76,9 +75,6 @@ bool CompletionTracker::all_complete(const std::vector<HwQueueState> &queues) co
 }
 
 void CompletionTracker::fire_signal(const DispatchEntry &entry) {
-  std::cerr << std::format("[rj] signal d={} sig={:#x}\n", entry.dispatch_id,
-                           entry.completion_signal)
-            << std::flush;
   constexpr uint32_t SIG_VAL_OFF = 8;
   constexpr uint32_t MAILBOX_PTR_OFF = 16;
   constexpr uint32_t EVENT_ID_OFF = 24;
