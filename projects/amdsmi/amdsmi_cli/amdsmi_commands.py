@@ -12162,7 +12162,6 @@ class AMDSMICommands:
         gpu=None,
         cper=None,
         afid=None,
-        decode=None,
         severity=None,
         folder=None,
         file_limit=None,
@@ -12189,8 +12188,6 @@ class AMDSMICommands:
             args.afid = afid
         if severity:
             args.severity = severity
-        if decode:
-            args.decode = decode
         if folder:
             args.folder = folder
         if file_limit:

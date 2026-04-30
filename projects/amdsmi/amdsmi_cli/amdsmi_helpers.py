@@ -34,7 +34,6 @@ import errno
 import pwd
 import stat
 from typing import Tuple, Optional, Union, TYPE_CHECKING
-import tempfile
 
 from enum import Enum
 from pathlib import Path
@@ -2670,35 +2669,6 @@ class AMDSMIHelpers:
             args.cursor[gpu_idx] = new_cursor
             if len(entries) == 0:
                 break
-
-            # Decode mode: write CPER files from an externally-provided CPER record
-            # and skip the normal output dispatch to avoid double-processing.
-            if getattr(args, "decode", False) and getattr(args, "cper_file", None):
-                decode_folder = args.folder
-                if decode_folder:
-                    cper_rows = self.dump_cper_entries(
-                        decode_folder,
-                        entries,
-                        cper_data,
-                        device_handle,
-                        args.file_limit,
-                        logger=logger,
-                        emit=emit_json,
-                    )
-                else:
-                    with tempfile.TemporaryDirectory() as tmp_dir:
-                        cper_rows = self.dump_cper_entries(
-                            tmp_dir,
-                            entries,
-                            cper_data,
-                            device_handle,
-                            args.file_limit,
-                            cper_file=os.path.basename(args.cper_file),
-                            logger=logger,
-                            emit=emit_json,
-                        )
-                collected_json_rows.extend(cper_rows)
-                continue
 
             self._emit_cper_output(
                 entries, cper_data, device_handle, args, logger, collected_json_rows, emit_json
