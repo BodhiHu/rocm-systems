@@ -1238,6 +1238,38 @@ inline void execute_s_floor_f32_sop1([[maybe_unused]] Inst &inst, [[maybe_unused
 }
 
 template <typename Inst>
+inline void execute_s_getreg_b32_sopk([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
+  uint16_t hwreg = inst.simm16.encoding_value_;
+  uint32_t reg_id = hwreg & 0x3Fu;
+  uint32_t offset = (hwreg >> 6) & 0x1Fu;
+  uint32_t size = ((hwreg >> 11) & 0x1Fu) + 1;
+  uint32_t reg_val = 0;
+  switch (reg_id) {
+  case 1:
+    reg_val = wf.status_raw();
+    break;
+  case 4:
+    reg_val = static_cast<uint32_t>(wf.cu().id());
+    break;
+  case 5:
+    reg_val = static_cast<uint32_t>(wf.cu().id() >> 16);
+    break;
+  case 6:
+    reg_val = (wf.sgpr_alloc().count & 0xFFu) | ((wf.sgpr_alloc().base & 0xFFu) << 8);
+    break;
+  case 7:
+    reg_val = (wf.vgpr_alloc().count & 0xFFu) | ((wf.vgpr_alloc().base & 0xFFu) << 8);
+    break;
+  default:
+    break;
+  }
+  if (offset + size > 32)
+    size = 32 - offset;
+  uint32_t mask = (size == 32) ? 0xFFFFFFFFu : ((1u << size) - 1u);
+  inst.sdst.write_scalar(wf, (reg_val >> offset) & mask);
+}
+
+template <typename Inst>
 inline void execute_s_gl1_inv_smem([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
   wf.cu().l1_vector().invalidate_all();
 }
@@ -1839,6 +1871,52 @@ inline void execute_s_setkill_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]]
 
 template <typename Inst>
 inline void execute_s_setprio_sopp([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {}
+
+template <typename Inst>
+inline void execute_s_setreg_b32_sopk([[maybe_unused]] Inst &inst, [[maybe_unused]] Wavefront &wf) {
+  uint16_t hwreg = inst.simm16.encoding_value_;
+  uint32_t reg_id = hwreg & 0x3Fu;
+  uint32_t offset = (hwreg >> 6) & 0x1Fu;
+  uint32_t size = ((hwreg >> 11) & 0x1Fu) + 1;
+  if (offset + size > 32)
+    size = 32 - offset;
+  uint32_t mask = (size == 32) ? 0xFFFFFFFFu : ((1u << size) - 1u);
+  uint32_t src = inst.sdst.read_scalar(wf);
+  switch (reg_id) {
+  case 1: {
+    uint32_t s = wf.status_raw();
+    s = (s & ~(mask << offset)) | ((src & mask) << offset);
+    wf.set_status_raw(s);
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+template <typename Inst>
+inline void execute_s_setreg_imm32_b32_sopk([[maybe_unused]] Inst &inst,
+                                            [[maybe_unused]] Wavefront &wf) {
+  uint16_t hwreg = inst.simm16.encoding_value_;
+  uint32_t reg_id = hwreg & 0x3Fu;
+  uint32_t offset = (hwreg >> 6) & 0x1Fu;
+  uint32_t size = ((hwreg >> 11) & 0x1Fu) + 1;
+  if (offset + size > 32)
+    size = 32 - offset;
+  uint32_t mask = (size == 32) ? 0xFFFFFFFFu : ((1u << size) - 1u);
+  uint32_t src;
+  std::memcpy(&src, reinterpret_cast<const char *>(&inst.inst_) + sizeof(inst.inst_), sizeof(src));
+  switch (reg_id) {
+  case 1: {
+    uint32_t s = wf.status_raw();
+    s = (s & ~(mask << offset)) | ((src & mask) << offset);
+    wf.set_status_raw(s);
+    break;
+  }
+  default:
+    break;
+  }
+}
 
 template <typename Inst>
 inline void execute_s_sext_i32_i16_sop1([[maybe_unused]] Inst &inst,
