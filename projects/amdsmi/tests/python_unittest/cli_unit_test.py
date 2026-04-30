@@ -753,12 +753,19 @@ class TestAmdSmiCli(unittest.TestCase):
         # Find all available command line args
         cmd_args = []
         found = False
+        subcommand_indent = None
         for line in lines:
             if found:
                 if not line:
                     break
-                items = line.split()
-                cmd_args.append(items[0])
+                leading = len(line) - len(line.lstrip())
+                # Record the indentation of the first subcommand line and only
+                # accept lines at that same level (skip wrapped description text)
+                if subcommand_indent is None:
+                    subcommand_indent = leading
+                if leading == subcommand_indent:
+                    items = line.split()
+                    cmd_args.append(items[0])
                 continue
             if "Descriptions" in line:
                 found = True
