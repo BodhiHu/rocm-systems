@@ -1,24 +1,5 @@
-// MIT License
-//
-// Copyright (c) 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+// Copyright (c) Advanced Micro Devices, Inc.
+// SPDX-License-Identifier: MIT
 
 #include "function_signature.hpp"
 #include "fwd.hpp"
@@ -1009,7 +990,7 @@ filter_modules(std::vector<module_t*>* app_modules)
 //  no modules are provided.
 //
 
-std::vector<procedure_t*>*
+std::vector<procedure_t*>
 get_procedures(image_t* app_image, std::vector<module_t*>* app_modules,
                bool include_uninstrumentable)
 {
@@ -1023,7 +1004,8 @@ get_procedures(image_t* app_image, std::vector<module_t*>* app_modules,
     {
         verbprintf(2, "No modules found, falling back to "
                       "app_image->getProcedures()...\n");
-        auto* _procs = app_image->getProcedures(include_uninstrumentable);
+        std::unique_ptr<std::vector<procedure_t*>> _procs{ app_image->getProcedures(
+            include_uninstrumentable) };
 
         _pr.stop();
         _wc.stop();
@@ -1034,17 +1016,19 @@ get_procedures(image_t* app_image, std::vector<module_t*>* app_modules,
                    _procs ? _procs->size() : 0, _wc.get(), _wc.display_unit().c_str(),
                    _pr.get(), _pr.display_unit().c_str());
 
-        return _procs;
+        return _procs ? std::vector<procedure_t*>{ _procs->begin(), _procs->end() }
+                      : std::vector<procedure_t*>{};
     }
 
-    auto* proclist = new std::vector<procedure_t*>{};
+    std::vector<procedure_t*> proclist{};
 
     for(auto* mod : *app_modules)
     {
         if(!mod) continue;
-        auto* procs = mod->getProcedures(include_uninstrumentable);
+        std::unique_ptr<std::vector<procedure_t*>> procs{ mod->getProcedures(
+            include_uninstrumentable) };
         if(procs && !procs->empty())
-            proclist->insert(proclist->end(), procs->begin(), procs->end());
+            proclist.insert(proclist.end(), procs->begin(), procs->end());
     }
 
     _pr.stop();
@@ -1052,14 +1036,8 @@ get_procedures(image_t* app_image, std::vector<module_t*>* app_modules,
     verbprintf(0,
                "Fetched procedures from %zu modules: "
                "%zu procedures found (%.3f %s, %.3f %s)\n",
-               app_modules->size(), proclist->size(), _wc.get(),
+               app_modules->size(), proclist.size(), _wc.get(),
                _wc.display_unit().c_str(), _pr.get(), _pr.display_unit().c_str());
-
-    if(proclist->empty())
-    {
-        delete proclist;
-        return nullptr;
-    }
 
     return proclist;
 }

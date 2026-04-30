@@ -1493,7 +1493,7 @@ class AMDSMIParser(argparse.ArgumentParser):
                             \nIn virtualization environments, it can also list VFs associated to each\
                             \nGPU with some basic information for each VF."
         enumeration_help = "Enumeration mapping to other features.\
-                            \n    Includes CARD, RENDER, HSA_ID, HIP_ID, and HIP_UUID."
+                            \n    Includes CARD, RENDER, HSA_ID, HIP_ID, HIP_UUID, and OAM_ID"
 
         # Create list subparser
         list_parser = subparsers.add_parser(
@@ -1504,7 +1504,7 @@ class AMDSMIParser(argparse.ArgumentParser):
         list_parser.set_defaults(func=func)
 
         # Create -e subparser
-        list_parser.add_argument("-e", action="store_true", help=enumeration_help)
+        list_parser.add_argument("-e", "--enumeration", action="store_true", help=enumeration_help)
 
         # Add Universal Arguments
         self._add_device_arguments(list_parser, required=False)
@@ -1621,7 +1621,10 @@ class AMDSMIParser(argparse.ArgumentParser):
                 "-p", "--partition", action="store_true", required=False, help=partition_help
             )
 
-            mem_carveout_help = "Display VRAM carveout memory options and current setting"
+            mem_carveout_help = (
+                "Display VRAM carveout memory options and current setting."
+                "\n\tOnly supported on some APUs."
+            )
             static_parser.add_argument(
                 "-m", "--mem-carveout", action="store_true", required=False, help=mem_carveout_help
             )
@@ -2624,7 +2627,11 @@ class AMDSMIParser(argparse.ArgumentParser):
             )
 
             if self.helpers.is_baremetal():
-                set_mem_carveout_help = "Set VRAM carveout size by option index.\n\tUse `amd-smi static --mem-carveout` to see available options."
+                set_mem_carveout_help = (
+                    "Set VRAM carveout size by option index."
+                    "\n\tUse `amd-smi static --mem-carveout` to see available options."
+                    "\n\tOnly supported on some APUs; a reboot is required after setting."
+                )
                 set_value_exclusive_group.add_argument(
                     "-m",
                     "--mem-carveout",
