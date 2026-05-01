@@ -208,7 +208,7 @@ void QueueValidation::QueueValidationForInvalidDimension(hsa_agent_t cpuAgent,
 
   hsa_queue_t *queue[kMaxQueue];  // command queue
   uint32_t ii;
-  test_validation_data user_data[kMaxQueue];
+  test_validation_data* user_data = new test_validation_data[kMaxQueue];
   for (ii = 0; ii < kMaxQueue; ++ii) {
     // set callback flag to false if callback called then it will change to true
     user_data[ii].cb_triggered = false;
@@ -266,6 +266,7 @@ void QueueValidation::QueueValidationForInvalidDimension(hsa_agent_t cpuAgent,
     if (queue[ii]) { hsa_queue_destroy(queue[ii]); }
   }
 
+  delete[] user_data;
   clear_code_object();
 }
 
@@ -292,7 +293,7 @@ void QueueValidation::QueueValidationInvalidGroupMemory(hsa_agent_t cpuAgent,
   queue_max = (queue_max < kMaxQueueSizeForAgent) ? queue_max: kMaxQueueSizeForAgent;
 
   hsa_queue_t *queue[kMaxQueue];  // command queue
-  test_validation_data user_data[kMaxQueue];
+  test_validation_data* user_data = new test_validation_data[kMaxQueue];
 
   uint32_t ii;
   for (ii = 0; ii < kMaxQueue; ++ii) {
@@ -353,6 +354,7 @@ void QueueValidation::QueueValidationInvalidGroupMemory(hsa_agent_t cpuAgent,
     if (queue[ii]) { hsa_queue_destroy(queue[ii]); }
   }
 
+  delete[] user_data;
   clear_code_object();
 }
 
@@ -379,7 +381,7 @@ void QueueValidation::QueueValidationForInvalidKernelObject(hsa_agent_t cpuAgent
   queue_max = (queue_max < kMaxQueueSizeForAgent) ? queue_max: kMaxQueueSizeForAgent;
 
   hsa_queue_t *queue[kMaxQueue];  // command queue
-  test_validation_data user_data[kMaxQueue];
+  test_validation_data* user_data = new test_validation_data[kMaxQueue];
   uint32_t ii;
   for (ii = 0; ii < kMaxQueue; ++ii) {
     // set callback flag to false if callback called then it will change to true
@@ -438,6 +440,7 @@ void QueueValidation::QueueValidationForInvalidKernelObject(hsa_agent_t cpuAgent
     if (queue[ii]) { hsa_queue_destroy(queue[ii]); }
   }
 
+  delete[] user_data;
   clear_code_object();
 }
 
@@ -464,7 +467,7 @@ void QueueValidation::QueueValidationForInvalidPacket(hsa_agent_t cpuAgent,
 
   hsa_queue_t *queue[kMaxQueue];  // command queue
   uint32_t ii;
-  test_validation_data user_data[kMaxQueue];
+  test_validation_data* user_data = new test_validation_data[kMaxQueue];
   for (ii = 0; ii < kMaxQueue; ++ii) {
     // set callback flag to false if callback called then it will change to true
     user_data[ii].cb_triggered = false;
@@ -517,6 +520,7 @@ void QueueValidation::QueueValidationForInvalidPacket(hsa_agent_t cpuAgent,
     if (queue[ii]) { hsa_queue_destroy(queue[ii]); }
   }
 
+  delete[] user_data;
   clear_code_object();
 }
 
@@ -542,7 +546,7 @@ void QueueValidation::QueueValidationForInvalidWorkGroupSize(hsa_agent_t cpuAgen
   queue_max = (queue_max < kMaxQueueSizeForAgent) ? queue_max: kMaxQueueSizeForAgent;
 
   hsa_queue_t *queue[kMaxQueue];  // command queue
-  test_validation_data user_data[kMaxQueue][3];
+  test_validation_data (*user_data)[3] = new test_validation_data[kMaxQueue][3];
   uint32_t ii;
   for (ii = 0; ii < kMaxQueue; ++ii) {
     uint32_t jj;
@@ -609,6 +613,7 @@ void QueueValidation::QueueValidationForInvalidWorkGroupSize(hsa_agent_t cpuAgen
     }
   }
 
+  delete[] user_data;
   clear_code_object();
 }
 
