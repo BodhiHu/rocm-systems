@@ -12233,9 +12233,16 @@ class AMDSMICommands:
 
             results = []
             for cper_path in cper_paths:
+                # Skip symlinks: a planted symlink (e.g. evil.cper -> /etc/shadow)
+                # would otherwise be followed by read_bytes() in cper_dump_afids,
+                # reading arbitrary files into memory.
+                if cper_path.is_symlink():
+                    logging.warning("Skipping symlink: %s", cper_path)
+                    continue
                 try:
                     afids = self.helpers.cper_dump_afids(cper_path)
-                except Exception:
+                except Exception as e:
+                    logging.debug("Failed to decode AFIDs from %s: %s", cper_path, e)
                     afids = []
                 results.append({"cper_file": str(cper_path), "afids": afids})
 
