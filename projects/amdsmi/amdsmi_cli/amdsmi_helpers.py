@@ -2288,13 +2288,21 @@ class AMDSMIHelpers:
                 except Exception as e:
                     logging.debug(f"Failed to write JSON file {json_path}: {e}")
 
-                # Collect data for printing
+                # Collect data for printing. Carry the in-memory bytes alongside
+                # the path so the AFID decode loop below does not have to read
+                # the file we just wrote back from disk.
                 timestamp = entry.get("timestamp", "unknown")
                 gpu_id = "-"
                 if not isinstance(device_handle, Path):
                     gpu_id = self.get_gpu_id_from_device_handle(device_handle)
                 severity = self._severity_as_string(error_severity, notify_type, False)
-                output_rows[cper_path] = [timestamp, gpu_id, severity, cper_name]
+                output_rows[cper_path] = [
+                    timestamp,
+                    gpu_id,
+                    severity,
+                    cper_name,
+                    cper_data[entry_index]["bytes"],
+                ]
                 cper_counter[0] += 1
 
             # Batch deletion if file limit is exceeded (AFTER writing ALL new files)
@@ -2315,11 +2323,11 @@ class AMDSMIHelpers:
             if json_output:
                 json_rows = []
                 for cper_path, row in output_rows.items():
-                    timestamp, gpu_id, severity, fname = row
+                    timestamp, gpu_id, severity, fname, raw_bytes = row
                     cper_path_str = str(cper_path)
                     json_path_str = str(Path(cper_path).with_suffix(".json"))
                     try:
-                        afids = self.cper_dump_afids(cper_path)
+                        afids = self.cper_dump_afids(raw_bytes)
                     except Exception as e:
                         afids = []
                         logging.debug(f"Failed to fetch AFIDs for {cper_path}: {e}")
@@ -2338,9 +2346,9 @@ class AMDSMIHelpers:
                 return json_rows
             else:
                 for cper_path, row in output_rows.items():
-                    timestamp, gpu_id, severity, fname = row
+                    timestamp, gpu_id, severity, fname, raw_bytes = row
                     try:
-                        afids = self.cper_dump_afids(cper_path)
+                        afids = self.cper_dump_afids(raw_bytes)
                         afids_str = " ".join(map(str, afids))
                     except Exception as e:
                         afids_str = "Error fetching AFIDs"
