@@ -88,6 +88,54 @@ amd-smi ras --help
 ::::
 :::::
 
+## CLI examples
+
+The following sections summarize the `amd-smi` flags that drive each RAS feature.
+Global modifiers (`--json`, `--csv`, `--file`, `--gpu`, etc.) are documented in
+[`amd-smi --help`](/how-to/amdsmi-cli-tool.md) and apply uniformly; the tables
+below focus on the flags specific to ECC, CPER, and AFID.
+
+### ECC
+
+ECC counters are surfaced through `amd-smi metric` (one-shot snapshot) and
+`amd-smi monitor` (live tabular stream). There is no dedicated `amd-smi ecc`
+subcommand.
+
+| Command | Result |
+|---|---|
+| `amd-smi metric -e` *(alias `--ecc`)* | Print the per-GPU total correctable / uncorrectable / deferred ECC error counts. |
+| `amd-smi metric -k` *(alias `--ecc-blocks`)* | Print the ECC error counts broken down per IP block (UMC, SDMA, GFX, MMHUB, etc.). |
+| `amd-smi metric -e -k` | Combine the totals and the per-block breakdown in a single snapshot. |
+| `amd-smi monitor -e` *(alias `--ecc`)* | Continuously monitor ECC single-bit (correctable), double-bit (uncorrectable), and PCIe replay error counts in a watch-style table. |
+
+### CPER
+
+CPER retrieval is exposed through `amd-smi ras --cper`. Without `--folder` only
+a summary table is printed; with `--folder` each entry is also dumped as a
+matching `.cper` (raw binary) and `.json` (decoded metadata) pair.
+
+| Command | Result |
+|---|---|
+| `amd-smi ras --cper` | List current CPER entries from the kernel driver as a summary table (timestamp, GPU ID, severity). No files written; warns that `--folder` is required to dump them. |
+| `amd-smi ras --cper --folder <DIR>` | Same listing, plus dump each entry to `<DIR>` as `<severity>-<n>.cper` and `<severity>-<n>.json`; the table gains `file_name` and `list of afids` columns. |
+| `amd-smi ras --cper --severity <SEV[,SEV…]>` | Filter by severity. Accepted values: `nonfatal-uncorrected`, `nonfatal-corrected`, `fatal`, `all`. Combine with any other CPER flag. |
+| `amd-smi ras --cper --folder <DIR> --file-limit <N>` | After dumping, prune the oldest `.cper`/`.json` pairs in `<DIR>` so at most `N` `.cper` files remain. |
+| `amd-smi ras --cper --follow` | Continuously poll for new CPER entries until interrupted with CTRL+C. Prints `Press CTRL + C to stop.` once at startup. Combine with `--folder` to also dump new entries as they arrive. |
+
+### AFID
+
+AFID extraction is a pure offline operation: it parses a CPER record file with
+`amdsmi_get_afids_from_cper()` and prints the AFIDs found in it. No driver or
+GPU access is required, so the source CPER may have been captured on another
+system.
+
+| Command | Result |
+|---|---|
+| `amd-smi ras --afid --cper-file <PATH>` | Parse the single CPER record at `<PATH>` and print the space-separated list of AFIDs encoded in it. Output is empty when the record contains no AFID payload. |
+
+`<PATH>` must be an existing, non-empty regular file (directories are
+rejected). `--afid` and `--cper` are mutually exclusive.
+
 ## Further reading
 
 - [AMD Field ID](https://docs.amd.com/r/en-US/AMD_Field_ID_70122_v1.0/Introduction)
