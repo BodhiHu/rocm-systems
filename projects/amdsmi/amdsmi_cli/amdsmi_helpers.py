@@ -2623,9 +2623,7 @@ class AMDSMIHelpers:
                         "Error accessing CPER files. This command requires CPER to be enabled."
                     ) from e
                 if e.get_error_code() == amdsmi_interface.amdsmi_wrapper.AMDSMI_STATUS_FILE_ERROR:
-                    raise FileExistsError(
-                        "Error opening CPER file. Unable to read CPER File"
-                    ) from e
+                    raise OSError("Error opening CPER file. Unable to read CPER File") from e
                 else:
                     logging.debug(f"Cannot retrieve CPER entries: {e}")
                     break
