@@ -13,6 +13,11 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
 
 ### Added
 
+- **Added `--folder` support to `amd-smi ras --afid`**.
+  - `amd-smi ras --afid --folder <DIR>` now decodes every `*.cper` in an existing directory and prints a `file_name | list of afids` table (or a JSON array under `--json`).
+  - `--cper-file` and `--folder` are mutually exclusive under `--afid`; exactly one must be supplied.
+  - Unlike the `--cper --folder` write path, the directory must already exist and contain at least one `.cper` file (it is not auto-created for the AFID read path).
+
 - **Added APU metrics support (table versions 2.4 and 3.0)**.  
   - New `amdsmi_apu_metrics_t` struct accessible via `amdsmi_gpu_metrics_t.apu_metrics` pointer (non-null when APU-specific metrics are available).
   - **v2.4 metrics**:

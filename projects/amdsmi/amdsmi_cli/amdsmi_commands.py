@@ -12200,6 +12200,17 @@ class AMDSMICommands:
             args.gpu = self.device_handles
 
         if args.afid:
+            command = " ".join(sys.argv[1:])
+            if args.cper_file and args.folder:
+                message = f"Command '{command}' accepts only one of '--cper-file' or '--folder'."
+                raise AmdSmiInvalidCommandException(command, self.logger.format, message)
+            if not args.cper_file and not args.folder:
+                message = (
+                    f"Command '{command}' requires '--cper-file' or '--folder'."
+                    " Run '--help' for more info."
+                )
+                raise AmdSmiInvalidCommandException(command, self.logger.format, message)
+
             if args.cper_file:
                 afids = self.helpers.cper_dump_afids(args.cper_file)
                 if self.logger.is_json_format():
@@ -12209,10 +12220,35 @@ class AMDSMICommands:
                 else:
                     print(" ".join(map(str, afids)))
                 return
-            else:
-                command = " ".join(sys.argv[1:])
-                message = f"Command '{command}' requires '--cper-file'. Run '--help' for more info."
+
+            # --afid --folder: decode every *.cper in an existing directory.
+            folder = Path(args.folder)
+            cper_paths = sorted(folder.glob("*.cper"))
+            if not cper_paths:
+                message = (
+                    f"Folder '{folder}' contains no '.cper' files."
+                    " '--afid --folder' requires a folder of pre-existing CPER records."
+                )
                 raise AmdSmiInvalidCommandException(command, self.logger.format, message)
+
+            results = []
+            for cper_path in cper_paths:
+                try:
+                    afids = self.helpers.cper_dump_afids(cper_path)
+                except Exception:
+                    afids = []
+                results.append({"cper_file": str(cper_path), "afids": afids})
+
+            if self.logger.is_json_format():
+                self.logger.output = results
+                self.logger.print_output()
+            else:
+                print(f"{'file_name':<32} list of afids")
+                for entry in results:
+                    fname = Path(entry["cper_file"]).name
+                    afids_str = " ".join(map(str, entry["afids"]))
+                    print(f"{fname:<32} {afids_str}")
+            return
 
         if not self.group_check_printed:
             self.helpers.check_required_groups()
