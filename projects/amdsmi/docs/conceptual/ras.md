@@ -143,23 +143,6 @@ GPU: 0
 ```
 ::::
 
-::::{tab-item} Combined
-Combine totals and the per-block breakdown in a single snapshot.
-
-```shell-session
-~$ amd-smi metric -e -k --gpu 0
-GPU: 0
-    ECC:
-        TOTAL_CORRECTABLE_COUNT: 0
-        TOTAL_UNCORRECTABLE_COUNT: 0
-        ...
-    ECC_BLOCKS:
-        UMC:
-            CORRECTABLE_COUNT: 0
-            ...
-```
-::::
-
 ::::{tab-item} Live monitor
 Continuously monitor ECC single-bit (correctable), double-bit (uncorrectable),
 and PCIe replay error counts in a watch-style table. Press CTRL+C to stop.
