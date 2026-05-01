@@ -12201,13 +12201,11 @@ class AMDSMICommands:
 
         if args.afid:
             command = " ".join(sys.argv[1:])
-            if args.cper_file and args.folder:
-                message = f"Command '{command}' accepts only one of '--cper-file' or '--folder'."
-                raise AmdSmiInvalidCommandException(command, self.logger.format, message)
-            if not args.cper_file and not args.folder:
+            # Require exactly one of --cper-file / --folder under --afid.
+            if bool(args.cper_file) == bool(args.folder):
                 message = (
-                    f"Command '{command}' requires '--cper-file' or '--folder'."
-                    " Run '--help' for more info."
+                    f"Command '{command}' requires exactly one of"
+                    " '--cper-file' or '--folder'. Run '--help' for more info."
                 )
                 raise AmdSmiInvalidCommandException(command, self.logger.format, message)
 
@@ -12221,8 +12219,14 @@ class AMDSMICommands:
                     print(" ".join(map(str, afids)))
                 return
 
-            # --afid --folder: decode every *.cper in an existing directory.
+            # --afid --folder: read-only path, folder must already exist.
             folder = Path(args.folder)
+            if not folder.exists() or not folder.is_dir():
+                message = (
+                    f"Folder '{folder}' does not exist or is not a directory."
+                    " '--afid --folder' requires a folder of pre-existing CPER records."
+                )
+                raise AmdSmiInvalidCommandException(command, self.logger.format, message)
             cper_paths = sorted(folder.glob("*.cper"))
             if not cper_paths:
                 message = (

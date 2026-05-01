@@ -627,33 +627,6 @@ class AMDSMIParser(argparse.ArgumentParser):
 
         return CPUSvi3VrControllerTempArgs
 
-    def _check_folder_path(self):
-        """Argument action validator:
-        Returns a path to folder from the folder path provided.
-        If the path doesn't exist create it.
-        """
-
-        class CheckOutputFilePath(argparse.Action):
-            outputformat = self.helpers.get_output_format()
-
-            # Checks the values
-            def __call__(self, parser, args, values, option_string=None):
-                path = Path(values)
-                try:
-                    path.mkdir(parents=True, exist_ok=True)
-                except OSError as e:
-                    raise amdsmi_cli_exceptions.AmdSmiInvalidFilePathException(
-                        path, CheckOutputFilePath.outputformat, f"Unable to make '{path}' a folder."
-                    )
-                if not path.exists():
-                    raise amdsmi_cli_exceptions.AmdSmiInvalidFilePathException(
-                        path, CheckOutputFilePath.outputformat
-                    )
-                elif path.is_dir():
-                    setattr(args, self.dest, path)
-
-        return CheckOutputFilePath
-
     def _check_output_file_path(self):
         """Argument action validator:
         Returns a path to a file from the output file path provided.
@@ -3219,9 +3192,7 @@ class AMDSMIParser(argparse.ArgumentParser):
             choices=severity_choices,
             metavar="SEVERITY",
         )
-        cper_group.add_argument(
-            "--folder", type=str, action=self._check_folder_path(), help=folder_help
-        )
+        cper_group.add_argument("--folder", type=Path, help=folder_help)
         cper_group.add_argument(
             "--file-limit", type=self._positive_int, action="store", help=file_limit_help
         )
