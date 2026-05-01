@@ -169,6 +169,17 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
     - amdsmi_get_cpu_core_ccd_power(amdsmi_processor_handle processor_handle, uint32_t* power);
     - amdsmi_get_cpu_sdps_limit(amdsmi_processor_handle processor_handle, uint32_t* sdps_limit);
 
+### Removed
+
+- **Removed dead `--decode` flag from `amd-smi ras`**.
+  - The flag was non-functional: without `--cper` it was a silent no-op, and with `--cper` the
+    user-supplied `--cper-file` was only used to derive an output filename — the file was never
+    read or decoded. The flag was also absent from the `--cper`/`--afid` mutex group, so
+    combinations like `amd-smi ras --cper --decode` were silently accepted.
+  - Out-of-band decoding of CPER files captured on other systems is already supported via
+    `amd-smi ras --afid --cper-file <path>`, which uses `amdsmi_get_afids_from_cper()` and
+    requires no driver/GPU access.
+
 ## amd_smi_lib for ROCm 7.12.0
 
 ### Added

@@ -12264,9 +12264,28 @@ class AMDSMICommands:
                     f"Try with primary partition {primary_partitions_str}", self.logger
                 )
 
+        # One-shot warning, header, and follow prompt (kept out of the per-GPU helper
+        # so the helper layer stays re-entrant and free of latching state).
+        if not self.logger.is_json_format():
+            if not args.folder:
+                self.helpers.cper_print(
+                    "WARNING: No CPER files will be dumped unless "
+                    "--folder=<folder_name> is specified and cper entries exist.",
+                    self.logger,
+                )
+            self.helpers._print_header(args.folder, self.logger)
+            if args.follow:
+                # Always print to stdout so the user sees the prompt, even with --file.
+                print("Press CTRL + C to stop.")
+
+        # Shared 1-indexed counter for generated CPER filenames across all GPUs
+        # and follow iterations within this invocation.
+        cper_counter = [0]
         while True:
             for idx, device_handle in enumerate(args.gpu):
-                self.helpers.ras_cper(args, device_handle, self.logger, idx)
+                self.helpers.ras_cper(
+                    args, device_handle, self.logger, idx, cper_counter=cper_counter
+                )
             if not args.follow:
                 break
             time.sleep(1)

@@ -71,7 +71,6 @@ class AMDSMIHelpers:
 
         # Counts and Tracking variables
         self._count_of_sets_called = 0
-        self._count_of_cper_files = 0
         self._previous_set_success_check = (
             amdsmi_interface.amdsmi_wrapper.AMDSMI_STATUS_UNKNOWN_ERROR
         )
@@ -138,12 +137,6 @@ class AMDSMIHelpers:
         This is used to determine if the last set was successful or not.
         """
         return self._previous_set_success_check
-
-    def increment_cper_count(self):
-        self._count_of_cper_files += 1
-
-    def get_cper_count(self):
-        return self._count_of_cper_files
 
     def is_virtual_os(self):
         return self._is_virtual_os
@@ -2162,35 +2155,22 @@ class AMDSMIHelpers:
         return "UNKNOWN"
 
     def display_cper_files_generated(
-        self, entries, device_handle, folder, logger: Optional["AMDSMILogger"] = None
+        self, entries, device_handle, logger: Optional["AMDSMILogger"] = None
     ):
-        """
-        Display CPER summary lines. If a logger is provided and its destination is
-        not stdout, append the output to that file instead of printing to stdout.
+        """Print one human-readable summary line per CPER entry.
+
+        Only invoked when neither ``--folder`` nor JSON output is in effect, so
+        no filename column is emitted. Header / warning lines are printed by
+        the caller (``AMDSMICommands.ras``).
 
         Returns:
-            list: Always returns ``[]``.
+            list: Always returns ``[]`` (kept for symmetry with
+            ``dump_cper_entries``).
         """
         if logger is not None and logger.is_json_format():
             return []
 
-        # One‐time initialization: warning & header only once
-        if not getattr(self, "_cper_display_initialized", False):
-            # Warning if no folder was specified elsewhere
-            if not getattr(self, "_cper_warning_printed", False):
-                warning = (
-                    "WARNING: No CPER files will be dumped unless "
-                    "--folder=<folder_name> is specified and cper entries exist."
-                )
-                self.cper_print(warning, logger)
-                self._cper_warning_printed = True
-
-            self._print_header(folder, logger)
-            self._cper_display_initialized = True
-
-        # Loop through all entries in the dictionary.
         for entry in entries.values():
-            # Assume 'entry' is a dictionary with keys: "error_severity" and "notify_type".
             timestamp = entry.get("timestamp", "unknown")
             gpu_id = "-"
             output = ""
@@ -2203,20 +2183,7 @@ class AMDSMIHelpers:
                 )
                 output = f"{timestamp:<20} {gpu_id:<7} {prefix:<20}"
 
-            if folder:
-                prefix_for_filename = self._severity_as_string(
-                    entry.get("error_severity", "Unknown"),
-                    entry.get("notify_type", "Unknown"),
-                    True,
-                )
-                cper_data_file = f"{prefix_for_filename}_{self.get_cper_count() + 1}.cper"
-                afids = self.cper_dump_afids(cper_data_file)
-                afids_str = " ".join(map(str, afids))
-                output += f" {cper_data_file:<17} {afids_str}"
-
             self.cper_print(output, logger)
-
-            self.increment_cper_count()
         return []
 
     def cper_print(self, text, logger: Optional["AMDSMILogger"] = None):
@@ -2253,6 +2220,7 @@ class AMDSMIHelpers:
         cper_file=None,
         logger: Optional["AMDSMILogger"] = None,
         emit=True,
+        cper_counter=None,
     ):
         """
         Dump CPER entries to files in the specified folder. Handles batch deletion if file limit is exceeded.
@@ -2266,16 +2234,17 @@ class AMDSMIHelpers:
         cper_file (str, optional): Override filename for the CPER binary file.
         logger (AMDSMILogger, optional): Logger for format detection and output routing.
         emit (bool): If True and JSON format is active, emit JSON output (default True).
+        cper_counter (list[int], optional): Single-element mutable counter shared
+            across calls within one ``ras`` invocation so generated filenames
+            are 1-indexed and monotonically increasing across GPUs/iterations.
+            Defaults to a fresh ``[0]`` if omitted.
 
         Returns:
             list: JSON row dicts when JSON format is active, otherwise ``[]``.
         """
         json_output = logger is not None and logger.is_json_format()
-
-        # Initialize header display
-        if not json_output and not getattr(self, "_cper_display_initialized", False):
-            self._print_header(folder, logger)
-            self._cper_display_initialized = True
+        if cper_counter is None:
+            cper_counter = [0]
 
         if folder:
             folder = Path(folder)
@@ -2290,7 +2259,7 @@ class AMDSMIHelpers:
                 prefix = self._severity_as_string(error_severity, notify_type, True)
 
                 # Generate filenames
-                count = self.get_cper_count() + 1
+                count = cper_counter[0] + 1
                 if cper_file:
                     cper_name = cper_file
                 else:
@@ -2326,7 +2295,7 @@ class AMDSMIHelpers:
                     gpu_id = self.get_gpu_id_from_device_handle(device_handle)
                 severity = self._severity_as_string(error_severity, notify_type, False)
                 output_rows[cper_path] = [timestamp, gpu_id, severity, cper_name]
-                self.increment_cper_count()
+                cper_counter[0] += 1
 
             # Batch deletion if file limit is exceeded (AFTER writing ALL new files)
             if file_limit:
@@ -2564,6 +2533,7 @@ class AMDSMIHelpers:
         logger: "AMDSMILogger",
         collected_json_rows,
         emit_json,
+        cper_counter,
     ):
         """Dispatch CPER output to the appropriate handler.
 
@@ -2573,9 +2543,6 @@ class AMDSMIHelpers:
 
         Note:
             *collected_json_rows* is mutated in place (extended with new rows).
-
-        This is a transitional method — output dispatch should migrate to the
-        command layer (amdsmi_commands.py) in the future.
         """
         if args.folder or logger.is_json_format():
             cper_rows = self.dump_cper_entries(
@@ -2586,12 +2553,13 @@ class AMDSMIHelpers:
                 args.file_limit,
                 logger=logger,
                 emit=emit_json,
+                cper_counter=cper_counter,
             )
             collected_json_rows.extend(cper_rows)
         else:
-            self.display_cper_files_generated(entries, device_handle, args.folder, logger=logger)
+            self.display_cper_files_generated(entries, device_handle, logger=logger)
 
-    def ras_cper(self, args, device_handle, logger, gpu_idx, emit_json=True):
+    def ras_cper(self, args, device_handle, logger, gpu_idx, emit_json=True, cper_counter=None):
         """Fetch and process CPER entries for a single GPU.
 
         Handles:
@@ -2605,6 +2573,8 @@ class AMDSMIHelpers:
             logger: AMDSMILogger instance for format detection and output routing
             gpu_idx: Index into args.cursor for this GPU
             emit_json: Whether to emit JSON output (default True)
+            cper_counter: Single-element mutable counter shared across GPUs/iterations.
+                Defaults to a fresh ``[0]`` if omitted.
 
         Returns:
             list: Collected JSON rows (empty list if not JSON format)
@@ -2614,16 +2584,10 @@ class AMDSMIHelpers:
         """
         severity_mask = self._parse_cper_severity_mask(args.severity)
         buffer_size = 1048576
+        if cper_counter is None:
+            cper_counter = [0]
 
         gpu_id = self.get_gpu_id_from_device_handle(device_handle)
-        if (
-            args.follow
-            and not logger.is_json_format()
-            and not getattr(self, "_cper_follow_prompted", False)
-        ):
-            # Always print to stdout so the user sees the prompt, even with --file.
-            print("Press CTRL + C to stop.")
-            self._cper_follow_prompted = True
 
         primary_partition = self.is_primary_partition(device_handle, gpu_id)
         if not primary_partition:
@@ -2671,13 +2635,27 @@ class AMDSMIHelpers:
                 break
 
             self._emit_cper_output(
-                entries, cper_data, device_handle, args, logger, collected_json_rows, emit_json
+                entries,
+                cper_data,
+                device_handle,
+                args,
+                logger,
+                collected_json_rows,
+                emit_json,
+                cper_counter,
             )
 
         if num_entries == 0 and not args.follow:
             # If nothing was found, still emit the warning/header logic.
             self._emit_cper_output(
-                entries, cper_data, device_handle, args, logger, collected_json_rows, emit_json
+                entries,
+                cper_data,
+                device_handle,
+                args,
+                logger,
+                collected_json_rows,
+                emit_json,
+                cper_counter,
             )
         return collected_json_rows
 
