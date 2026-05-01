@@ -884,12 +884,13 @@ This command accepts options only; no positional arguments are required.
 RAS arguments:
   -h, --help                          show this help message and exit
   --cper                              Trigger current CPER data retrieval
-  --afid                              Generate an AFID (AMD Field ID) given a CPER record file
+  --afid                              Generate an AFID (AMD Field ID) given a CPER record file or folder
 
 CPER Arguments:
   --severity SEVERITY [SEVERITY ...]  Set the SEVERITY filters from the following:
                                           nonfatal-uncorrected, fatal, nonfatal-corrected, all
-  --folder FOLDER                     Folder to dump current CPER report files
+  --folder FOLDER                     With --cper: folder to dump current CPER report files (created if missing).
+                                          With --afid: existing folder of CPER records to decode.
   --file-limit FILE_LIMIT             Maximum number of current CPER files in target folder
                                           Older files beyond limit will be deleted
   --follow                            Continuously monitor for new CPER entries

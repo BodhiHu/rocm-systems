@@ -124,17 +124,20 @@ matching `.cper` (raw binary) and `.json` (decoded metadata) pair.
 
 ### AFID
 
-AFID extraction is a pure offline operation: it parses a CPER record file with
-`amdsmi_get_afids_from_cper()` and prints the AFIDs found in it. No driver or
-GPU access is required, so the source CPER may have been captured on another
-system.
+AFID extraction is a pure offline operation: it parses one or more CPER record
+files with `amdsmi_get_afids_from_cper()` and prints the AFIDs found in each.
+No driver or GPU access is required, so the source CPER(s) may have been
+captured on another system. Each CPER record carries up to 12 AFIDs.
 
 | Command | Result |
 |---|---|
 | `amd-smi ras --afid --cper-file <PATH>` | Parse the single CPER record at `<PATH>` and print the space-separated list of AFIDs encoded in it. Output is empty when the record contains no AFID payload. |
+| `amd-smi ras --afid --folder <DIR>` | Parse every `*.cper` in `<DIR>` (must already exist and contain at least one `.cper`) and print a `file_name | list of afids` table, one row per record. |
 
-`<PATH>` must be an existing, non-empty regular file (directories are
-rejected). `--afid` and `--cper` are mutually exclusive.
+`--cper-file` and `--folder` are mutually exclusive under `--afid`; exactly one
+must be supplied. `<PATH>` must be an existing, non-empty regular file.
+`<DIR>` must be an existing directory containing at least one `.cper` file —
+unlike the `--cper --folder` write path, it is not auto-created.
 
 ## Further reading
 
