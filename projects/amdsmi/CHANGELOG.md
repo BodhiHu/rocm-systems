@@ -6,11 +6,6 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
 
 ## amd_smi_lib for ROCm 7.13.0
 
-### Changed
-
-- **Renamed `processor_type_t` enum typedef to `amdsmi_processor_type_t`**.
-  - The unprefixed typedef name did not follow the `amdsmi_*_t` convention used throughout `amdsmi.h` and was easy to collide with identifiers defined by other system-management libraries. New code should use `amdsmi_processor_type_t`. The old name is preserved as a backward-compatibility typedef alias, so existing callers continue to compile unchanged.
-
 ### Added
 
 - **Added APU metrics support (table versions 2.4 and 3.0)**.  
@@ -76,13 +71,6 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
 - **Updated memory API documentation**  
     Added note that the sum of per-process memory usage is not expected to equal total usage.
 
-### Optimized
-
-- **Optimized `rsmi_dev_device_identifiers_get()` in the ROCm-SMI device layer**.  
-  - Removed unnecessary iteration by directly indexing the device list.
-  - Added bounds checking for `device_id`, with clearer error handling/logging.
-  - Improves performance for device identifier queries.
-
 ### Resolved Issues
 
 - **Fixed `amd-smi metric` crashing with `TypeError` on MI300A when no CPU flags are specified**.  
@@ -118,28 +106,14 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
 - **Fixed `cu_occupancy` displaying `0%` instead of `N/A` when file is unavailable**.  
   - Process `cu_occupancy` is now initialized to `INVALID` instead of zero, so `amd-smi process` displays `N/A` rather than a misleading `0%` when the sysfs file is not accessible.
 
-- **Fixed CLI set commands silently succeeding on invalid input values**.  
-  - `amd-smi set --profile <INVALID>` now returns a non-zero exit code and lists available profiles in the error message; invalid profile names are rejected at parse time.
-  - `amd-smi set --clk-level <CLK_TYPE>` (missing performance level indices) now returns a non-zero exit code with a usage hint instead of silently succeeding.
-  - `amd-smi set --power-cap <OUT_OF_RANGE>` now returns a non-zero exit code.
-  - `amd-smi set --fan <INVALID>%` no longer prompts the out-of-spec warning before validating the percentage range; invalid values are rejected immediately.
-
-- **Fixed `amd-smi set --profile` help text omitting `BOOTUP_DEFAULT`**.  
-  - `BOOTUP_DEFAULT` was always accepted at runtime but was missing from the `--help` profile list. Auditing invalid-input handling exposed this gap. `amd-smi reset --profile` can also be used to return to the bootup default power profile.
-
-- **Fixed `amd-smi monitor --brcm_nic` and `--brcm_switch` flags being registered on non-BRCM systems**.  
-  - These flags are now only registered when BRCM hardware is present, preventing spurious failures on AMD GPU-only systems.
-
-- **Fixed `amd-smi` default command alignment**.  
-  - Updated default `amd-smi` output to align values to the left for improved readability.
-    Several items were misaligned in the default output, and this change ensures a consistent left-aligned format across all fields.
-  - *This change is purely cosmetic and does not affect any functionality.*  
-
 ### Changed
 
-- **Package install no longer modifies the system-wide logrotate timer or cron schedule**.
-  - Previously, installing `amd-smi-lib` overwrote `/lib/systemd/system/logrotate.timer` (or moved `/etc/cron.daily/logrotate` to `/etc/cron.hourly/`) to force hourly rotation, which affected every other package using logrotate.
-  - The package now only ships `/etc/logrotate.d/amd_smi.conf`, which sets its own `hourly` + `size 1M` cadence. AMD-SMI logs still rotate at the same frequency; system-wide settings stay as the distribution configured them.
+- **Reworked Python package install layout for system packages and pip wheels**.
+  - System `.deb` / `.rpm` postinst no longer runs `pip install`; it now drops a single `amdsmi.pth` file into the system Python's `site.getsitepackages()`, pointing at `/opt/rocm/share/amd_smi`. The system package targets only the system Python interpreter (`/usr/bin/python3`); users who want `amdsmi` inside a virtualenv should install the wheel via `pip install amdsmi`. Removal cleans up the `.pth` file. `pip list` will no longer show `amdsmi` for the system package.
+  - Added new CMake option `-DBUILD_PYTHON_WHEEL=ON` (default `OFF`) which builds the standalone Python wheel and an isolated `libamd_smi_python.so` (distinct SONAME) bundled inside it, so the wheel-shipped library can coexist in-process with the system `libamd_smi.so` without symbol collisions. With `-DBUILD_PYTHON_WHEEL=OFF` (the default used by ROCm CI) only the system-package layout is built; no wheel artifact is produced.
+  - `py-interface/amdsmi_wrapper.py` now auto-detects pip vs system install context and resolves the shared library accordingly (`lib64` first, then `lib`); a `_MissingLibrary` sentinel defers `OSError` to the first API call when no candidate is loadable.
+  - New `AMDSMI_DEBUG_LOAD=1` env var prints the resolved `libamd_smi*.so` path (or every candidate the loader tried) to stderr at import time. `AMDSMI_LIB_OVERRIDE` (existing) now takes precedence over both pip and system context detection so an in-tree `.so` can be loaded without uninstalling either packaged variant.
+  - Added `tools/build_wheel_debian.py` and `tools/build_wheel_rpm.py` plus a manylinux_2_28 CI workflow for producing PyPI-ready wheels.
 
 - **Renamed `lc_perf_other_end_recovery` to `lc_perf_other_end_recovery_count` in `amd-smi metric` CLI output for unification**.  
 
