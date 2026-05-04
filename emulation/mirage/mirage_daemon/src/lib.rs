@@ -2175,6 +2175,11 @@ fn find_interceptor_so() -> Option<PathBuf> {
         // Fallback: cargo target/debug for the repo-root workspace.
         Some(PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
+            "/../../../target/debug/libmirage_interceptor.so"
+        ))),
+        // Compatibility fallback for workspaces rooted below the repo root.
+        Some(PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
             "/../../target/debug/libmirage_interceptor.so"
         ))),
         // Compatibility fallback for pre-move builds rooted under emulation/.

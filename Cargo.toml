@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["emulation/mirage_*", "emulation/rocjitsu_sys", "projects/amdgpu_uapi"]
+members = ["emulation/mirage/mirage_*", "emulation/mirage/rocjitsu_sys", "projects/amdgpu_uapi"]
 
 [workspace.dependencies]
 serde = { version = "1" }
@@ -24,13 +24,13 @@ futures-util = { version = "0.3" }
 rust-embed = { version = "8", features = ["mime-guess"] }
 mime_guess = { version = "2" }
 
-amdgpu_protocol = { path = "emulation/amdgpu_protocol" }
-mirage_schema = { path = "emulation/mirage_schema" }
-mirage_ctl = { path = "emulation/mirage_ctl" }
-mirage_daemon = { path = "emulation/mirage_daemon" }
-mirage_macros = { path = "emulation/mirage_macros" }
-mirage_real = { path = "emulation/mirage_real" }
-mirage_remote = { path = "emulation/mirage_remote" }
-mirage_rocjitsu = { path = "emulation/mirage_rocjitsu" }
-mirage_uapi = { path = "emulation/mirage_uapi" }
-rocjitsu_sys = { path = "emulation/rocjitsu_sys" }
+amdgpu_protocol = { path = "emulation/mirage/amdgpu_protocol" }
+mirage_schema = { path = "emulation/mirage/mirage_schema" }
+mirage_ctl = { path = "emulation/mirage/mirage_ctl" }
+mirage_daemon = { path = "emulation/mirage/mirage_daemon" }
+mirage_macros = { path = "emulation/mirage/mirage_macros" }
+mirage_real = { path = "emulation/mirage/mirage_real" }
+mirage_remote = { path = "emulation/mirage/mirage_remote" }
+mirage_rocjitsu = { path = "emulation/mirage/mirage_rocjitsu" }
+mirage_uapi = { path = "emulation/mirage/mirage_uapi" }
+rocjitsu_sys = { path = "emulation/mirage/rocjitsu_sys" }

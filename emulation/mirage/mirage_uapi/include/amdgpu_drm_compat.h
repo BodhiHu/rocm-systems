@@ -1,7 +1,7 @@
 #ifndef MIRAGE_UAPI_AMDGPU_DRM_COMPAT_H
 #define MIRAGE_UAPI_AMDGPU_DRM_COMPAT_H
 
-#include "../../../projects/amdsmi/include/libdrm/amdgpu_drm.h"
+#include "libdrm/amdgpu_drm.h"
 
 #ifndef DRM_AMDGPU_GEM_LIST_HANDLES
 #define DRM_AMDGPU_GEM_LIST_HANDLES 0x19

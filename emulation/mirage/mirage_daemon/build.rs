@@ -76,6 +76,6 @@ fn write_placeholder(dist_dir: &Path) {
     let html = "<!doctype html><html><head><meta charset=\"utf-8\"><title>mirage</title></head>\
         <body><h1>Mirage daemon</h1>\
         <p>Dashboard assets were not built. Run <code>npm run build</code> in \
-        <code>emulation/dashboard/</code> and rebuild the daemon.</p></body></html>";
+        <code>emulation/mirage/dashboard/</code> and rebuild the daemon.</p></body></html>";
     std::fs::write(dist_dir.join("index.html"), html).ok();
 }
