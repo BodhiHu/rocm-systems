@@ -26,6 +26,7 @@
 
 #![allow(clippy::missing_safety_doc)]
 
+use std::collections::BTreeMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_long, c_ulong, c_void};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -67,11 +68,15 @@ fn remote() -> Option<&'static RemoteEmulator> {
 /// Lazily cached KFD sysfs topology, fetched once from the daemon.
 static TOPOLOGY: OnceLock<Option<mirage_schema::topology::Topology>> = OnceLock::new();
 
+/// Materialized copy of the cached topology for libc paths such as `fopen`
+/// and `opendir` that do not reliably flow through interposable `open`.
+static MATERIALIZED_TOPOLOGY_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+
 /// Sysfs topology prefix the interceptor recognises.
-const SYSFS_TOPO_PREFIX: &str = "/sys/class/kfd/kfd/topology/";
+const SYSFS_TOPO_ROOT: &str = "/sys/class/kfd/kfd/topology";
 
 /// Alternative sysfs path that hsakmt reads from.
-const SYSFS_TOPO_PREFIX_ALT: &str = "/sys/devices/virtual/kfd/kfd/topology/";
+const SYSFS_TOPO_ROOT_ALT: &str = "/sys/devices/virtual/kfd/kfd/topology";
 
 fn cached_topology() -> Option<&'static mirage_schema::topology::Topology> {
     TOPOLOGY
@@ -82,39 +87,61 @@ fn cached_topology() -> Option<&'static mirage_schema::topology::Topology> {
         .as_ref()
 }
 
-/// Look up a sysfs topology file by its absolute path, returning the
-/// file contents from the cached topology if present.
-fn topology_lookup(path: &str) -> Option<&'static [u8]> {
-    let rel = path
-        .strip_prefix(SYSFS_TOPO_PREFIX)
-        .or_else(|| path.strip_prefix(SYSFS_TOPO_PREFIX_ALT))?;
-    let topo = cached_topology()?;
-    topo.files.get(rel).map(|v| v.as_slice())
-}
-
 /// Returns `true` if the path is under the KFD sysfs topology tree.
 fn is_topology_path(path: &str) -> bool {
-    path.starts_with(SYSFS_TOPO_PREFIX) || path.starts_with(SYSFS_TOPO_PREFIX_ALT)
+    topology_relative_path(path).is_some()
 }
 
-/// Create a memfd pre-filled with `data` so that subsequent reads
-/// see the cached topology file contents.
-fn memfd_from_topology_data(data: &[u8]) -> c_int {
-    let name = CString::new("mirage-topo").unwrap();
-    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
-    if fd < 0 {
-        return -1;
-    }
-    if !data.is_empty() {
-        let written = unsafe { libc::write(fd, data.as_ptr() as *const c_void, data.len()) };
-        if written < 0 {
-            unsafe { libc::close(fd) };
-            return -1;
+fn topology_relative_path(path: &str) -> Option<&str> {
+    for root in [SYSFS_TOPO_ROOT, SYSFS_TOPO_ROOT_ALT] {
+        if path == root {
+            return Some("");
         }
-        // Rewind to the beginning so reads start from offset 0.
-        unsafe { libc::lseek(fd, 0, libc::SEEK_SET) };
+        if let Some(rest) = path.strip_prefix(root)
+            && let Some(rel) = rest.strip_prefix('/')
+        {
+            return Some(rel);
+        }
     }
-    fd
+    None
+}
+
+fn materialized_topology_root() -> Option<&'static PathBuf> {
+    MATERIALIZED_TOPOLOGY_ROOT
+        .get_or_init(|| {
+            let topology = cached_topology()?;
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let root = std::env::temp_dir()
+                .join(format!("mirage-topology-{}-{nanos}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).ok()?;
+            for (relative, data) in &topology.files {
+                let path = root.join(relative);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).ok()?;
+                }
+                std::fs::write(path, data).ok()?;
+            }
+            Some(root)
+        })
+        .as_ref()
+}
+
+fn topology_redirect_path(path: &Path) -> Option<PathBuf> {
+    let rel = topology_relative_path(path.to_str()?)?;
+    let root = materialized_topology_root()?;
+    if rel.is_empty() {
+        Some(root.clone())
+    } else {
+        Some(root.join(rel))
+    }
+}
+
+fn path_to_cstring(path: &Path) -> Option<CString> {
+    CString::new(path.as_os_str().as_bytes()).ok()
 }
 
 /// Device class a tracked fd refers to.
@@ -166,12 +193,99 @@ struct TrackedFd {
 
 static FD_REGISTRY: OnceLock<Mutex<Vec<TrackedFd>>> = OnceLock::new();
 
+static AMDGPU_HANDLE_REGISTRY: OnceLock<Mutex<BTreeMap<usize, c_int>>> = OnceLock::new();
+
+const AMDGPU_INFO_ACCEL_WORKING: u32 = 0x00;
+const AMDGPU_INFO_DEV_INFO: u32 = 0x16;
+
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct AmdgpuGpuInfo {
+    asic_id: u32,
+    chip_rev: u32,
+    chip_external_rev: u32,
+    family_id: u32,
+    ids_flags: u64,
+    max_engine_clk: u64,
+    max_memory_clk: u64,
+    num_shader_engines: u32,
+    num_shader_arrays_per_engine: u32,
+    avail_quad_shader_pipes: u32,
+    max_quad_shader_pipes: u32,
+    cache_entries_per_quad_pipe: u32,
+    num_hw_gfx_contexts: u32,
+    rb_pipes: u32,
+    enabled_rb_pipes_mask: u32,
+    gpu_counter_freq: u32,
+    backend_disable: [u32; 4],
+    mc_arb_ramcfg: u32,
+    gb_addr_cfg: u32,
+    gb_tile_mode: [u32; 32],
+    gb_macro_tile_mode: [u32; 16],
+    pa_sc_raster_cfg: [u32; 4],
+    pa_sc_raster_cfg1: [u32; 4],
+    cu_active_number: u32,
+    cu_ao_mask: u32,
+    cu_bitmap: [[u32; 4]; 4],
+    vram_type: u32,
+    vram_bit_width: u32,
+    ce_ram_size: u32,
+    vce_harvest_config: u32,
+    pci_rev_id: u32,
+}
+
 /// Counter for synthetic handles (USERPTR allocations handled locally).
 /// Starts at a high value to avoid collisions with daemon-assigned handles.
 static SYNTHETIC_HANDLE_COUNTER: AtomicU64 = AtomicU64::new(0xFFFF_0000_0000_0001);
 
 fn registry() -> &'static Mutex<Vec<TrackedFd>> {
     FD_REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn amdgpu_handle_registry() -> &'static Mutex<BTreeMap<usize, c_int>> {
+    AMDGPU_HANDLE_REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn is_fake_amdgpu_handle(device_handle: *mut c_void) -> bool {
+    amdgpu_handle_registry()
+        .lock()
+        .unwrap()
+        .contains_key(&(device_handle as usize))
+}
+
+fn fake_amdgpu_gpu_info() -> AmdgpuGpuInfo {
+    let mut info = AmdgpuGpuInfo {
+        asic_id: 29856,
+        family_id: 146,
+        max_engine_clk: 2_100_000,
+        max_memory_clk: 1_300_000,
+        num_shader_engines: 1,
+        num_shader_arrays_per_engine: 1,
+        avail_quad_shader_pipes: 1,
+        max_quad_shader_pipes: 1,
+        num_hw_gfx_contexts: 8,
+        rb_pipes: 1,
+        enabled_rb_pipes_mask: 1,
+        gpu_counter_freq: 1_000_000,
+        cu_active_number: 4,
+        cu_ao_mask: 0xf,
+        vram_bit_width: 8192,
+        pci_rev_id: 0,
+        ..Default::default()
+    };
+    info.cu_bitmap[0][0] = 0xf;
+    info
+}
+
+unsafe fn write_pod<T: Copy>(dst: *mut c_void, size: u32, value: &T) -> c_int {
+    let value_size = core::mem::size_of::<T>();
+    if dst.is_null() || (size as usize) < value_size {
+        return -libc::EINVAL;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(value as *const T as *const u8, dst.cast::<u8>(), value_size);
+    }
+    0
 }
 
 /// Public helper used by tests and out-of-process callers.
@@ -1298,15 +1412,15 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: libc::mod
         if ps.contains("dri") || ps.contains("kfd") || ps.contains("render") || ps.contains("gpu") {
             tracing::debug!(path = %p.display(), "open ALL");
         }
-        // Serve topology files from cached Topology instead of hitting
-        // the filesystem or forwarding to the daemon.
+        // Serve topology paths from a materialized Topology snapshot instead
+        // of hitting host sysfs.
         if is_topology_path(ps)
-            && let Some(data) = topology_lookup(ps)
+            && let Some(redirected) = topology_redirect_path(&p)
+            && let Some(redirected_c) = path_to_cstring(&redirected)
+            && let Some(real) =
+                next_fn!(open : fn(p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
         {
-            let fd = memfd_from_topology_data(data);
-            if fd >= 0 {
-                return fd;
-            }
+            return unsafe { real(redirected_c.as_ptr(), flags | O_CLOEXEC, mode) };
         }
         // Fall through to real open (may hit bind-mounted topology).
         if let Some(kind) = DeviceKind::classify(&p)
@@ -1388,15 +1502,14 @@ pub unsafe extern "C" fn openat(
         if ps.contains("dri") || ps.contains("kfd") || ps.contains("render") || ps.contains("gpu") {
             tracing::debug!(dirfd, path = %p.display(), "openat ALL");
         }
-        // Serve topology files from cached Topology.
+        // Serve topology paths from a materialized Topology snapshot.
         if dirfd == libc::AT_FDCWD
             && is_topology_path(ps)
-            && let Some(data) = topology_lookup(ps)
+            && let Some(redirected) = topology_redirect_path(&p)
+            && let Some(redirected_c) = path_to_cstring(&redirected)
+            && let Some(real) = next_fn!(openat : fn(d: c_int, p: *const c_char, f: c_int, m: libc::mode_t) -> c_int)
         {
-            let fd = memfd_from_topology_data(data);
-            if fd >= 0 {
-                return fd;
-            }
+            return unsafe { real(libc::AT_FDCWD, redirected_c.as_ptr(), flags, mode) };
         }
     }
     if dirfd == libc::AT_FDCWD
@@ -1501,6 +1614,237 @@ pub unsafe extern "C" fn __openat_2(dirfd: c_int, path: *const c_char, flags: c_
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __openat64_2(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
     unsafe { openat(dirfd, path, flags, 0) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fopen(path: *const c_char, mode: *const c_char) -> *mut libc::FILE {
+    if let Some(p) = cstr_to_path(path)
+        && let Some(redirected) = topology_redirect_path(&p)
+        && let Some(redirected_c) = path_to_cstring(&redirected)
+        && let Some(real) =
+            next_fn!(fopen : fn(p: *const c_char, m: *const c_char) -> *mut libc::FILE)
+    {
+        return unsafe { real(redirected_c.as_ptr(), mode) };
+    }
+    let Some(real) = next_fn!(fopen : fn(p: *const c_char, m: *const c_char) -> *mut libc::FILE)
+    else {
+        unsafe { *libc::__errno_location() = libc::ENOSYS };
+        return std::ptr::null_mut();
+    };
+    unsafe { real(path, mode) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fopen64(path: *const c_char, mode: *const c_char) -> *mut libc::FILE {
+    if let Some(p) = cstr_to_path(path)
+        && let Some(redirected) = topology_redirect_path(&p)
+        && let Some(redirected_c) = path_to_cstring(&redirected)
+        && let Some(real) =
+            next_fn!(fopen64 : fn(p: *const c_char, m: *const c_char) -> *mut libc::FILE)
+    {
+        return unsafe { real(redirected_c.as_ptr(), mode) };
+    }
+    let Some(real) = next_fn!(fopen64 : fn(p: *const c_char, m: *const c_char) -> *mut libc::FILE)
+    else {
+        unsafe { *libc::__errno_location() = libc::ENOSYS };
+        return std::ptr::null_mut();
+    };
+    unsafe { real(path, mode) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn opendir(path: *const c_char) -> *mut libc::DIR {
+    if let Some(p) = cstr_to_path(path)
+        && let Some(redirected) = topology_redirect_path(&p)
+        && let Some(redirected_c) = path_to_cstring(&redirected)
+        && let Some(real) = next_fn!(opendir : fn(p: *const c_char) -> *mut libc::DIR)
+    {
+        return unsafe { real(redirected_c.as_ptr()) };
+    }
+    let Some(real) = next_fn!(opendir : fn(p: *const c_char) -> *mut libc::DIR) else {
+        unsafe { *libc::__errno_location() = libc::ENOSYS };
+        return std::ptr::null_mut();
+    };
+    unsafe { real(path) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn amdgpu_device_initialize(
+    fd: c_int,
+    major_version: *mut u32,
+    minor_version: *mut u32,
+    device_handle: *mut *mut c_void,
+) -> c_int {
+    if lookup_fd(fd) == Some(DeviceKind::DrmRender) {
+        if major_version.is_null() || minor_version.is_null() || device_handle.is_null() {
+            return -libc::EINVAL;
+        }
+        let dup_fd = unsafe { dup(fd) };
+        if dup_fd < 0 {
+            return -unsafe { *libc::__errno_location() };
+        }
+        let handle = Box::into_raw(Box::new(dup_fd)).cast::<c_void>();
+        amdgpu_handle_registry()
+            .lock()
+            .unwrap()
+            .insert(handle as usize, dup_fd);
+        unsafe {
+            *major_version = 3;
+            *minor_version = 57;
+            *device_handle = handle;
+        }
+        return 0;
+    }
+
+    let Some(real) = next_fn!(amdgpu_device_initialize : fn(
+        fd: c_int,
+        major_version: *mut u32,
+        minor_version: *mut u32,
+        device_handle: *mut *mut c_void
+    ) -> c_int) else {
+        return -libc::ENOSYS;
+    };
+    unsafe { real(fd, major_version, minor_version, device_handle) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn amdgpu_device_initialize2(
+    fd: c_int,
+    _deduplicate_device: bool,
+    major_version: *mut u32,
+    minor_version: *mut u32,
+    device_handle: *mut *mut c_void,
+) -> c_int {
+    unsafe { amdgpu_device_initialize(fd, major_version, minor_version, device_handle) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn amdgpu_device_get_fd(device_handle: *mut c_void) -> c_int {
+    if let Some(fd) = amdgpu_handle_registry()
+        .lock()
+        .unwrap()
+        .get(&(device_handle as usize))
+        .copied()
+    {
+        return fd;
+    }
+
+    let Some(real) = next_fn!(amdgpu_device_get_fd : fn(device_handle: *mut c_void) -> c_int)
+    else {
+        return -libc::ENOSYS;
+    };
+    unsafe { real(device_handle) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn amdgpu_device_deinitialize(device_handle: *mut c_void) -> c_int {
+    if let Some(fd) = amdgpu_handle_registry()
+        .lock()
+        .unwrap()
+        .remove(&(device_handle as usize))
+    {
+        if fd >= 0 {
+            unsafe { close(fd) };
+        }
+        if !device_handle.is_null() {
+            unsafe { drop(Box::from_raw(device_handle.cast::<c_int>())) };
+        }
+        return 0;
+    }
+
+    let Some(real) = next_fn!(amdgpu_device_deinitialize : fn(device_handle: *mut c_void) -> c_int)
+    else {
+        return -libc::ENOSYS;
+    };
+    unsafe { real(device_handle) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn amdgpu_get_marketing_name(device_handle: *mut c_void) -> *const c_char {
+    if is_fake_amdgpu_handle(device_handle) {
+        return c"AMD Instinct MI300X".as_ptr();
+    }
+
+    let Some(real) =
+        next_fn!(amdgpu_get_marketing_name : fn(device_handle: *mut c_void) -> *const c_char)
+    else {
+        return std::ptr::null();
+    };
+    unsafe { real(device_handle) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn amdgpu_query_gpu_info(
+    device_handle: *mut c_void,
+    info: *mut AmdgpuGpuInfo,
+) -> c_int {
+    if is_fake_amdgpu_handle(device_handle) {
+        if info.is_null() {
+            return -libc::EINVAL;
+        }
+        unsafe { *info = fake_amdgpu_gpu_info() };
+        return 0;
+    }
+
+    let Some(real) = next_fn!(amdgpu_query_gpu_info : fn(
+        device_handle: *mut c_void,
+        info: *mut AmdgpuGpuInfo
+    ) -> c_int) else {
+        return -libc::ENOSYS;
+    };
+    unsafe { real(device_handle, info) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn amdgpu_query_info(
+    device_handle: *mut c_void,
+    info_id: u32,
+    size: u32,
+    value: *mut c_void,
+) -> c_int {
+    if is_fake_amdgpu_handle(device_handle) {
+        return match info_id {
+            AMDGPU_INFO_ACCEL_WORKING => unsafe { write_pod(value, size, &1u32) },
+            AMDGPU_INFO_DEV_INFO => {
+                let gpu = fake_amdgpu_gpu_info();
+                let mut dev = drm::drm_amdgpu_info_device {
+                    device_id: gpu.asic_id,
+                    family: gpu.family_id,
+                    max_engine_clock: gpu.max_engine_clk,
+                    max_memory_clock: gpu.max_memory_clk,
+                    num_shader_engines: gpu.num_shader_engines,
+                    num_shader_arrays_per_engine: gpu.num_shader_arrays_per_engine,
+                    gpu_counter_freq: gpu.gpu_counter_freq,
+                    cu_active_number: gpu.cu_active_number,
+                    cu_ao_mask: gpu.cu_ao_mask,
+                    cu_bitmap: gpu.cu_bitmap,
+                    enabled_rb_pipes_mask: gpu.enabled_rb_pipes_mask,
+                    num_rb_pipes: gpu.rb_pipes,
+                    num_hw_gfx_contexts: gpu.num_hw_gfx_contexts,
+                    ids_flags: gpu.ids_flags,
+                    vram_bit_width: gpu.vram_bit_width,
+                    ce_ram_size: gpu.ce_ram_size,
+                    vce_harvest_config: gpu.vce_harvest_config,
+                    wave_front_size: 64,
+                    num_cu_per_sh: 4,
+                    ..Default::default()
+                };
+                dev.cu_bitmap[0][0] = 0xf;
+                unsafe { write_pod(value, size, &dev) }
+            }
+            _ => -libc::EINVAL,
+        };
+    }
+
+    let Some(real) = next_fn!(amdgpu_query_info : fn(
+        device_handle: *mut c_void,
+        info_id: u32,
+        size: u32,
+        value: *mut c_void
+    ) -> c_int) else {
+        return -libc::ENOSYS;
+    };
+    unsafe { real(device_handle, info_id, size, value) }
 }
 
 #[unsafe(no_mangle)]

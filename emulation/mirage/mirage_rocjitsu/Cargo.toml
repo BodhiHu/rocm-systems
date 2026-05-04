@@ -13,3 +13,7 @@ mirage_schema = { workspace = true }
 mirage_uapi = { workspace = true }
 rocjitsu_sys = { workspace = true }
 libc = { workspace = true }
+
+[dev-dependencies]
+mirage_interceptor = { path = "../mirage_interceptor" }
+mirage_remote = { workspace = true }

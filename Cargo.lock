@@ -723,6 +723,8 @@ name = "mirage_rocjitsu"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "mirage_interceptor",
+ "mirage_remote",
  "mirage_schema",
  "mirage_uapi",
  "rocjitsu_sys",
