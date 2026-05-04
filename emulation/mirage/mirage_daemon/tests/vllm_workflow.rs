@@ -5,13 +5,14 @@
 //! All container interactions go through [`MockContainerRuntime`] so the tests
 //! run without Docker or real GPU hardware.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use mirage_container::{ContainerHandle, ExecResult, MockContainerRuntime};
+use mirage_container::{ContainerHandle, ContainerRuntime, ExecResult, MockContainerRuntime};
 use mirage_daemon::MirageDaemon;
 use mirage_schema::common::{
-    CleanupPolicy, ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SimulatorMode,
-    WorkloadDef,
+    CleanupPolicy, ExecArgs, GpuDef, GpuFamily, HealthStatus, ProfileDef, SessionPhase,
+    SimulatorMode, WorkloadDef,
 };
 use mirage_schema::daemon::{
     MirageDaemonBoot, MirageDaemonCreateProfile, MirageDaemonCreateWorkload,
@@ -32,6 +33,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Monotonic counter to give each test daemon a unique temp directory.
 static TEST_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Rocjitsu KMD-backed socket startup uses process-local resources, so keep
+/// integration-test boots serialized while still exercising the real socket.
+static BOOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn test_config_root() -> std::path::PathBuf {
     let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
@@ -43,9 +48,21 @@ fn test_config_root() -> std::path::PathBuf {
     dir
 }
 
+fn test_runtime_root() -> std::path::PathBuf {
+    let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let dir = std::env::temp_dir()
+        .join("mirage-test-vllm-runtime")
+        .join(format!("{pid}-{id}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 fn new_test_daemon() -> MirageDaemon {
     let mut d = MirageDaemon::new();
     d.set_config_root(test_config_root());
+    d.set_runtime_root(test_runtime_root());
     d
 }
 
@@ -54,6 +71,7 @@ fn new_test_daemon_with_runtime(
 ) -> MirageDaemon {
     let mut d = MirageDaemon::with_container_runtime(runtime);
     d.set_config_root(test_config_root());
+    d.set_runtime_root(test_runtime_root());
     d
 }
 
@@ -130,6 +148,87 @@ async fn vllm_daemon() -> (MirageDaemon, Arc<MockContainerRuntime>) {
     (daemon, mock)
 }
 
+async fn boot_and_wait(
+    daemon: &MirageDaemon,
+    mock: &MockContainerRuntime,
+    request: BootRequest,
+) -> BootReply {
+    let _boot_guard = BOOT_LOCK.lock().await;
+    let session_name = request.name.clone();
+    let mut reply = daemon.boot(request).await.unwrap();
+    assert!(reply.ok, "boot failed: {:?}", reply.error);
+
+    let phase = daemon
+        .wait_for_boot(&session_name, std::time::Duration::from_secs(5))
+        .await;
+    assert_eq!(phase, SessionPhase::Running, "boot did not reach Running");
+
+    let mut labels = BTreeMap::new();
+    labels.insert("mirage.session".to_string(), session_name);
+    let containers = mock
+        .list_containers(&labels, None)
+        .await
+        .expect("mock container list should succeed");
+    reply.container_ids = containers.iter().map(|c| c.handle.id.clone()).collect();
+    reply.container_id = reply.container_ids.first().cloned();
+    reply
+}
+
+fn assert_rocjitsu_socket_setup(start: &mirage_schema::container::StartContainerRequest) {
+    let env_value = |key: &str| {
+        start
+            .container
+            .entrypoint
+            .env
+            .iter()
+            .find(|entry| entry.key == key)
+            .map(|entry| entry.value.as_str())
+    };
+
+    assert_eq!(
+        env_value("LD_PRELOAD"),
+        Some("/tmp/libmirage_interceptor.so")
+    );
+    assert_eq!(
+        env_value("MIRAGE_INTERCEPTOR_SOCKET"),
+        Some("/tmp/mirage_emulator.sock")
+    );
+    assert_eq!(
+        start
+            .container
+            .labels
+            .get("mirage.interceptor_path")
+            .map(String::as_str),
+        Some("/tmp/libmirage_interceptor.so")
+    );
+    assert_eq!(
+        start
+            .container
+            .labels
+            .get("mirage.emulator_socket")
+            .map(String::as_str),
+        Some("/tmp/mirage_emulator.sock")
+    );
+
+    let interceptor_mount = start
+        .container
+        .mounts
+        .iter()
+        .find(|mount| mount.container_path == "/tmp/libmirage_interceptor.so")
+        .expect("interceptor shared library should be mounted");
+    assert!(interceptor_mount.readonly);
+    assert!(std::path::Path::new(&interceptor_mount.host_path).exists());
+
+    let socket_mount = start
+        .container
+        .mounts
+        .iter()
+        .find(|mount| mount.container_path == "/tmp/mirage_emulator.sock")
+        .expect("emulator socket should be mounted");
+    assert!(!socket_mount.readonly);
+    assert!(std::path::Path::new(&socket_mount.host_path).exists());
+}
+
 /// Queue a successful exec result returning `stdout` on the head container.
 async fn queue_ok(mock: &MockContainerRuntime, boot: &BootReply, stdout: &[u8]) {
     let starts = mock.start_requests().await;
@@ -200,11 +299,12 @@ async fn vllm_full_e2e_lifecycle() {
     assert!(rocjitsu.supported_gpus.iter().any(|g| g.name == "MI300X"));
 
     // -- boot vLLM session --------------------------------------------------
-    let boot = daemon
-        .boot(boot_req("vllm-e2e", "mi300x-func", VLLM_IMAGE))
-        .await
-        .unwrap();
-    assert!(boot.ok, "boot failed: {:?}", boot.error);
+    let boot = boot_and_wait(
+        &daemon,
+        &mock,
+        boot_req("vllm-e2e", "mi300x-func", VLLM_IMAGE),
+    )
+    .await;
     assert!(boot.container_id.is_some());
 
     // Overview should now show 1 session.
@@ -619,10 +719,12 @@ async fn delete_profile_not_in_use() {
 async fn cannot_delete_profile_with_active_session() {
     let (daemon, _mock) = vllm_daemon().await;
 
-    let boot = daemon
-        .boot(boot_req("del-profile-s1", "mi300x-func", "img:latest"))
-        .await
-        .unwrap();
+    let boot = boot_and_wait(
+        &daemon,
+        &_mock,
+        boot_req("del-profile-s1", "mi300x-func", "img:latest"),
+    )
+    .await;
     assert!(boot.ok, "boot failed: {:?}", boot.error);
 
     let r = daemon
@@ -643,10 +745,12 @@ async fn cannot_delete_profile_with_active_session() {
 async fn boot_sets_mirage_session_env() {
     let (daemon, mock) = vllm_daemon().await;
 
-    let boot = daemon
-        .boot(boot_req("env-test", "mi300x-func", VLLM_IMAGE))
-        .await
-        .unwrap();
+    let boot = boot_and_wait(
+        &daemon,
+        &mock,
+        boot_req("env-test", "mi300x-func", VLLM_IMAGE),
+    )
+    .await;
     assert!(boot.ok);
 
     let starts = mock.start_requests().await;
@@ -659,13 +763,32 @@ async fn boot_sets_mirage_session_env() {
 }
 
 #[tokio::test]
+async fn boot_wires_rocjitsu_interceptor_socket() {
+    let (daemon, mock) = vllm_daemon().await;
+
+    let boot = boot_and_wait(
+        &daemon,
+        &mock,
+        boot_req("socket-test", "mi300x-func", VLLM_IMAGE),
+    )
+    .await;
+    assert!(boot.ok);
+
+    let starts = mock.start_requests().await;
+    assert_eq!(starts.len(), 1);
+    assert_rocjitsu_socket_setup(&starts[0]);
+}
+
+#[tokio::test]
 async fn boot_uses_sleep_infinity_entrypoint() {
     let (daemon, mock) = vllm_daemon().await;
 
-    daemon
-        .boot(boot_req("entry-test", "mi300x-func", VLLM_IMAGE))
-        .await
-        .unwrap();
+    boot_and_wait(
+        &daemon,
+        &mock,
+        boot_req("entry-test", "mi300x-func", VLLM_IMAGE),
+    )
+    .await;
 
     let starts = mock.start_requests().await;
     assert_eq!(starts[0].container.entrypoint.command, "sleep");
@@ -676,10 +799,12 @@ async fn boot_uses_sleep_infinity_entrypoint() {
 async fn boot_uses_correct_image() {
     let (daemon, mock) = vllm_daemon().await;
 
-    daemon
-        .boot(boot_req("img-test", "mi300x-func", VLLM_IMAGE))
-        .await
-        .unwrap();
+    boot_and_wait(
+        &daemon,
+        &mock,
+        boot_req("img-test", "mi300x-func", VLLM_IMAGE),
+    )
+    .await;
 
     let starts = mock.start_requests().await;
     assert_eq!(starts[0].container.image, VLLM_IMAGE);
@@ -689,10 +814,12 @@ async fn boot_uses_correct_image() {
 async fn boot_pulls_image() {
     let (daemon, mock) = vllm_daemon().await;
 
-    daemon
-        .boot(boot_req("pull-test", "mi300x-func", VLLM_IMAGE))
-        .await
-        .unwrap();
+    boot_and_wait(
+        &daemon,
+        &mock,
+        boot_req("pull-test", "mi300x-func", VLLM_IMAGE),
+    )
+    .await;
 
     let pulled = mock.pulled_images().await;
     assert!(pulled.contains(&VLLM_IMAGE.to_string()));
@@ -714,10 +841,12 @@ async fn boot_rejects_empty_session_name() {
 async fn boot_rejects_duplicate_session_name() {
     let (daemon, _mock) = vllm_daemon().await;
 
-    let r1 = daemon
-        .boot(boot_req("dup-test", "mi300x-func", "img:latest"))
-        .await
-        .unwrap();
+    let r1 = boot_and_wait(
+        &daemon,
+        &_mock,
+        boot_req("dup-test", "mi300x-func", "img:latest"),
+    )
+    .await;
     assert!(r1.ok);
 
     let r2 = daemon
@@ -749,10 +878,12 @@ async fn boot_without_container_runtime_fails() {
 async fn exec_returns_stdout_and_stderr() {
     let (daemon, mock) = vllm_daemon().await;
 
-    let boot = daemon
-        .boot(boot_req("exec-io", "mi300x-func", "img:latest"))
-        .await
-        .unwrap();
+    let boot = boot_and_wait(
+        &daemon,
+        &mock,
+        boot_req("exec-io", "mi300x-func", "img:latest"),
+    )
+    .await;
     assert!(boot.ok);
 
     let starts = mock.start_requests().await;
@@ -781,10 +912,12 @@ async fn exec_returns_stdout_and_stderr() {
 async fn exec_propagates_nonzero_exit_code() {
     let (daemon, mock) = vllm_daemon().await;
 
-    let boot = daemon
-        .boot(boot_req("exit-code", "mi300x-func", "img:latest"))
-        .await
-        .unwrap();
+    let boot = boot_and_wait(
+        &daemon,
+        &mock,
+        boot_req("exit-code", "mi300x-func", "img:latest"),
+    )
+    .await;
     assert!(boot.ok);
 
     queue_fail(&mock, &boot, 42, b"segfault\n").await;
@@ -800,10 +933,12 @@ async fn exec_propagates_nonzero_exit_code() {
 async fn exec_multiple_commands_sequentially() {
     let (daemon, mock) = vllm_daemon().await;
 
-    let boot = daemon
-        .boot(boot_req("seq-exec", "mi300x-func", "img:latest"))
-        .await
-        .unwrap();
+    let boot = boot_and_wait(
+        &daemon,
+        &mock,
+        boot_req("seq-exec", "mi300x-func", "img:latest"),
+    )
+    .await;
     assert!(boot.ok);
 
     let commands = vec![
@@ -851,10 +986,12 @@ async fn daemon_health_is_healthy_by_default() {
 async fn session_health_for_booted_session() {
     let (daemon, _mock) = vllm_daemon().await;
 
-    let boot = daemon
-        .boot(boot_req("health-test", "mi300x-func", "img:latest"))
-        .await
-        .unwrap();
+    let boot = boot_and_wait(
+        &daemon,
+        &_mock,
+        boot_req("health-test", "mi300x-func", "img:latest"),
+    )
+    .await;
     assert!(boot.ok);
 
     let reply = daemon
@@ -904,10 +1041,12 @@ async fn time_for_nonexistent_session_fails() {
 async fn session_detail_shows_profile_and_simulator() {
     let (daemon, _mock) = vllm_daemon().await;
 
-    daemon
-        .boot(boot_req("detail-test", "mi300x-func", VLLM_IMAGE))
-        .await
-        .unwrap();
+    boot_and_wait(
+        &daemon,
+        &_mock,
+        boot_req("detail-test", "mi300x-func", VLLM_IMAGE),
+    )
+    .await;
 
     let detail = daemon
         .status(StatusRequest {
@@ -968,14 +1107,8 @@ async fn session_filter_by_profile() {
         .unwrap();
 
     // Boot sessions on different profiles.
-    daemon
-        .boot(boot_req("filter-s1", "p1", "img:1"))
-        .await
-        .unwrap();
-    daemon
-        .boot(boot_req("filter-s2", "p2", "img:2"))
-        .await
-        .unwrap();
+    boot_and_wait(&daemon, &mock, boot_req("filter-s1", "p1", "img:1")).await;
+    boot_and_wait(&daemon, &mock, boot_req("filter-s2", "p2", "img:2")).await;
 
     // Filter by p1.
     let reply = daemon
@@ -1003,15 +1136,17 @@ async fn shutdown_immediately_after_boot() {
         .create_profile(create_profile_req(mi300x_profile("p")))
         .await
         .unwrap();
-    daemon
-        .boot(BootRequest {
+    boot_and_wait(
+        &daemon,
+        &mock,
+        BootRequest {
             name: "del".into(),
             profile: "p".into(),
             image: "img".into(),
             volumes: vec![],
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await;
 
     let r = daemon
         .shutdown(ShutdownRequest { name: "del".into() })
@@ -1034,10 +1169,12 @@ async fn shutdown_immediately_after_boot() {
 async fn shutdown_cleans_up_container() {
     let (daemon, _mock) = vllm_daemon().await;
 
-    let boot = daemon
-        .boot(boot_req("cleanup", "mi300x-func", "img:latest"))
-        .await
-        .unwrap();
+    let boot = boot_and_wait(
+        &daemon,
+        &_mock,
+        boot_req("cleanup", "mi300x-func", "img:latest"),
+    )
+    .await;
     assert!(boot.ok);
 
     let shutdown = daemon
@@ -1068,10 +1205,12 @@ async fn shutdown_then_reboot_same_name() {
     let (daemon, _mock) = vllm_daemon().await;
 
     // First boot + shutdown.
-    let boot1 = daemon
-        .boot(boot_req("reuse-test", "mi300x-func", "img:latest"))
-        .await
-        .unwrap();
+    let boot1 = boot_and_wait(
+        &daemon,
+        &_mock,
+        boot_req("reuse-test", "mi300x-func", "img:latest"),
+    )
+    .await;
     assert!(boot1.ok);
     daemon
         .shutdown(ShutdownRequest {
@@ -1081,10 +1220,12 @@ async fn shutdown_then_reboot_same_name() {
         .unwrap();
 
     // Reboot with same name should succeed.
-    let boot2 = daemon
-        .boot(boot_req("reuse-test", "mi300x-func", "img:latest"))
-        .await
-        .unwrap();
+    let boot2 = boot_and_wait(
+        &daemon,
+        &_mock,
+        boot_req("reuse-test", "mi300x-func", "img:latest"),
+    )
+    .await;
     assert!(boot2.ok, "reboot failed: {:?}", boot2.error);
 }
 
@@ -1109,15 +1250,19 @@ async fn multinode_vllm_cluster_boot() {
         .await
         .unwrap();
 
-    let boot = daemon
-        .boot(boot_req("vllm-cluster", "mi300x-2x8", VLLM_IMAGE))
-        .await
-        .unwrap();
+    let boot = boot_and_wait(
+        &daemon,
+        &mock,
+        boot_req("vllm-cluster", "mi300x-2x8", VLLM_IMAGE),
+    )
+    .await;
     assert!(boot.ok, "cluster boot failed: {:?}", boot.error);
     assert_eq!(boot.container_ids.len(), 2);
 
     let starts = mock.start_requests().await;
     assert_eq!(starts.len(), 2);
+    assert_rocjitsu_socket_setup(&starts[0]);
+    assert_rocjitsu_socket_setup(&starts[1]);
 
     // Verify node naming.
     assert_eq!(starts[0].name, "mirage-vllm-cluster-node0");
@@ -1173,10 +1318,7 @@ async fn multinode_shutdown_removes_network() {
         .await
         .unwrap();
 
-    let boot = daemon
-        .boot(boot_req("multi-sd", "multi", "img:latest"))
-        .await
-        .unwrap();
+    let boot = boot_and_wait(&daemon, &mock, boot_req("multi-sd", "multi", "img:latest")).await;
     assert!(boot.ok);
     assert_eq!(boot.container_ids.len(), 3);
 
@@ -1288,10 +1430,12 @@ async fn active_session_count_tracks_sessions() {
     assert_eq!(sim.active_session_count, 0);
 
     // Boot a session.
-    daemon
-        .boot(boot_req("count-s1", "mi300x-func", "img:latest"))
-        .await
-        .unwrap();
+    boot_and_wait(
+        &daemon,
+        &_mock,
+        boot_req("count-s1", "mi300x-func", "img:latest"),
+    )
+    .await;
 
     let sim = daemon
         .show_simulator(ShowSimulatorRequest {
@@ -1457,18 +1601,30 @@ async fn boot_handles_start_container_failure() {
         .boot(boot_req("fail-boot", "p", "img:latest"))
         .await
         .unwrap();
-    assert!(!reply.ok);
-    assert!(reply.error.unwrap().contains("failed to start"));
+    assert!(reply.ok);
+    let phase = daemon
+        .wait_for_boot("fail-boot", std::time::Duration::from_secs(5))
+        .await;
+    assert_eq!(phase, SessionPhase::Failed);
+    let status = daemon
+        .status(StatusRequest {
+            name: "fail-boot".into(),
+        })
+        .await
+        .unwrap();
+    assert!(status.error_message.unwrap().contains("failed to start"));
 }
 
 #[tokio::test]
 async fn exec_handles_runtime_error() {
     let (daemon, mock) = vllm_daemon().await;
 
-    let boot = daemon
-        .boot(boot_req("exec-fail", "mi300x-func", "img:latest"))
-        .await
-        .unwrap();
+    let boot = boot_and_wait(
+        &daemon,
+        &mock,
+        boot_req("exec-fail", "mi300x-func", "img:latest"),
+    )
+    .await;
     assert!(boot.ok);
 
     let starts = mock.start_requests().await;
@@ -1498,10 +1654,12 @@ async fn multiple_concurrent_vllm_sessions() {
     // Boot 3 sessions concurrently.
     let mut boots = vec![];
     for i in 0..3 {
-        let boot = daemon
-            .boot(boot_req(&format!("vllm-{i}"), "mi300x-func", VLLM_IMAGE))
-            .await
-            .unwrap();
+        let boot = boot_and_wait(
+            &daemon,
+            &mock,
+            boot_req(&format!("vllm-{i}"), "mi300x-func", VLLM_IMAGE),
+        )
+        .await;
         assert!(boot.ok, "boot vllm-{i} failed: {:?}", boot.error);
         boots.push(boot);
     }
@@ -1534,6 +1692,9 @@ async fn multiple_concurrent_vllm_sessions() {
     // Each session should have its own container.
     let starts = mock.start_requests().await;
     assert_eq!(starts.len(), 3);
+    for start in &starts {
+        assert_rocjitsu_socket_setup(start);
+    }
 
     // Shutdown all.
     for i in 0..3 {
@@ -1561,10 +1722,12 @@ async fn multiple_concurrent_vllm_sessions() {
 async fn session_summary_contains_expected_fields() {
     let (daemon, _mock) = vllm_daemon().await;
 
-    daemon
-        .boot(boot_req("summary-s", "mi300x-func", VLLM_IMAGE))
-        .await
-        .unwrap();
+    boot_and_wait(
+        &daemon,
+        &_mock,
+        boot_req("summary-s", "mi300x-func", VLLM_IMAGE),
+    )
+    .await;
 
     let sessions = daemon
         .list_sessions(ListSessionsRequest::default())

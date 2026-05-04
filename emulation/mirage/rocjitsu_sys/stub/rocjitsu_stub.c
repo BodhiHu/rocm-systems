@@ -242,6 +242,15 @@ int rj_kmd_create_default(void **driver) {
   return RJ_STUB_STATUS_ERROR;
 }
 
+int rj_kmd_create(const char *config_path, const char *schema_path, void **driver) {
+  (void)config_path;
+  (void)schema_path;
+  if (driver) {
+    *driver = NULL;
+  }
+  return RJ_STUB_STATUS_ERROR;
+}
+
 int rj_kmd_open(void *driver, int *fd) {
   (void)driver;
   if (fd) {

@@ -60,6 +60,10 @@ fn main() {
 
     let header = include_dir.join("rocjitsu/rocjitsu.h");
     println!("cargo:rerun-if-changed={}", header.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        include_dir.join("rocjitsu/kmd/rj_kmd.h").display()
+    );
 
     let bindings = bindgen::Builder::default()
         .header(header.to_string_lossy())
@@ -149,6 +153,13 @@ fn build_rocjitsu(source_dir: &Path) -> PathBuf {
         "cargo:rerun-if-changed={}",
         source_dir.join("CMakeLists.txt").display()
     );
+    for path in [
+        "lib/rocjitsu/src/rocjitsu/kmd/rj_kmd.cpp",
+        "lib/rocjitsu/src/rocjitsu/kmd/linux/simulated_driver.cpp",
+        "lib/rocjitsu/src/rocjitsu/kmd/linux/simulated_driver.h",
+    ] {
+        println!("cargo:rerun-if-changed={}", source_dir.join(path).display());
+    }
 
     let fetch_dir = PathBuf::from(env::var("OUT_DIR").unwrap()).join("rocjitsu_fetch");
 

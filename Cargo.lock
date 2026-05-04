@@ -673,6 +673,8 @@ dependencies = [
  "futures-util",
  "mime_guess",
  "mirage_container",
+ "mirage_remote",
+ "mirage_rocjitsu",
  "mirage_schema",
  "nix",
  "rust-embed",

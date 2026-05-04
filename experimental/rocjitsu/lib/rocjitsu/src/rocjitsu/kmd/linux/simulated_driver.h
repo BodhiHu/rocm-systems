@@ -22,6 +22,7 @@ RJ_DIAGNOSTIC_POP
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -61,6 +62,11 @@ public:
 
   /// @brief Create a default driver from RJ_CONFIG/RJ_SCHEMA env vars.
   static std::unique_ptr<SimulatedDriver> create_default();
+
+  /// @brief Create a driver from explicit config and schema paths.
+  static std::unique_ptr<SimulatedDriver>
+  create_from_paths(const std::string &config_path,
+                    const std::string &schema_path);
 
   /// @brief Construct with a simulation engine and SoC.
   SimulatedDriver(simdojo::SimulationEngine &engine, SoC &soc);

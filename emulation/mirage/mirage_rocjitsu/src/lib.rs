@@ -23,7 +23,9 @@
 //!
 //! [rocjitsu]: https://github.com/ROCm/rocm-systems/tree/main/experimental/rocjitsu
 
+use std::collections::BTreeMap;
 use std::ffi::{CString, NulError};
+use std::fs;
 use std::path::Path;
 use std::ptr;
 use std::sync::Mutex;
@@ -217,6 +219,24 @@ impl RocjitsuEmulator {
     pub fn from_default_kmd() -> Result<Self, RocjitsuError> {
         let mut kmd: *mut rocjitsu_sys::rj_kmd_t = ptr::null_mut();
         let status = unsafe { rocjitsu_sys::rj_kmd_create_default(&mut kmd) };
+        Self::from_created_kmd(kmd, status)
+    }
+
+    /// Build an emulator backed by the simulated KFD driver using explicit
+    /// rocjitsu config and schema paths.
+    pub fn from_kmd_config(config_path: &Path, schema_path: &Path) -> Result<Self, RocjitsuError> {
+        let config_c = CString::new(config_path.as_os_str().as_encoded_bytes())?;
+        let schema_c = CString::new(schema_path.as_os_str().as_encoded_bytes())?;
+        let mut kmd: *mut rocjitsu_sys::rj_kmd_t = ptr::null_mut();
+        let status =
+            unsafe { rocjitsu_sys::rj_kmd_create(config_c.as_ptr(), schema_c.as_ptr(), &mut kmd) };
+        Self::from_created_kmd(kmd, status)
+    }
+
+    fn from_created_kmd(
+        kmd: *mut rocjitsu_sys::rj_kmd_t,
+        status: rocjitsu_sys::rj_status_t,
+    ) -> Result<Self, RocjitsuError> {
         check(status)?;
         let handle = ptr::NonNull::new(kmd).ok_or(RocjitsuError::Status(
             rocjitsu_sys::rj_status_e_ROCJITSU_STATUS_ERROR,
@@ -1367,10 +1387,37 @@ impl HandleAnyDeviceSyscalls for RocjitsuEmulator {}
 
 impl mirage_schema::topology::ProvideTopology for RocjitsuEmulator {
     fn get_topology(&self) -> AmdgpuResult<mirage_schema::topology::Topology> {
-        Ok(mirage_schema::topology::Topology {
-            files: std::collections::BTreeMap::new(),
-        })
+        let Some(root) = self.topology_path() else {
+            return Ok(mirage_schema::topology::Topology {
+                files: BTreeMap::new(),
+            });
+        };
+        let root = Path::new(&root);
+        let mut files = BTreeMap::new();
+        read_topology_recursive(root, root, &mut files)?;
+        Ok(mirage_schema::topology::Topology { files })
     }
+}
+
+fn read_topology_recursive(
+    root: &Path,
+    dir: &Path,
+    files: &mut BTreeMap<String, Vec<u8>>,
+) -> AmdgpuResult<()> {
+    let entries = fs::read_dir(dir).map_err(|_| AmdgpuError::Io)?;
+    for entry in entries {
+        let entry = entry.map_err(|_| AmdgpuError::Io)?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|_| AmdgpuError::Io)?;
+        if file_type.is_dir() {
+            read_topology_recursive(root, &path, files)?;
+        } else if file_type.is_file() {
+            let data = fs::read(&path).map_err(|_| AmdgpuError::Io)?;
+            let relative = path.strip_prefix(root).map_err(|_| AmdgpuError::Invalid)?;
+            files.insert(relative.to_string_lossy().into_owned(), data);
+        }
+    }
+    Ok(())
 }
 
 // Compile-time proof that `RocjitsuEmulator` satisfies `Emulator`.
@@ -1438,5 +1485,37 @@ mod tests {
             }
         };
         let _ = emu.step();
+    }
+
+    #[test]
+    fn real_kmd_exposes_bundled_topology() {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut config_path = None;
+        let mut schema_path = None;
+        for ancestor in manifest_dir.ancestors() {
+            let cfg = ancestor.join("experimental/rocjitsu/configs/amdgpu_cdna3_kmd.json");
+            let sch = ancestor.join("experimental/rocjitsu/schemas/simulation_config.fbs");
+            if cfg.exists() && sch.exists() {
+                config_path = Some(cfg);
+                schema_path = Some(sch);
+                break;
+            }
+        }
+        let (Some(config_path), Some(schema_path)) = (config_path, schema_path) else {
+            eprintln!("rocjitsu source tree not found; skipping topology test");
+            return;
+        };
+
+        let emu = match RocjitsuEmulator::from_kmd_config(&config_path, &schema_path) {
+            Ok(emu) => emu,
+            Err(e) => {
+                eprintln!("rj_kmd_create failed ({e}); likely linked against stub — skipping");
+                return;
+            }
+        };
+        let topology = mirage_schema::topology::ProvideTopology::get_topology(&emu)
+            .expect("topology snapshot should load");
+        assert!(topology.files.contains_key("system_properties"));
+        assert!(topology.files.contains_key("nodes/0/properties"));
     }
 }

@@ -4,6 +4,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 
 use async_trait::async_trait;
 use tokio::sync::RwLock;
@@ -58,6 +59,10 @@ const LABEL_SIMULATOR: &str = "mirage.simulator";
 const LABEL_EMULATOR_SESSION: &str = "mirage.emulator_session";
 /// Node index within a multi-node session.
 const LABEL_NODE_INDEX: &str = "mirage.node_index";
+/// Container path for the LD_PRELOAD interceptor, when a session uses one.
+const LABEL_INTERCEPTOR_PATH: &str = "mirage.interceptor_path";
+/// Container path for the emulator socket, when a session uses one.
+const LABEL_EMULATOR_SOCKET: &str = "mirage.emulator_socket";
 
 /// Default port used for head-node communication (matches NCCL/torch defaults).
 const MIRAGE_HEAD_PORT: u16 = 29500;
@@ -112,6 +117,8 @@ pub struct MirageDaemon {
     /// Defaults to `paths::runtime_dir()` in production; tests override it
     /// to isolate state between runs.
     runtime_root: PathBuf,
+    /// Whether boot should start a simulator-backed emulator socket.
+    emulator_setup_enabled: bool,
 }
 
 impl fmt::Debug for MirageDaemon {
@@ -123,6 +130,7 @@ impl fmt::Debug for MirageDaemon {
                 &self.container_runtime.as_ref().map(|_| "<runtime>"),
             )
             .field("config_root", &self.config_root)
+            .field("emulator_setup_enabled", &self.emulator_setup_enabled)
             .finish()
     }
 }
@@ -345,6 +353,7 @@ impl MirageDaemon {
             next_exec_id: AtomicU64::new(1),
             config_root: paths::config_dir(),
             runtime_root: paths::runtime_dir(),
+            emulator_setup_enabled: true,
         }
     }
 
@@ -358,6 +367,7 @@ impl MirageDaemon {
             next_exec_id: AtomicU64::new(1),
             config_root: paths::config_dir(),
             runtime_root: paths::runtime_dir(),
+            emulator_setup_enabled: true,
         }
     }
 
@@ -366,6 +376,22 @@ impl MirageDaemon {
     /// Useful for tests that need an isolated filesystem.
     pub fn set_config_root(&mut self, root: PathBuf) {
         self.config_root = root;
+    }
+
+    /// Override the runtime root directory used for per-session state.
+    ///
+    /// Useful for integration tests that need isolated session state while
+    /// still exercising the real daemon boot path.
+    pub fn set_runtime_root(&mut self, root: PathBuf) {
+        self.runtime_root = root;
+    }
+
+    /// Enable or disable simulator emulator socket setup during boot.
+    ///
+    /// Production daemons keep this enabled. Tests that use a mock container
+    /// runtime can disable it to avoid starting a real simulator engine.
+    pub fn set_emulator_setup_enabled(&mut self, enabled: bool) {
+        self.emulator_setup_enabled = enabled;
     }
 
     /// Generate a unique emulator session id for crash-recovery labelling.
@@ -1364,6 +1390,7 @@ impl MirageDaemonBoot for MirageDaemon {
         let boot_session = session_name.clone();
         let boot_profile_name = profile_name.clone();
         let boot_image = image.clone();
+        let emulator_setup_enabled = self.emulator_setup_enabled;
         tokio::spawn(async move {
             let result = boot_session_task(
                 state.clone(),
@@ -1373,6 +1400,7 @@ impl MirageDaemonBoot for MirageDaemon {
                 profile,
                 boot_image,
                 extra_volumes,
+                emulator_setup_enabled,
             )
             .await;
             match result {
@@ -1417,16 +1445,27 @@ async fn boot_session_task(
     profile: ProfileDef,
     image: String,
     extra_volumes: Vec<String>,
+    emulator_setup_enabled: bool,
 ) -> Result<String, String> {
     let emulator_session_id = MirageDaemon::new_emulator_session_id(&session_name);
 
     // --- Container setup ---
     let mut base_mounts = Vec::new();
-    let base_env = vec![SetEnv {
+    let mut base_env = vec![SetEnv {
         key: "MIRAGE_SESSION".to_string(),
         value: session_name.clone(),
     }];
     let devices = Vec::new();
+    let mut emulator_labels = BTreeMap::new();
+
+    if emulator_setup_enabled
+        && profile.simulator == "rocjitsu"
+        && let Some(setup) = start_rocjitsu_emulator(&session_name, &profile)?
+    {
+        base_mounts.extend(setup.mounts);
+        base_env.extend(setup.env);
+        emulator_labels = setup.labels;
+    }
 
     // --- Image pull with progress streaming ---
     let (progress_tx, mut progress_rx) =
@@ -1532,7 +1571,7 @@ async fn boot_session_task(
             });
         }
 
-        let labels = MirageDaemon::session_labels(
+        let mut labels = MirageDaemon::session_labels(
             &session_name,
             &profile_name,
             &profile.simulator,
@@ -1540,6 +1579,7 @@ async fn boot_session_task(
             &emulator_session_id,
             node_index,
         );
+        labels.extend(emulator_labels.clone());
 
         let container_def = ContainerDef {
             image: image.clone(),
@@ -1623,7 +1663,20 @@ impl MirageDaemonExec for MirageDaemon {
         };
 
         // Build the container exec args.
-        let exec_args = Self::exec_from_command(request.command)?;
+        let mut exec_args = Self::exec_from_command(request.command)?;
+
+        if let Some(so_path) = head.labels.get(LABEL_INTERCEPTOR_PATH) {
+            exec_args.env.push(SetEnv {
+                key: "LD_PRELOAD".to_string(),
+                value: so_path.clone(),
+            });
+        }
+        if let Some(sock_path) = head.labels.get(LABEL_EMULATOR_SOCKET) {
+            exec_args.env.push(SetEnv {
+                key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
+                value: sock_path.clone(),
+            });
+        }
 
         // Build exec_id path.
         let n = self.next_exec_id.fetch_add(1, Ordering::Relaxed);
@@ -1727,13 +1780,8 @@ impl MirageDaemonExec for MirageDaemon {
 
             // Build the docker exec command.
             let mut cmd = Command::new("docker");
-            cmd.arg("exec").arg("-it").arg(&container_id);
-            for env_arg in &exec_env {
-                cmd.arg("-e");
-                cmd.arg(format!("{}={}", env_arg.key, env_arg.value));
-            }
-            for part in &command {
-                cmd.arg(part);
+            for arg in docker_exec_pty_args(&container_id, &exec_env, &command) {
+                cmd.arg(arg);
             }
 
             // Give docker the slave PTY as its stdin/stdout/stderr so it sees
@@ -1811,6 +1859,17 @@ impl MirageDaemonExec for MirageDaemon {
 
         Ok(ExecReply { exec_id })
     }
+}
+
+fn docker_exec_pty_args(container_id: &str, env: &[SetEnv], command: &[String]) -> Vec<String> {
+    let mut args = vec!["exec".to_string(), "-it".to_string()];
+    for env_arg in env {
+        args.push("-e".to_string());
+        args.push(format!("{}={}", env_arg.key, env_arg.value));
+    }
+    args.push(container_id.to_string());
+    args.extend(command.iter().cloned());
+    args
 }
 
 /// Append bytes to an exec's rolling output buffer, capping at
@@ -2109,6 +2168,151 @@ impl MirageDaemonDeleteWorkload for MirageDaemon {
 //  Free-standing helpers
 // ---------------------------------------------------------------------------
 
+struct EmulatorContainerSetup {
+    mounts: Vec<BindMount>,
+    env: Vec<SetEnv>,
+    labels: BTreeMap<String, String>,
+}
+
+fn start_rocjitsu_emulator(
+    session_name: &str,
+    profile: &ProfileDef,
+) -> Result<Option<EmulatorContainerSetup>, String> {
+    let Some(interceptor_so) = find_interceptor_so() else {
+        tracing::warn!(
+            "libmirage_interceptor.so not found; rocjitsu session will start without LD_PRELOAD interception"
+        );
+        return Ok(None);
+    };
+    let (config_path, schema_path) = rocjitsu_kmd_paths(profile)?;
+    let emulator = mirage_rocjitsu::RocjitsuEmulator::from_kmd_config(&config_path, &schema_path)
+        .map_err(|e| format!("failed to start rocjitsu emulator: {e}"))?;
+
+    let socket_path = unique_emulator_socket(session_name);
+    let server = mirage_remote::EmulatorServer::new(socket_path.clone(), emulator);
+    let listener = server
+        .bind()
+        .map_err(|e| format!("failed to bind emulator socket: {e}"))?;
+    thread::spawn(move || {
+        let _ = server.serve_on(listener);
+    });
+
+    let container_so = "/tmp/libmirage_interceptor.so".to_string();
+    let container_sock = "/tmp/mirage_emulator.sock".to_string();
+    let mut labels = BTreeMap::new();
+    labels.insert(LABEL_INTERCEPTOR_PATH.to_string(), container_so.clone());
+    labels.insert(LABEL_EMULATOR_SOCKET.to_string(), container_sock.clone());
+
+    Ok(Some(EmulatorContainerSetup {
+        mounts: vec![
+            BindMount {
+                host_path: interceptor_so.to_string_lossy().to_string(),
+                container_path: container_so.clone(),
+                readonly: true,
+            },
+            BindMount {
+                host_path: socket_path.to_string_lossy().to_string(),
+                container_path: container_sock.clone(),
+                readonly: false,
+            },
+        ],
+        env: vec![
+            SetEnv {
+                key: "LD_PRELOAD".to_string(),
+                value: container_so,
+            },
+            SetEnv {
+                key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
+                value: container_sock,
+            },
+        ],
+        labels,
+    }))
+}
+
+fn rocjitsu_kmd_paths(profile: &ProfileDef) -> Result<(PathBuf, PathBuf), String> {
+    let repo_root = find_repo_root()?;
+    let config_name = match profile.gpu.as_str() {
+        "MI300X" | "MI325X" => "amdgpu_cdna3_kmd.json",
+        "MI350X" => "amdgpu_cdna4_kmd.json",
+        other => return Err(format!("no rocjitsu KMD config for GPU '{other}'")),
+    };
+    let config_path = repo_root
+        .join("experimental/rocjitsu/configs")
+        .join(config_name);
+    let schema_path = repo_root.join("experimental/rocjitsu/schemas/simulation_config.fbs");
+    if !config_path.is_file() {
+        return Err(format!(
+            "rocjitsu config not found: {}",
+            config_path.display()
+        ));
+    }
+    if !schema_path.is_file() {
+        return Err(format!(
+            "rocjitsu schema not found: {}",
+            schema_path.display()
+        ));
+    }
+    Ok((config_path, schema_path))
+}
+
+fn find_repo_root() -> Result<PathBuf, String> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .find(|path| path.join("experimental/rocjitsu").is_dir())
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            format!(
+                "could not find rocm-systems root from {}",
+                manifest_dir.display()
+            )
+        })
+}
+
+fn find_interceptor_so() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("libmirage_interceptor.so"));
+            if let Some(target_dir) = dir.parent() {
+                candidates.push(target_dir.join("libmirage_interceptor.so"));
+            }
+        }
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for ancestor in manifest_dir.ancestors() {
+        candidates.push(ancestor.join("target/debug/libmirage_interceptor.so"));
+        candidates.push(ancestor.join("target/release/libmirage_interceptor.so"));
+    }
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
+fn unique_emulator_socket(session_name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join("mirage");
+    let _ = std::fs::create_dir_all(&dir);
+    let safe_session: String = session_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    dir.join(format!(
+        "emu-{}-{safe_session}-{nonce}.sock",
+        std::process::id()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2155,6 +2359,7 @@ mod tests {
                 next_exec_id: AtomicU64::new(1),
                 config_root: test_config_root(),
                 runtime_root: test_runtime_root(),
+                emulator_setup_enabled: false,
             }
         }
 
@@ -2168,6 +2373,7 @@ mod tests {
                 next_exec_id: AtomicU64::new(1),
                 config_root: test_config_root(),
                 runtime_root: test_runtime_root(),
+                emulator_setup_enabled: false,
             }
         }
     }
@@ -2181,6 +2387,38 @@ mod tests {
             gpus_per_node: profile.num_gpus,
             nodes: profile.num_nodes,
         }
+    }
+
+    #[test]
+    fn docker_exec_pty_env_args_precede_container_id() {
+        let args = docker_exec_pty_args(
+            "container-1",
+            &[
+                SetEnv {
+                    key: "LD_PRELOAD".to_string(),
+                    value: "/tmp/libmirage_interceptor.so".to_string(),
+                },
+                SetEnv {
+                    key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
+                    value: "/tmp/mirage_emulator.sock".to_string(),
+                },
+            ],
+            &["bash".to_string()],
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "exec",
+                "-it",
+                "-e",
+                "LD_PRELOAD=/tmp/libmirage_interceptor.so",
+                "-e",
+                "MIRAGE_INTERCEPTOR_SOCKET=/tmp/mirage_emulator.sock",
+                "container-1",
+                "bash",
+            ]
+        );
     }
 
     fn boot_request(session: SessionDef) -> BootRequest {

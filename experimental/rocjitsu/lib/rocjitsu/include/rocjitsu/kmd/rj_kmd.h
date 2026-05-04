@@ -41,6 +41,22 @@ typedef struct rj_kmd_t rj_kmd_t;
 ///         config, etc.). An error message is logged to stderr.
 RJ_API_EXPORT rj_status_t rj_kmd_create_default(rj_kmd_t **driver);
 
+/// @brief Create a simulated driver from explicit config and schema paths.
+///
+/// @details Equivalent to rj_kmd_create_default, but avoids process-wide
+/// environment variables for callers that manage multiple simulator instances.
+/// The driver is *not* open yet; call rj_kmd_open() before issuing ioctls.
+///
+/// @param[in]  config_path Path to a rocjitsu simulation config JSON file.
+/// @param[in]  schema_path Path to simulation_config.fbs.
+/// @param[out] driver      The newly created driver handle.
+/// @retval ROCJITSU_STATUS_SUCCESS Driver was created successfully.
+/// @retval ROCJITSU_STATUS_INVALID_ARGUMENT Any pointer argument is NULL.
+/// @retval ROCJITSU_STATUS_ERROR Construction failed.
+RJ_API_EXPORT rj_status_t rj_kmd_create(const char *config_path,
+                                        const char *schema_path,
+                                        rj_kmd_t **driver);
+
 /// @brief Open the simulated KFD device.
 ///
 /// @details Allocates a synthetic file descriptor (via memfd_create), registers

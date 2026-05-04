@@ -12,19 +12,41 @@ struct rj_kmd_t {
   std::string topology_path_cache;
 };
 
+namespace {
+
+rj_status_t create_handle(std::unique_ptr<rocjitsu::SimulatedDriver> driver,
+                          rj_kmd_t **out) {
+  if (!driver)
+    return ROCJITSU_STATUS_ERROR;
+  auto handle = std::make_unique<rj_kmd_t>();
+  handle->driver = std::move(driver);
+  handle->topology_path_cache = handle->driver->topology_path();
+  *out = handle.release();
+  return ROCJITSU_STATUS_SUCCESS;
+}
+
+} // namespace
+
 extern "C" {
 
 rj_status_t rj_kmd_create_default(rj_kmd_t **out) {
   if (!out)
     return ROCJITSU_STATUS_INVALID_ARGUMENT;
   try {
-    auto handle = std::make_unique<rj_kmd_t>();
-    handle->driver = rocjitsu::SimulatedDriver::create_default();
-    if (!handle->driver)
-      return ROCJITSU_STATUS_ERROR;
-    handle->topology_path_cache = handle->driver->topology_path();
-    *out = handle.release();
-    return ROCJITSU_STATUS_SUCCESS;
+    return create_handle(rocjitsu::SimulatedDriver::create_default(), out);
+  } catch (...) {
+    *out = nullptr;
+    return ROCJITSU_STATUS_ERROR;
+  }
+}
+
+rj_status_t rj_kmd_create(const char *config_path, const char *schema_path,
+                          rj_kmd_t **out) {
+  if (!config_path || !schema_path || !out)
+    return ROCJITSU_STATUS_INVALID_ARGUMENT;
+  try {
+    return create_handle(
+        rocjitsu::SimulatedDriver::create_from_paths(config_path, schema_path), out);
   } catch (...) {
     *out = nullptr;
     return ROCJITSU_STATUS_ERROR;

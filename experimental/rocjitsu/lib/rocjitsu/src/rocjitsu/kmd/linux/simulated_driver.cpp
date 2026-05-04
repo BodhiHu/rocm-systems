@@ -149,6 +149,12 @@ std::unique_ptr<SimulatedDriver> SimulatedDriver::create_default() {
   if (!config_path || !schema_path)
     throw util::ConfigError("RJ_CONFIG and RJ_SCHEMA env vars required");
 
+  return create_from_paths(config_path, schema_path);
+}
+
+std::unique_ptr<SimulatedDriver>
+SimulatedDriver::create_from_paths(const std::string &config_path,
+                                   const std::string &schema_path) {
   auto state = std::make_unique<DefaultDriverState>();
   state->loaded = config::load_config(config_path, schema_path);
   auto *soc = state->loaded.soc();

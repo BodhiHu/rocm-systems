@@ -8,6 +8,8 @@ async-trait = { workspace = true }
 clap = { workspace = true }
 nix = { workspace = true }
 mirage_container = { path = "../mirage_container" }
+mirage_remote = { workspace = true }
+mirage_rocjitsu = { workspace = true }
 mirage_schema = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
