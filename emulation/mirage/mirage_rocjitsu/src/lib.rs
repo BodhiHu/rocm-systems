@@ -71,7 +71,9 @@ use mirage_schema::amdgpu::{
     KfdPcSampleArgs, KfdPcSampleInfo, KfdProcessDeviceAperture,
 };
 use mirage_schema::amdgpu_error::{AmdgpuError, AmdgpuResult};
-use mirage_schema::syscalls::{HandleAnyDeviceSyscalls, HandleDeviceSyscalls};
+use mirage_schema::syscalls::{
+    DeviceClass, FakeStat, HandleAnyDeviceSyscalls, HandleDeviceSyscalls,
+};
 use mirage_uapi::ioctl::{IoctlCmd, kfd_ior, kfd_iow, kfd_iowr, maybe_mut_ptr};
 use mirage_uapi::kfd;
 use mirage_uapi::kfd_marshal::{
@@ -169,6 +171,28 @@ impl Drop for KmdHandle {
     }
 }
 
+#[derive(Debug, Clone)]
+struct DeviceFd {
+    class: DeviceClass,
+    path: String,
+    refs: u32,
+}
+
+#[derive(Debug)]
+struct DeviceFdState {
+    next_fd: i32,
+    fds: BTreeMap<i32, DeviceFd>,
+}
+
+impl Default for DeviceFdState {
+    fn default() -> Self {
+        Self {
+            next_fd: 1000,
+            fds: BTreeMap::new(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Emulator.
 
@@ -183,6 +207,8 @@ pub struct RocjitsuEmulator {
     kmd: Mutex<Option<KmdHandle>>,
     /// Legacy VM handle for step/run (standalone simulation).
     vm: Mutex<Option<VmHandle>>,
+    /// Remote-side virtual fd table for intercepted device opens.
+    device_fds: Mutex<DeviceFdState>,
 }
 
 impl std::fmt::Debug for RocjitsuEmulator {
@@ -208,6 +234,7 @@ impl RocjitsuEmulator {
         Self {
             kmd: Mutex::new(None),
             vm: Mutex::new(None),
+            device_fds: Mutex::new(DeviceFdState::default()),
         }
     }
 
@@ -253,6 +280,7 @@ impl RocjitsuEmulator {
         Ok(Self {
             kmd: Mutex::new(Some(KmdHandle(handle))),
             vm: Mutex::new(None),
+            device_fds: Mutex::new(DeviceFdState::default()),
         })
     }
 
@@ -272,6 +300,7 @@ impl RocjitsuEmulator {
         Ok(Self {
             kmd: Mutex::new(None),
             vm: Mutex::new(Some(VmHandle(handle))),
+            device_fds: Mutex::new(DeviceFdState::default()),
         })
     }
 
@@ -290,6 +319,7 @@ impl RocjitsuEmulator {
         Ok(Self {
             kmd: Mutex::new(None),
             vm: Mutex::new(Some(VmHandle(handle))),
+            device_fds: Mutex::new(DeviceFdState::default()),
         })
     }
 
@@ -336,6 +366,28 @@ impl RocjitsuEmulator {
 // KFD ioctl helper.
 
 impl RocjitsuEmulator {
+    fn ensure_kmd(&self) -> AmdgpuResult<()> {
+        if self.kmd.lock().unwrap().is_some() {
+            Ok(())
+        } else {
+            Err(AmdgpuError::NoSys)
+        }
+    }
+
+    fn fake_stat(class: DeviceClass, path: &str) -> FakeStat {
+        let (major, minor) = match class {
+            DeviceClass::Kfd => (235, 0),
+            DeviceClass::DrmRender => (226, parse_device_minor(path, "renderD").unwrap_or(128)),
+            DeviceClass::DrmCard => (226, parse_device_minor(path, "card").unwrap_or(0)),
+        };
+        FakeStat {
+            mode: libc::S_IFCHR | 0o666,
+            nlink: 1,
+            rdev: linux_makedev(major, minor),
+            size: 0,
+        }
+    }
+
     fn sim_ioctl<T>(&self, cmd: IoctlCmd<T>, arg: &mut T) -> AmdgpuResult<()> {
         let guard = self.kmd.lock().unwrap();
         let handle = guard.as_ref().ok_or(AmdgpuError::NoSys)?;
@@ -356,6 +408,17 @@ impl RocjitsuEmulator {
         }
         Ok(())
     }
+}
+
+fn parse_device_minor(path: &str, marker: &str) -> Option<u32> {
+    let (_, suffix) = path.rsplit_once(marker)?;
+    suffix.parse().ok()
+}
+
+fn linux_makedev(major: u32, minor: u32) -> u64 {
+    let major = major as u64;
+    let minor = minor as u64;
+    (minor & 0xff) | ((major & 0xfff) << 8) | ((minor & !0xff) << 12) | ((major & !0xfff) << 32)
 }
 
 // ---------------------------------------------------------------------------
@@ -1312,7 +1375,8 @@ impl HandleDrmIoctl for RocjitsuEmulator {
 impl HandleAnyDrmIoctl for RocjitsuEmulator {}
 
 // ---------------------------------------------------------------------------
-// FS syscalls — mmap/munmap go through the simulated driver; rest is NoSys.
+// FS syscalls — mmap/munmap go through the simulated driver; device opens
+// use virtual fd bookkeeping for the interceptor socket path.
 
 impl HandleDeviceSyscalls for RocjitsuEmulator {
     fn syscall_mmap(
@@ -1371,16 +1435,125 @@ impl HandleDeviceSyscalls for RocjitsuEmulator {
         Ok(mirage_schema::syscalls::SyscallMunmapResponse {})
     }
 
-    nosys_methods!(
-        fn syscall_open(mirage_schema::syscalls::SyscallOpenRequest) -> mirage_schema::syscalls::SyscallOpenResponse;
-        fn syscall_close(mirage_schema::syscalls::SyscallCloseRequest) -> mirage_schema::syscalls::SyscallCloseResponse;
-        fn syscall_stat_device(mirage_schema::syscalls::SyscallStatDeviceRequest) -> mirage_schema::syscalls::SyscallStatDeviceResponse;
-        fn syscall_access(mirage_schema::syscalls::SyscallAccessRequest) -> mirage_schema::syscalls::SyscallAccessResponse;
-        fn syscall_readlink_fd(mirage_schema::syscalls::SyscallReadlinkFdRequest) -> mirage_schema::syscalls::SyscallReadlinkFdResponse;
-        fn syscall_read_device(mirage_schema::syscalls::SyscallReadDeviceRequest) -> mirage_schema::syscalls::SyscallReadDeviceResponse;
-        fn syscall_dup(mirage_schema::syscalls::SyscallDupRequest) -> mirage_schema::syscalls::SyscallDupResponse;
-        fn syscall_atfork_child(mirage_schema::syscalls::SyscallAtforkChildRequest) -> mirage_schema::syscalls::SyscallAtforkChildResponse;
-    );
+    fn syscall_open(
+        &self,
+        _ctx: IoctlCtx,
+        request: mirage_schema::syscalls::SyscallOpenRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::SyscallOpenResponse> {
+        self.ensure_kmd()?;
+        let mut state = self.device_fds.lock().unwrap();
+        let virtual_fd = state.next_fd;
+        state.next_fd = state
+            .next_fd
+            .checked_add(1)
+            .ok_or(AmdgpuError::NoFileDescriptors)?;
+        state.fds.insert(
+            virtual_fd,
+            DeviceFd {
+                class: request.class,
+                path: request.path,
+                refs: 1,
+            },
+        );
+        Ok(mirage_schema::syscalls::SyscallOpenResponse { virtual_fd })
+    }
+
+    fn syscall_close(
+        &self,
+        _ctx: IoctlCtx,
+        request: mirage_schema::syscalls::SyscallCloseRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::SyscallCloseResponse> {
+        self.ensure_kmd()?;
+        let mut state = self.device_fds.lock().unwrap();
+        let fd = state
+            .fds
+            .get_mut(&request.virtual_fd)
+            .ok_or(AmdgpuError::BadFd)?;
+        fd.refs = fd.refs.saturating_sub(1);
+        if fd.refs == 0 {
+            state.fds.remove(&request.virtual_fd);
+        }
+        Ok(mirage_schema::syscalls::SyscallCloseResponse {})
+    }
+
+    fn syscall_stat_device(
+        &self,
+        _ctx: IoctlCtx,
+        request: mirage_schema::syscalls::SyscallStatDeviceRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::SyscallStatDeviceResponse> {
+        self.ensure_kmd()?;
+        Ok(mirage_schema::syscalls::SyscallStatDeviceResponse {
+            stat: Self::fake_stat(request.class, &request.path),
+        })
+    }
+
+    fn syscall_access(
+        &self,
+        _ctx: IoctlCtx,
+        _request: mirage_schema::syscalls::SyscallAccessRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::SyscallAccessResponse> {
+        self.ensure_kmd()?;
+        Ok(mirage_schema::syscalls::SyscallAccessResponse { allowed: true })
+    }
+
+    fn syscall_readlink_fd(
+        &self,
+        _ctx: IoctlCtx,
+        request: mirage_schema::syscalls::SyscallReadlinkFdRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::SyscallReadlinkFdResponse> {
+        self.ensure_kmd()?;
+        let state = self.device_fds.lock().unwrap();
+        let fd = state
+            .fds
+            .get(&request.virtual_fd)
+            .ok_or(AmdgpuError::BadFd)?;
+        Ok(mirage_schema::syscalls::SyscallReadlinkFdResponse {
+            target: fd.path.clone(),
+        })
+    }
+
+    fn syscall_read_device(
+        &self,
+        _ctx: IoctlCtx,
+        request: mirage_schema::syscalls::SyscallReadDeviceRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::SyscallReadDeviceResponse> {
+        self.ensure_kmd()?;
+        let state = self.device_fds.lock().unwrap();
+        let fd = state
+            .fds
+            .get(&request.virtual_fd)
+            .ok_or(AmdgpuError::BadFd)?;
+        let _class = fd.class;
+        Ok(mirage_schema::syscalls::SyscallReadDeviceResponse { data: vec![] })
+    }
+
+    fn syscall_dup(
+        &self,
+        _ctx: IoctlCtx,
+        request: mirage_schema::syscalls::SyscallDupRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::SyscallDupResponse> {
+        self.ensure_kmd()?;
+        let mut state = self.device_fds.lock().unwrap();
+        let fd = state
+            .fds
+            .get_mut(&request.virtual_fd)
+            .ok_or(AmdgpuError::BadFd)?;
+        fd.refs = fd
+            .refs
+            .checked_add(1)
+            .ok_or(AmdgpuError::NoFileDescriptors)?;
+        Ok(mirage_schema::syscalls::SyscallDupResponse {})
+    }
+
+    fn syscall_atfork_child(
+        &self,
+        _ctx: IoctlCtx,
+        _request: mirage_schema::syscalls::SyscallAtforkChildRequest,
+    ) -> AmdgpuResult<mirage_schema::syscalls::SyscallAtforkChildResponse> {
+        self.ensure_kmd()?;
+        self.device_fds.lock().unwrap().fds.clear();
+        Ok(mirage_schema::syscalls::SyscallAtforkChildResponse {})
+    }
 }
 
 impl HandleAnyDeviceSyscalls for RocjitsuEmulator {}
@@ -1517,5 +1690,60 @@ mod tests {
             .expect("topology snapshot should load");
         assert!(topology.files.contains_key("system_properties"));
         assert!(topology.files.contains_key("nodes/0/properties"));
+
+        let ctx = IoctlCtx { pid: 0, tid: 0 };
+        let stat = emu
+            .syscall_stat_device(
+                ctx,
+                mirage_schema::syscalls::SyscallStatDeviceRequest {
+                    class: DeviceClass::Kfd,
+                    path: "/dev/kfd".into(),
+                },
+            )
+            .expect("/dev/kfd stat should be implemented");
+        assert_eq!(stat.stat.mode & libc::S_IFCHR, libc::S_IFCHR);
+
+        let access = emu
+            .syscall_access(
+                ctx,
+                mirage_schema::syscalls::SyscallAccessRequest {
+                    class: DeviceClass::Kfd,
+                    path: "/dev/kfd".into(),
+                    mode: libc::R_OK as u32 | libc::W_OK as u32,
+                },
+            )
+            .expect("/dev/kfd access should be implemented");
+        assert!(access.allowed);
+
+        let opened = emu
+            .syscall_open(
+                ctx,
+                mirage_schema::syscalls::SyscallOpenRequest {
+                    class: DeviceClass::Kfd,
+                    path: "/dev/kfd".into(),
+                    flags: libc::O_RDWR as u32,
+                    mode: 0,
+                },
+            )
+            .expect("/dev/kfd open should be implemented");
+        assert!(opened.virtual_fd >= 0);
+
+        let target = emu
+            .syscall_readlink_fd(
+                ctx,
+                mirage_schema::syscalls::SyscallReadlinkFdRequest {
+                    virtual_fd: opened.virtual_fd,
+                },
+            )
+            .expect("tracked fd readlink should be implemented");
+        assert_eq!(target.target, "/dev/kfd");
+
+        emu.syscall_close(
+            ctx,
+            mirage_schema::syscalls::SyscallCloseRequest {
+                virtual_fd: opened.virtual_fd,
+            },
+        )
+        .expect("tracked fd close should succeed");
     }
 }
