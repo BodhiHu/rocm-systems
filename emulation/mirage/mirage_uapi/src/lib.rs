@@ -19,9 +19,8 @@
 //!
 //! # What it is **not**
 //!
-//! There is deliberately no `ioctl(2)` wrapper here: the raw call lives
-//! in `mirage_real` for the host-forwarding case, and in
-//! `mirage_interceptor` for the LD_PRELOAD hooks.
+//! There is deliberately no `ioctl(2)` wrapper here: raw calls are handled
+//! by the LD_PRELOAD hooks in `mirage_interceptor`.
 
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]

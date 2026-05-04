@@ -29,7 +29,6 @@ mirage_schema = { path = "emulation/mirage/mirage_schema" }
 mirage_ctl = { path = "emulation/mirage/mirage_ctl" }
 mirage_daemon = { path = "emulation/mirage/mirage_daemon" }
 mirage_macros = { path = "emulation/mirage/mirage_macros" }
-mirage_real = { path = "emulation/mirage/mirage_real" }
 mirage_remote = { path = "emulation/mirage/mirage_remote" }
 mirage_rocjitsu = { path = "emulation/mirage/mirage_rocjitsu" }
 mirage_uapi = { path = "emulation/mirage/mirage_uapi" }

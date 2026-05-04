@@ -4,7 +4,6 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
 
 use async_trait::async_trait;
 use tokio::sync::RwLock;
@@ -449,6 +448,18 @@ impl MirageDaemon {
         info.supported_gpus.iter().any(|gpu| gpu.name == gpu_name)
     }
 
+    fn simulator_supports_profile(info: &SimulatorInfo, profile: &ProfileDef) -> bool {
+        Self::simulator_supports_gpu(info, &profile.gpu)
+            && Self::simulator_supports_mode(info, profile.mode)
+    }
+
+    fn profile_is_supported(state: &State, profile: &ProfileDef) -> bool {
+        state
+            .simulators
+            .get(&profile.simulator)
+            .is_some_and(|simulator| Self::simulator_supports_profile(simulator, profile))
+    }
+
     fn profile_from_request(request: CreateProfileRequest) -> ProfileDef {
         ProfileDef {
             name: request.name,
@@ -711,6 +722,10 @@ impl MirageDaemonOverview for MirageDaemon {
     ) -> MirageDaemonResult<GetOverviewReply> {
         let state = self.state.read().await;
         let profiles = self.load_profiles_from_disk();
+        let profile_count = profiles
+            .values()
+            .filter(|profile| Self::profile_is_supported(&state, profile))
+            .count();
         let containers = self.list_session_containers().await?;
         // Count unique sessions from containers plus any pending sessions
         // that do not yet have a backing container.
@@ -728,7 +743,7 @@ impl MirageDaemonOverview for MirageDaemon {
         }
         Ok(GetOverviewReply {
             simulator_count: state.simulators.len() as u32,
-            profile_count: profiles.len() as u32,
+            profile_count: profile_count as u32,
             session_count: session_names.len() as u32,
         })
     }
@@ -799,6 +814,7 @@ impl MirageDaemonListProfiles for MirageDaemon {
         request: ListProfilesRequest,
     ) -> MirageDaemonResult<ListProfilesReply> {
         let profiles = self.load_profiles_from_disk();
+        let state = self.state.read().await;
         let profiles = profiles
             .into_values()
             .filter(|profile| {
@@ -806,6 +822,7 @@ impl MirageDaemonListProfiles for MirageDaemon {
                     .simulator
                     .as_ref()
                     .is_none_or(|filter| profile.simulator == *filter)
+                    && Self::profile_is_supported(&state, profile)
             })
             .collect();
         Ok(ListProfilesReply { profiles })
@@ -1288,12 +1305,23 @@ impl MirageDaemonBoot for MirageDaemon {
 
         {
             let state = self.state.read().await;
-            if !state.simulators.contains_key(&profile.simulator) {
+            let Some(simulator) = state.simulators.get(&profile.simulator) else {
                 return Ok(BootReply {
                     ok: false,
                     error: Some(format!(
                         "simulator '{}' is not registered",
                         profile.simulator
+                    )),
+                    container_id: None,
+                    container_ids: vec![],
+                });
+            };
+            if !Self::simulator_supports_profile(simulator, &profile) {
+                return Ok(BootReply {
+                    ok: false,
+                    error: Some(format!(
+                        "profile '{}' is not supported by simulator '{}'",
+                        profile.name, profile.simulator
                     )),
                     container_id: None,
                     container_ids: vec![],
@@ -1392,82 +1420,13 @@ async fn boot_session_task(
 ) -> Result<String, String> {
     let emulator_session_id = MirageDaemon::new_emulator_session_id(&session_name);
 
-    // --- Emulator + interceptor setup ---
-    let interceptor_so = find_interceptor_so();
+    // --- Container setup ---
     let mut base_mounts = Vec::new();
-    let mut base_env = vec![SetEnv {
+    let base_env = vec![SetEnv {
         key: "MIRAGE_SESSION".to_string(),
         value: session_name.clone(),
     }];
     let devices = Vec::new();
-
-    if let Some(ref so_path) = interceptor_so
-        && mirage_real::RealEmulator::hardware_available()
-        && let Ok(Some(real)) = mirage_real::RealEmulator::detect()
-    {
-        use mirage_schema::topology::ProvideTopology;
-        let topology = real.get_topology().ok();
-
-        let socket_path = unique_emulator_socket(&session_name);
-        let server = mirage_remote::EmulatorServer::new(socket_path.clone(), real);
-        let listener = server
-            .bind()
-            .map_err(|e| format!("failed to bind emulator socket: {e}"))?;
-        thread::spawn(move || {
-            let _ = server.serve_on(listener);
-        });
-
-        let container_so = "/opt/mirage/libmirage_interceptor.so".to_string();
-        let container_sock = "/opt/mirage/emulator.sock".to_string();
-
-        base_mounts.push(BindMount {
-            host_path: so_path.to_string_lossy().to_string(),
-            container_path: container_so.clone(),
-            readonly: true,
-        });
-        base_mounts.push(BindMount {
-            host_path: socket_path.to_string_lossy().to_string(),
-            container_path: container_sock.clone(),
-            readonly: false,
-        });
-
-        if let Some(ref topo) = topology
-            && let Ok(topo_dir) = create_synthetic_topology(&session_name, topo)
-        {
-            base_mounts.push(BindMount {
-                host_path: topo_dir.join("sys/class/kfd").to_string_lossy().to_string(),
-                container_path: "/sys/class/kfd".to_string(),
-                readonly: true,
-            });
-            base_mounts.push(BindMount {
-                host_path: topo_dir
-                    .join("sys/class/kfd/kfd/topology")
-                    .to_string_lossy()
-                    .to_string(),
-                container_path: "/sys/devices/virtual/kfd/kfd/topology".to_string(),
-                readonly: true,
-            });
-            base_mounts.push(BindMount {
-                host_path: topo_dir.join("dev/dri").to_string_lossy().to_string(),
-                container_path: "/dev/dri".to_string(),
-                readonly: true,
-            });
-            base_mounts.push(BindMount {
-                host_path: topo_dir.join("dev/kfd").to_string_lossy().to_string(),
-                container_path: "/dev/kfd".to_string(),
-                readonly: true,
-            });
-        }
-
-        base_env.push(SetEnv {
-            key: "LD_PRELOAD".to_string(),
-            value: container_so,
-        });
-        base_env.push(SetEnv {
-            key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
-            value: container_sock,
-        });
-    }
 
     // --- Image pull with progress streaming ---
     let (progress_tx, mut progress_rx) =
@@ -1664,21 +1623,7 @@ impl MirageDaemonExec for MirageDaemon {
         };
 
         // Build the container exec args.
-        let mut exec_args = Self::exec_from_command(request.command)?;
-
-        // Inject interceptor env vars if present in the container's labels.
-        if let Some(so_path) = head.labels.get("mirage.interceptor_path") {
-            exec_args.env.push(SetEnv {
-                key: "LD_PRELOAD".to_string(),
-                value: so_path.clone(),
-            });
-        }
-        if let Some(sock_path) = head.labels.get("mirage.emulator_socket") {
-            exec_args.env.push(SetEnv {
-                key: "MIRAGE_INTERCEPTOR_SOCKET".to_string(),
-                value: sock_path.clone(),
-            });
-        }
+        let exec_args = Self::exec_from_command(request.command)?;
 
         // Build exec_id path.
         let n = self.next_exec_id.fetch_add(1, Ordering::Relaxed);
@@ -2164,87 +2109,6 @@ impl MirageDaemonDeleteWorkload for MirageDaemon {
 //  Free-standing helpers
 // ---------------------------------------------------------------------------
 
-/// Find the interceptor shared library, trying the binary's directory and
-/// common build output paths.
-fn find_interceptor_so() -> Option<PathBuf> {
-    let candidates = [
-        // Next to the running binary.
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("libmirage_interceptor.so"))),
-        // Fallback: cargo target/debug for the repo-root workspace.
-        Some(PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../target/debug/libmirage_interceptor.so"
-        ))),
-        // Compatibility fallback for workspaces rooted below the repo root.
-        Some(PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../target/debug/libmirage_interceptor.so"
-        ))),
-        // Compatibility fallback for pre-move builds rooted under emulation/.
-        Some(PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../target/debug/libmirage_interceptor.so"
-        ))),
-    ];
-    candidates.into_iter().flatten().find(|p| p.exists())
-}
-
-/// Return a unique socket path for an emulator instance.
-fn unique_emulator_socket(session_name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("mirage");
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join(format!("emu-{session_name}.sock"))
-}
-
-/// Write a [`Topology`] to a session-specific temp directory so it can be
-/// bind-mounted into a container.
-fn create_synthetic_topology(
-    session_name: &str,
-    topology: &mirage_schema::topology::Topology,
-) -> std::io::Result<PathBuf> {
-    let root = std::env::temp_dir()
-        .join("mirage")
-        .join(format!("topo-{session_name}"));
-
-    let topo_base = root.join("sys/class/kfd/kfd/topology");
-
-    let mut render_minors: Vec<u32> = Vec::new();
-    for (rel_path, data) in &topology.files {
-        let dst = topo_base.join(rel_path);
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&dst, data)?;
-
-        if rel_path.ends_with("/properties")
-            && let Ok(text) = std::str::from_utf8(data)
-        {
-            for line in text.lines() {
-                if let Some(rest) = line.strip_prefix("drm_render_minor ")
-                    && let Ok(minor) = rest.trim().parse::<u32>()
-                    && minor > 0
-                {
-                    render_minors.push(minor);
-                }
-            }
-        }
-    }
-
-    let dri = root.join("dev/dri");
-    std::fs::create_dir_all(&dri)?;
-    for minor in &render_minors {
-        std::fs::write(dri.join(format!("renderD{minor}")), b"")?;
-    }
-
-    let dev = root.join("dev");
-    std::fs::create_dir_all(&dev)?;
-    std::fs::write(dev.join("kfd"), b"")?;
-
-    Ok(root)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2422,6 +2286,61 @@ mod tests {
             "profile creation should succeed: {:?}",
             reply.error
         );
+    }
+
+    #[tokio::test]
+    async fn lists_only_supported_profiles() {
+        let daemon = MirageDaemon::new_test();
+
+        for profile in [
+            ProfileDef {
+                name: "supported".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            },
+            ProfileDef {
+                name: "unsupported-gpu".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "RTX4090".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            },
+            ProfileDef {
+                name: "unsupported-mode".to_string(),
+                simulator: "rocjitsu".to_string(),
+                mode: SimulatorMode::Clocked,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            },
+            ProfileDef {
+                name: "missing-simulator".to_string(),
+                simulator: "missing".to_string(),
+                mode: SimulatorMode::Functional,
+                gpu: "MI300X".to_string(),
+                num_gpus: 1,
+                num_nodes: 1,
+            },
+        ] {
+            daemon.save_profile_to_disk(&profile).unwrap();
+        }
+
+        let profiles = daemon
+            .list_profiles(ListProfilesRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(profiles.profiles.len(), 1);
+        assert_eq!(profiles.profiles[0].name, "supported");
+
+        let overview = daemon
+            .get_overview(GetOverviewRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(overview.profile_count, 1);
     }
 
     #[tokio::test]

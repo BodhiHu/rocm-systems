@@ -6,12 +6,8 @@
 //! mutability (all methods take `&self`) so the same value can be shared
 //! between threads or exposed behind an `Arc`.
 //!
-//! Two direct implementors are shipped in sibling crates:
-//!
-//! * `mirage_real::RealEmulator` — forwards every request to the real
-//!   hardware via `/dev/kfd` and the DRM render nodes.
-//! * `mirage_remote::RemoteEmulator` — proxies every request over a Unix
-//!   socket to a daemon holding any other `Emulator`.
+//! `mirage_remote::RemoteEmulator` proxies every request over a Unix socket
+//! to a daemon holding another `Emulator` implementation.
 
 use crate::amdgpu::{HandleAnyDrmIoctl, HandleAnyKfdIoctl, HandleDrmIoctl, HandleKfdIoctl};
 use crate::syscalls::{HandleAnyDeviceSyscalls, HandleDeviceSyscalls};

@@ -1,18 +1,17 @@
 //! [`RocjitsuEmulator`] — an [`Emulator`](mirage_schema::emulator::Emulator)
 //! implementation backed by the [rocjitsu] simulated kernel-mode driver.
 //!
-//! Where [`mirage_real`](../mirage_real) forwards every ioctl to a real
-//! AMD GPU via `/dev/kfd`, `RocjitsuEmulator` forwards those same
-//! requests to the rocjitsu `SimulatedDriver` through the `rj_kmd_*`
-//! C API. This makes it possible to run the full Mirage stack against a
-//! simulated GPU on machines without real hardware.
+//! `RocjitsuEmulator` forwards AMD GPU requests to the rocjitsu
+//! `SimulatedDriver` through the `rj_kmd_*` C API. This makes it possible to
+//! run the full Mirage stack against a simulated GPU on machines without real
+//! hardware.
 //!
 //! # KFD ioctl surface
 //!
 //! Every [`HandleKfdIoctl`] method constructs the corresponding
 //! `mirage_uapi::kfd` struct from the schema request, calls
 //! [`rj_kmd_ioctl`](rocjitsu_sys::rj_kmd_ioctl), and extracts the
-//! response fields — mirroring the pattern in `mirage_real`.
+//! response fields.
 //!
 //! # Availability
 //!
@@ -314,8 +313,7 @@ impl RocjitsuEmulator {
 }
 
 // ---------------------------------------------------------------------------
-// KFD ioctl helper — mirrors `RealEmulator::kfd_ioctl` but dispatches
-// through `rj_kmd_ioctl` instead of `libc::ioctl`.
+// KFD ioctl helper.
 
 impl RocjitsuEmulator {
     fn sim_ioctl<T>(&self, cmd: IoctlCmd<T>, arg: &mut T) -> AmdgpuResult<()> {
@@ -341,7 +339,7 @@ impl RocjitsuEmulator {
 }
 
 // ---------------------------------------------------------------------------
-// KFD ioctl implementations — each method mirrors mirage_real/src/kfd.rs.
+// KFD ioctl implementations.
 
 impl HandleKfdIoctl for RocjitsuEmulator {
     fn amdkfd_ioc_get_version(

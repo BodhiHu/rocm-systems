@@ -1,8 +1,7 @@
 //! Unit tests for `mirage_remote`.
 //!
 //! These exercise the wire protocol end-to-end with a trivial in-process
-//! [`Emulator`] — the `mirage_real` and interceptor crates pull in
-//! additional integration tests.
+//! [`Emulator`].
 
 use std::sync::Arc;
 use std::thread;
