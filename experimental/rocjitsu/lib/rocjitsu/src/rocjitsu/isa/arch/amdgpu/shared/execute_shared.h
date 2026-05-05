@@ -3057,6 +3057,10 @@ inline void execute_v_cmp_class_f16_vopc([[maybe_unused]] Inst &inst,
       continue;
     uint16_t s0_raw = static_cast<uint16_t>(inst.src0.read_lane(wf, lane));
     float s0 = util::f16_to_f32(s0_raw);
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
     uint32_t mask = inst.vsrc1.read_lane(wf, lane);
     bool match = false;
     bool is_f16_nan = ((s0_raw & 0x7C00) == 0x7C00) && ((s0_raw & 0x03FF) != 0);
@@ -3087,7 +3091,13 @@ inline void execute_v_cmp_class_f16_vopc([[maybe_unused]] Inst &inst,
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3144,6 +3154,10 @@ inline void execute_v_cmp_class_f32_vopc([[maybe_unused]] Inst &inst,
     if (!(exec & (1ULL << lane)))
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
     uint32_t mask = inst.vsrc1.read_lane(wf, lane);
     bool match = false;
     if ((mask & 0x001) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000) == 0)
@@ -3173,7 +3187,13 @@ inline void execute_v_cmp_class_f32_vopc([[maybe_unused]] Inst &inst,
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3232,6 +3252,10 @@ inline void execute_v_cmp_class_f64_vopc([[maybe_unused]] Inst &inst,
     if (!(exec & (1ULL << lane)))
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
     uint32_t mask = inst.vsrc1.read_lane(wf, lane);
     bool match = false;
     if ((mask & 0x001) && std::isnan(s0) &&
@@ -3263,7 +3287,13 @@ inline void execute_v_cmp_class_f64_vopc([[maybe_unused]] Inst &inst,
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3300,12 +3330,26 @@ inline void execute_v_cmp_eq_f16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 == s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3342,12 +3386,26 @@ inline void execute_v_cmp_eq_f32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 == s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3384,12 +3442,26 @@ inline void execute_v_cmp_eq_f64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 == s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3423,7 +3495,13 @@ inline void execute_v_cmp_eq_i16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3457,7 +3535,13 @@ inline void execute_v_cmp_eq_i32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3491,7 +3575,13 @@ inline void execute_v_cmp_eq_i64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3525,7 +3615,13 @@ inline void execute_v_cmp_eq_u16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3559,7 +3655,13 @@ inline void execute_v_cmp_eq_u32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3593,7 +3695,13 @@ inline void execute_v_cmp_eq_u64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3617,7 +3725,13 @@ inline void execute_v_cmp_f_f16_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3641,7 +3755,13 @@ inline void execute_v_cmp_f_f32_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3665,7 +3785,13 @@ inline void execute_v_cmp_f_f64_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3689,7 +3815,13 @@ inline void execute_v_cmp_f_i16_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3713,7 +3845,13 @@ inline void execute_v_cmp_f_i32_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3737,7 +3875,13 @@ inline void execute_v_cmp_f_i64_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3761,7 +3905,13 @@ inline void execute_v_cmp_f_u16_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3785,7 +3935,13 @@ inline void execute_v_cmp_f_u32_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3809,7 +3965,13 @@ inline void execute_v_cmp_f_u64_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3846,12 +4008,26 @@ inline void execute_v_cmp_ge_f16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 >= s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3888,12 +4064,26 @@ inline void execute_v_cmp_ge_f32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 >= s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3930,12 +4120,26 @@ inline void execute_v_cmp_ge_f64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 >= s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -3969,7 +4173,13 @@ inline void execute_v_cmp_ge_i16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4003,7 +4213,13 @@ inline void execute_v_cmp_ge_i32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4037,7 +4253,13 @@ inline void execute_v_cmp_ge_i64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4071,7 +4293,13 @@ inline void execute_v_cmp_ge_u16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4105,7 +4333,13 @@ inline void execute_v_cmp_ge_u32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4139,7 +4373,13 @@ inline void execute_v_cmp_ge_u64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4176,12 +4416,26 @@ inline void execute_v_cmp_gt_f16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 > s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4218,12 +4472,26 @@ inline void execute_v_cmp_gt_f32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 > s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4260,12 +4528,26 @@ inline void execute_v_cmp_gt_f64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 > s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4299,7 +4581,13 @@ inline void execute_v_cmp_gt_i16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4333,7 +4621,13 @@ inline void execute_v_cmp_gt_i32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4367,7 +4661,13 @@ inline void execute_v_cmp_gt_i64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4401,7 +4701,13 @@ inline void execute_v_cmp_gt_u16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4435,7 +4741,13 @@ inline void execute_v_cmp_gt_u32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4469,7 +4781,13 @@ inline void execute_v_cmp_gt_u64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4506,12 +4824,26 @@ inline void execute_v_cmp_le_f16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 <= s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4548,12 +4880,26 @@ inline void execute_v_cmp_le_f32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 <= s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4590,12 +4936,26 @@ inline void execute_v_cmp_le_f64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 <= s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4629,7 +4989,13 @@ inline void execute_v_cmp_le_i16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4663,7 +5029,13 @@ inline void execute_v_cmp_le_i32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4697,7 +5069,13 @@ inline void execute_v_cmp_le_i64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4731,7 +5109,13 @@ inline void execute_v_cmp_le_u16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4765,7 +5149,13 @@ inline void execute_v_cmp_le_u32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4799,7 +5189,13 @@ inline void execute_v_cmp_le_u64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4836,12 +5232,26 @@ inline void execute_v_cmp_lg_f16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 < s1 || s0 > s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4878,12 +5288,26 @@ inline void execute_v_cmp_lg_f32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 < s1 || s0 > s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4920,12 +5344,26 @@ inline void execute_v_cmp_lg_f64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 < s1 || s0 > s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -4962,12 +5400,26 @@ inline void execute_v_cmp_lt_f16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 < s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5004,12 +5456,26 @@ inline void execute_v_cmp_lt_f32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 < s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5046,12 +5512,26 @@ inline void execute_v_cmp_lt_f64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 < s1)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5085,7 +5565,13 @@ inline void execute_v_cmp_lt_i16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5119,7 +5605,13 @@ inline void execute_v_cmp_lt_i32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5153,7 +5645,13 @@ inline void execute_v_cmp_lt_i64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5187,7 +5685,13 @@ inline void execute_v_cmp_lt_u16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5221,7 +5725,13 @@ inline void execute_v_cmp_lt_u32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5255,7 +5765,13 @@ inline void execute_v_cmp_lt_u64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5289,7 +5805,13 @@ inline void execute_v_cmp_ne_i16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5323,7 +5845,13 @@ inline void execute_v_cmp_ne_i32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5357,7 +5885,13 @@ inline void execute_v_cmp_ne_i64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5391,7 +5925,13 @@ inline void execute_v_cmp_ne_u16_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5425,7 +5965,13 @@ inline void execute_v_cmp_ne_u32_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5459,7 +6005,13 @@ inline void execute_v_cmp_ne_u64_vopc([[maybe_unused]] Inst &inst, [[maybe_unuse
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5498,12 +6050,26 @@ inline void execute_v_cmp_neq_f16_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 != s1 || std::isnan(s0) || std::isnan(s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5542,12 +6108,26 @@ inline void execute_v_cmp_neq_f32_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 != s1 || std::isnan(s0) || std::isnan(s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5586,12 +6166,26 @@ inline void execute_v_cmp_neq_f64_vopc([[maybe_unused]] Inst &inst,
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (s0 != s1 || std::isnan(s0) || std::isnan(s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5630,12 +6224,26 @@ inline void execute_v_cmp_nge_f16_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 >= s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5674,12 +6282,26 @@ inline void execute_v_cmp_nge_f32_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 >= s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5718,12 +6340,26 @@ inline void execute_v_cmp_nge_f64_vopc([[maybe_unused]] Inst &inst,
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 >= s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5762,12 +6398,26 @@ inline void execute_v_cmp_ngt_f16_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 > s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5806,12 +6456,26 @@ inline void execute_v_cmp_ngt_f32_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 > s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5850,12 +6514,26 @@ inline void execute_v_cmp_ngt_f64_vopc([[maybe_unused]] Inst &inst,
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 > s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5894,12 +6572,26 @@ inline void execute_v_cmp_nle_f16_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 <= s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5938,12 +6630,26 @@ inline void execute_v_cmp_nle_f32_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 <= s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -5982,12 +6688,26 @@ inline void execute_v_cmp_nle_f64_vopc([[maybe_unused]] Inst &inst,
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 <= s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6026,12 +6746,26 @@ inline void execute_v_cmp_nlg_f16_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 < s1 || s0 > s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6070,12 +6804,26 @@ inline void execute_v_cmp_nlg_f32_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 < s1 || s0 > s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6114,12 +6862,26 @@ inline void execute_v_cmp_nlg_f64_vopc([[maybe_unused]] Inst &inst,
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 < s1 || s0 > s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6158,12 +6920,26 @@ inline void execute_v_cmp_nlt_f16_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 < s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6202,12 +6978,26 @@ inline void execute_v_cmp_nlt_f32_vopc([[maybe_unused]] Inst &inst,
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 < s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6246,12 +7036,26 @@ inline void execute_v_cmp_nlt_f64_vopc([[maybe_unused]] Inst &inst,
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!(s0 < s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6288,12 +7092,26 @@ inline void execute_v_cmp_o_f16_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!std::isnan(s0) && !std::isnan(s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6330,12 +7148,26 @@ inline void execute_v_cmp_o_f32_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!std::isnan(s0) && !std::isnan(s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6372,12 +7204,26 @@ inline void execute_v_cmp_o_f64_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (!std::isnan(s0) && !std::isnan(s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6401,7 +7247,13 @@ inline void execute_v_cmp_t_f16_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6425,7 +7277,13 @@ inline void execute_v_cmp_t_f32_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6449,7 +7307,13 @@ inline void execute_v_cmp_t_f64_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6473,7 +7337,13 @@ inline void execute_v_cmp_t_i16_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6497,7 +7367,13 @@ inline void execute_v_cmp_t_i32_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6521,7 +7397,13 @@ inline void execute_v_cmp_t_i64_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6545,7 +7427,13 @@ inline void execute_v_cmp_t_u16_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6569,7 +7457,13 @@ inline void execute_v_cmp_t_u32_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6593,7 +7487,13 @@ inline void execute_v_cmp_t_u64_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6619,7 +7519,13 @@ inline void execute_v_cmp_tru_f16_vopc([[maybe_unused]] Inst &inst,
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6645,7 +7551,13 @@ inline void execute_v_cmp_tru_f32_vopc([[maybe_unused]] Inst &inst,
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6671,7 +7583,13 @@ inline void execute_v_cmp_tru_f64_vopc([[maybe_unused]] Inst &inst,
       continue;
     vcc |= (1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6708,12 +7626,26 @@ inline void execute_v_cmp_u_f16_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
     float s1 = util::f16_to_f32(static_cast<uint16_t>(inst.vsrc1.read_lane(wf, lane)));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (std::isnan(s0) || std::isnan(s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6750,12 +7682,26 @@ inline void execute_v_cmp_u_f32_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
     float s1 = std::bit_cast<float>(inst.vsrc1.read_lane(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (std::isnan(s0) || std::isnan(s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
@@ -6792,12 +7738,26 @@ inline void execute_v_cmp_u_f64_vopc([[maybe_unused]] Inst &inst, [[maybe_unused
       continue;
     double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
     double s1 = std::bit_cast<double>(inst.vsrc1.read_lane64(wf, lane));
+    if (inst.sdwa_src0_abs_)
+      s0 = std::fabs(s0);
+    if (inst.sdwa_src0_neg_)
+      s0 = -s0;
+    if (inst.sdwa_src1_abs_)
+      s1 = std::fabs(s1);
+    if (inst.sdwa_src1_neg_)
+      s1 = -s1;
     if (std::isnan(s0) || std::isnan(s1))
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
   }
-  wf.set_vcc(vcc);
+  if (inst.sdwa_sd_) {
+    uint32_t sb = wf.sgpr_alloc().base + inst.sdwa_sdst_;
+    wf.cu().write_sgpr(sb, static_cast<uint32_t>(vcc));
+    wf.cu().write_sgpr(sb + 1, static_cast<uint32_t>(vcc >> 32));
+  } else {
+    wf.set_vcc(vcc);
+  }
 }
 
 template <typename Inst>
