@@ -1014,7 +1014,7 @@ class CodeGenerator:
                     'vector_cvt_pk_f16_f32', 'vector_cvt_pk_bf16_f32',
                     'vector_cvt_sr_f16_f32', 'vector_cvt_sr_bf16_f32',
                     'vector_pack_b32_f16'):
-            return self._gen_vector_cvt_pk(dst_ops, src_ops, cls, op)
+            return self._gen_vector_cvt_pk(dst_ops, src_ops, cls, op, dtype)
 
         if cls == 'vector_dot2c_bf16':
             return self._gen_vector_dot2c_bf16(dst_ops, src_ops)
@@ -1426,7 +1426,7 @@ class CodeGenerator:
         return '\n'.join(L)
 
     def _gen_vector_div_fixup(self, dst: list[str], src: list[str], dtype: str | None, is_vop3: bool = False, has_abs: bool = False) -> str:
-        """Generate V_DIV_FIXUP body (corrects division result)."""
+        """Generate V_DIV_FIXUP body: src1=b (denominator), src2=c (numerator)."""
         L = []
         L.append('  uint64_t exec = wf.exec();')
         L.append('  for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {')
@@ -1439,25 +1439,42 @@ class CodeGenerator:
                 L.extend(vop3_src_mod('p', 0, has_abs))
                 L.extend(vop3_src_mod('b', 1, has_abs))
                 L.extend(vop3_src_mod('c', 2, has_abs))
+            L.append('    double sign_d = std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c));')
             L.append('    double result;')
-            L.append('    if (std::isnan(b)) result = b;')
-            L.append('    else if (std::isnan(c)) result = c;')
+            L.append('    if (std::isnan(c)) result = c;')
+            L.append('    else if (std::isnan(b)) result = b;')
             L.append('    else if (c == 0.0 && b == 0.0) result = std::numeric_limits<double>::quiet_NaN();')
             L.append('    else if (std::isinf(c) && std::isinf(b)) result = std::numeric_limits<double>::quiet_NaN();')
-            L.append('    else if (b == 0.0) {')
-            L.append('      result = std::copysign(std::numeric_limits<double>::infinity(),')
-            L.append('                             std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));')
+            L.append('    else if (b == 0.0 || std::isinf(c)) {')
+            L.append('      result = std::copysign(std::numeric_limits<double>::infinity(), sign_d);')
             L.append('    }')
-            L.append('    else if (c == 0.0) result = std::copysign(0.0, std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));')
-            L.append('    else if (std::isinf(c)) {')
-            L.append('      result = std::copysign(std::numeric_limits<double>::infinity(),')
-            L.append('                             std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));')
-            L.append('    }')
-            L.append('    else if (std::isinf(b)) result = std::copysign(0.0, std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));')
+            L.append('    else if (std::isinf(b) || c == 0.0) result = std::copysign(0.0, sign_d);')
             L.append('    else result = p;')
             if is_vop3:
                 L.extend(vop3_dst_mod_f64('result'))
             L.append(f'    {dst[0]}.write_lane64(wf, lane, std::bit_cast<uint64_t>(result));')
+        elif dtype == 'f16':
+            L.append(f'    float p = util::f16_to_f32(static_cast<uint16_t>({src[0]}.read_lane(wf, lane)));')
+            L.append(f'    float b = util::f16_to_f32(static_cast<uint16_t>({src[1]}.read_lane(wf, lane)));')
+            L.append(f'    float c = util::f16_to_f32(static_cast<uint16_t>({src[2]}.read_lane(wf, lane)));')
+            if is_vop3:
+                L.extend(vop3_src_mod('p', 0, has_abs))
+                L.extend(vop3_src_mod('b', 1, has_abs))
+                L.extend(vop3_src_mod('c', 2, has_abs))
+            L.append('    float sign_f = std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c));')
+            L.append('    float result;')
+            L.append('    if (std::isnan(c)) result = c;')
+            L.append('    else if (std::isnan(b)) result = b;')
+            L.append('    else if (c == 0.0f && b == 0.0f) result = std::numeric_limits<float>::quiet_NaN();')
+            L.append('    else if (std::isinf(c) && std::isinf(b)) result = std::numeric_limits<float>::quiet_NaN();')
+            L.append('    else if (b == 0.0f || std::isinf(c)) {')
+            L.append('      result = std::copysign(std::numeric_limits<float>::infinity(), sign_f);')
+            L.append('    }')
+            L.append('    else if (std::isinf(b) || c == 0.0f) result = std::copysign(0.0f, sign_f);')
+            L.append('    else result = p;')
+            if is_vop3:
+                L.extend(vop3_dst_mod('result'))
+            L.append(f'    {dst[0]}.write_lane(wf, lane, util::f32_to_f16(result));')
         else:
             L.append(f'    float p = std::bit_cast<float>({src[0]}.read_lane(wf, lane));')
             L.append(f'    float b = std::bit_cast<float>({src[1]}.read_lane(wf, lane));')
@@ -1466,21 +1483,16 @@ class CodeGenerator:
                 L.extend(vop3_src_mod('p', 0, has_abs))
                 L.extend(vop3_src_mod('b', 1, has_abs))
                 L.extend(vop3_src_mod('c', 2, has_abs))
+            L.append('    float sign_f = std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c));')
             L.append('    float result;')
-            L.append('    if (std::isnan(b)) result = b;')
-            L.append('    else if (std::isnan(c)) result = c;')
+            L.append('    if (std::isnan(c)) result = c;')
+            L.append('    else if (std::isnan(b)) result = b;')
             L.append('    else if (c == 0.0f && b == 0.0f) result = std::numeric_limits<float>::quiet_NaN();')
             L.append('    else if (std::isinf(c) && std::isinf(b)) result = std::numeric_limits<float>::quiet_NaN();')
-            L.append('    else if (b == 0.0f) {')
-            L.append('      result = std::copysign(std::numeric_limits<float>::infinity(),')
-            L.append('                             std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));')
+            L.append('    else if (b == 0.0f || std::isinf(c)) {')
+            L.append('      result = std::copysign(std::numeric_limits<float>::infinity(), sign_f);')
             L.append('    }')
-            L.append('    else if (c == 0.0f) result = std::copysign(0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));')
-            L.append('    else if (std::isinf(c)) {')
-            L.append('      result = std::copysign(std::numeric_limits<float>::infinity(),')
-            L.append('                             std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));')
-            L.append('    }')
-            L.append('    else if (std::isinf(b)) result = std::copysign(0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));')
+            L.append('    else if (std::isinf(b) || c == 0.0f) result = std::copysign(0.0f, sign_f);')
             L.append('    else result = p;')
             if is_vop3:
                 L.extend(vop3_dst_mod('result'))
@@ -1772,7 +1784,7 @@ class CodeGenerator:
         L.append('  }')
         return '\n'.join(L)
 
-    def _gen_vector_cvt_pk(self, dst: list[str], src: list[str], cls: str, op: str | None) -> str:
+    def _gen_vector_cvt_pk(self, dst: list[str], src: list[str], cls: str, op: str | None, dtype: str | None = None) -> str:
         """Generate pack/convert instructions."""
         L = []
         L.append('  uint64_t exec = wf.exec();')
@@ -1788,8 +1800,12 @@ class CodeGenerator:
             L.append('    uint32_t mask = ~(0xFFu << (byte_sel * 8));')
             L.append(f'    {dst[0]}.write_lane(wf, lane, (old & mask) | (byte << (byte_sel * 8)));')
         elif cls == 'vector_cvt_pknorm':
-            L.append(f'    float s0 = std::bit_cast<float>({src[0]}.read_lane(wf, lane));')
-            L.append(f'    float s1 = std::bit_cast<float>({src[1]}.read_lane(wf, lane));')
+            if dtype == 'f16':
+                L.append(f'    float s0 = util::f16_to_f32(static_cast<uint16_t>({src[0]}.read_lane(wf, lane)));')
+                L.append(f'    float s1 = util::f16_to_f32(static_cast<uint16_t>({src[1]}.read_lane(wf, lane)));')
+            else:
+                L.append(f'    float s0 = std::bit_cast<float>({src[0]}.read_lane(wf, lane));')
+                L.append(f'    float s1 = std::bit_cast<float>({src[1]}.read_lane(wf, lane));')
             if op == 'i16':
                 L.append('    auto cvt_i16 = [](float f) -> int16_t {')
                 L.append('      if (std::isnan(f)) return 0;')
@@ -1995,8 +2011,21 @@ class CodeGenerator:
                     f'    {dst[0]}.write_lane(wf, lane, s & 0xFFFFu);'
                 ),
             }
+            _float_input_cvts = frozenset({
+                'i32_f32', 'u32_f32', 'rpi_i32_f32', 'flr_i32_f32',
+                'i32_f64', 'u32_f64', 'f32_f64', 'f64_f32',
+                'f16_f32', 'u16_f16', 'i16_f16',
+            })
             if dtype in cvt_map:
-                L.append(cvt_map[dtype])
+                body = cvt_map[dtype]
+                if is_vop3 and dtype in _float_input_cvts:
+                    lines = body.split('\n')
+                    L.append(lines[0])
+                    L.extend(vop3_src_mod('s', 0, has_abs))
+                    for line in lines[1:]:
+                        L.append(line)
+                else:
+                    L.append(body)
             else:
                 L.append(f'    // TODO: cvt {dtype}')
                 L.append(f'    {dst[0]}.write_lane(wf, lane, {src[0]}.read_lane(wf, lane));')

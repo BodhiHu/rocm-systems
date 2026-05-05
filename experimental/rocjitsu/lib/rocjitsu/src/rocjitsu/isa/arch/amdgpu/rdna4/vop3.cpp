@@ -98,6 +98,10 @@ void VCvtI32F64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     double s = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s = std::fabs(s);
+    if (inst_.neg & (1u << 0))
+      s = -s;
     int32_t r;
     if (std::isnan(s))
       r = 0;
@@ -191,6 +195,10 @@ void VCvtU32F32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     float s = std::bit_cast<float>(src0.read_lane(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s = std::fabs(s);
+    if (inst_.neg & (1u << 0))
+      s = -s;
     uint32_t r;
     if (std::isnan(s) || s < 0.0f)
       r = 0;
@@ -219,6 +227,10 @@ void VCvtI32F32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     float s = std::bit_cast<float>(src0.read_lane(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s = std::fabs(s);
+    if (inst_.neg & (1u << 0))
+      s = -s;
     int32_t r;
     if (std::isnan(s))
       r = 0;
@@ -249,6 +261,10 @@ void VCvtF16F32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     float s = std::bit_cast<float>(src0.read_lane(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s = std::fabs(s);
+    if (inst_.neg & (1u << 0))
+      s = -s;
     vdst.write_lane(wf, lane, util::f32_to_f16(s));
   }
 }
@@ -292,6 +308,10 @@ void VCvtNearestI32F32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     float s = std::bit_cast<float>(src0.read_lane(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s = std::fabs(s);
+    if (inst_.neg & (1u << 0))
+      s = -s;
     int32_t r;
     if (std::isnan(s))
       r = 0;
@@ -322,6 +342,10 @@ void VCvtFloorI32F32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     float s = std::bit_cast<float>(src0.read_lane(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s = std::fabs(s);
+    if (inst_.neg & (1u << 0))
+      s = -s;
     int32_t r;
     if (std::isnan(s))
       r = 0;
@@ -368,6 +392,10 @@ void VCvtF32F64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     double s = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s = std::fabs(s);
+    if (inst_.neg & (1u << 0))
+      s = -s;
     vdst.write_lane(wf, lane, std::bit_cast<uint32_t>(static_cast<float>(s)));
   }
 }
@@ -389,6 +417,10 @@ void VCvtF64F32Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     float s = std::bit_cast<float>(src0.read_lane(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s = std::fabs(s);
+    if (inst_.neg & (1u << 0))
+      s = -s;
     vdst.write_lane64(wf, lane, std::bit_cast<uint64_t>(static_cast<double>(s)));
   }
 }
@@ -494,6 +526,10 @@ void VCvtU32F64Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     double s = std::bit_cast<double>(src0.read_lane64(wf, lane));
+    if (inst_.abs & (1u << 0))
+      s = std::fabs(s);
+    if (inst_.neg & (1u << 0))
+      s = -s;
     uint32_t r;
     if (std::isnan(s) || s < 0.0)
       r = 0;
@@ -1630,6 +1666,10 @@ void VCvtU16F16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     float s = util::f16_to_f32(static_cast<uint16_t>(src0.read_lane(wf, lane)));
+    if (inst_.abs & (1u << 0))
+      s = std::fabs(s);
+    if (inst_.neg & (1u << 0))
+      s = -s;
     uint16_t r;
     if (std::isnan(s) || s < 0.0f)
       r = 0;
@@ -1658,6 +1698,10 @@ void VCvtI16F16Vop3::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     float s = util::f16_to_f32(static_cast<uint16_t>(src0.read_lane(wf, lane)));
+    if (inst_.abs & (1u << 0))
+      s = std::fabs(s);
+    if (inst_.neg & (1u << 0))
+      s = -s;
     int16_t r;
     if (std::isnan(s))
       r = 0;
@@ -4129,29 +4173,20 @@ void VDivFixupF32Vop3::execute_impl(amdgpu::Wavefront &wf) {
       c = std::fabs(c);
     if (inst_.neg & (1u << 2))
       c = -c;
+    float sign_f = std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c));
     float result;
-    if (std::isnan(b))
-      result = b;
-    else if (std::isnan(c))
+    if (std::isnan(c))
       result = c;
+    else if (std::isnan(b))
+      result = b;
     else if (c == 0.0f && b == 0.0f)
       result = std::numeric_limits<float>::quiet_NaN();
     else if (std::isinf(c) && std::isinf(b))
       result = std::numeric_limits<float>::quiet_NaN();
-    else if (b == 0.0f) {
-      result = std::copysign(
-          std::numeric_limits<float>::infinity(),
-          std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
-    } else if (c == 0.0f)
-      result = std::copysign(
-          0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
-    else if (std::isinf(c)) {
-      result = std::copysign(
-          std::numeric_limits<float>::infinity(),
-          std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
-    } else if (std::isinf(b))
-      result = std::copysign(
-          0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
+    else if (b == 0.0f || std::isinf(c)) {
+      result = std::copysign(std::numeric_limits<float>::infinity(), sign_f);
+    } else if (std::isinf(b) || c == 0.0f)
+      result = std::copysign(0.0f, sign_f);
     else
       result = p;
     if (inst_.omod == 1)
@@ -4201,29 +4236,20 @@ void VDivFixupF64Vop3::execute_impl(amdgpu::Wavefront &wf) {
       c = std::fabs(c);
     if (inst_.neg & (1u << 2))
       c = -c;
+    double sign_d = std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c));
     double result;
-    if (std::isnan(b))
-      result = b;
-    else if (std::isnan(c))
+    if (std::isnan(c))
       result = c;
+    else if (std::isnan(b))
+      result = b;
     else if (c == 0.0 && b == 0.0)
       result = std::numeric_limits<double>::quiet_NaN();
     else if (std::isinf(c) && std::isinf(b))
       result = std::numeric_limits<double>::quiet_NaN();
-    else if (b == 0.0) {
-      result = std::copysign(
-          std::numeric_limits<double>::infinity(),
-          std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));
-    } else if (c == 0.0)
-      result = std::copysign(
-          0.0, std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));
-    else if (std::isinf(c)) {
-      result = std::copysign(
-          std::numeric_limits<double>::infinity(),
-          std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));
-    } else if (std::isinf(b))
-      result = std::copysign(
-          0.0, std::bit_cast<double>(std::bit_cast<uint64_t>(b) ^ std::bit_cast<uint64_t>(c)));
+    else if (b == 0.0 || std::isinf(c)) {
+      result = std::copysign(std::numeric_limits<double>::infinity(), sign_d);
+    } else if (std::isinf(b) || c == 0.0)
+      result = std::copysign(0.0, sign_d);
     else
       result = p;
     if (inst_.omod == 1)
@@ -5327,9 +5353,9 @@ void VDivFixupF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
-    float p = std::bit_cast<float>(src0.read_lane(wf, lane));
-    float b = std::bit_cast<float>(src1.read_lane(wf, lane));
-    float c = std::bit_cast<float>(src2.read_lane(wf, lane));
+    float p = util::f16_to_f32(static_cast<uint16_t>(src0.read_lane(wf, lane)));
+    float b = util::f16_to_f32(static_cast<uint16_t>(src1.read_lane(wf, lane)));
+    float c = util::f16_to_f32(static_cast<uint16_t>(src2.read_lane(wf, lane)));
     if (inst_.abs & (1u << 0))
       p = std::fabs(p);
     if (inst_.neg & (1u << 0))
@@ -5342,29 +5368,20 @@ void VDivFixupF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
       c = std::fabs(c);
     if (inst_.neg & (1u << 2))
       c = -c;
+    float sign_f = std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c));
     float result;
-    if (std::isnan(b))
-      result = b;
-    else if (std::isnan(c))
+    if (std::isnan(c))
       result = c;
+    else if (std::isnan(b))
+      result = b;
     else if (c == 0.0f && b == 0.0f)
       result = std::numeric_limits<float>::quiet_NaN();
     else if (std::isinf(c) && std::isinf(b))
       result = std::numeric_limits<float>::quiet_NaN();
-    else if (b == 0.0f) {
-      result = std::copysign(
-          std::numeric_limits<float>::infinity(),
-          std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
-    } else if (c == 0.0f)
-      result = std::copysign(
-          0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
-    else if (std::isinf(c)) {
-      result = std::copysign(
-          std::numeric_limits<float>::infinity(),
-          std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
-    } else if (std::isinf(b))
-      result = std::copysign(
-          0.0f, std::bit_cast<float>(std::bit_cast<uint32_t>(b) ^ std::bit_cast<uint32_t>(c)));
+    else if (b == 0.0f || std::isinf(c)) {
+      result = std::copysign(std::numeric_limits<float>::infinity(), sign_f);
+    } else if (std::isinf(b) || c == 0.0f)
+      result = std::copysign(0.0f, sign_f);
     else
       result = p;
     if (inst_.omod == 1)
@@ -5375,7 +5392,7 @@ void VDivFixupF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
       result *= 0.5f;
     if (inst_.clamp)
       result = std::clamp(result, 0.0f, 1.0f);
-    vdst.write_lane(wf, lane, std::bit_cast<uint32_t>(result));
+    vdst.write_lane(wf, lane, util::f32_to_f16(result));
   }
 }
 
@@ -6893,8 +6910,8 @@ void VCvtPkNormI16F16Vop3::execute_impl(amdgpu::Wavefront &wf) {
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
-    float s0 = std::bit_cast<float>(src0.read_lane(wf, lane));
-    float s1 = std::bit_cast<float>(src1.read_lane(wf, lane));
+    float s0 = util::f16_to_f32(static_cast<uint16_t>(src0.read_lane(wf, lane)));
+    float s1 = util::f16_to_f32(static_cast<uint16_t>(src1.read_lane(wf, lane)));
     auto cvt_u16 = [](float f) -> uint16_t {
       if (std::isnan(f))
         return 0;
@@ -6925,8 +6942,8 @@ void VCvtPkNormU16F16Vop3::execute_impl(amdgpu::Wavefront &wf) {
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
-    float s0 = std::bit_cast<float>(src0.read_lane(wf, lane));
-    float s1 = std::bit_cast<float>(src1.read_lane(wf, lane));
+    float s0 = util::f16_to_f32(static_cast<uint16_t>(src0.read_lane(wf, lane)));
+    float s1 = util::f16_to_f32(static_cast<uint16_t>(src1.read_lane(wf, lane)));
     auto cvt_u16 = [](float f) -> uint16_t {
       if (std::isnan(f))
         return 0;
