@@ -4286,6 +4286,7 @@ void DsReadB64TrB4Ds::execute_impl(amdgpu::Wavefront &wf) {
   d->is_load = true;
   d->transpose = 1;
   ds_calculate_addresses(inst_, wf, *d);
+  d->lane_mask = (wf.wf_size() == 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << wf.wf_size()) - 1);
   set_data(std::move(d));
 }
 
@@ -4311,6 +4312,7 @@ void DsReadB96TrB6Ds::execute_impl(amdgpu::Wavefront &wf) {
   d->is_load = true;
   d->transpose = 2;
   ds_calculate_addresses(inst_, wf, *d);
+  d->lane_mask = (wf.wf_size() == 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << wf.wf_size()) - 1);
   set_data(std::move(d));
 }
 
@@ -4336,6 +4338,7 @@ void DsReadB64TrB8Ds::execute_impl(amdgpu::Wavefront &wf) {
   d->is_load = true;
   d->transpose = 3;
   ds_calculate_addresses(inst_, wf, *d);
+  d->lane_mask = (wf.wf_size() == 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << wf.wf_size()) - 1);
   set_data(std::move(d));
 }
 
@@ -4361,6 +4364,7 @@ void DsReadB64TrB16Ds::execute_impl(amdgpu::Wavefront &wf) {
   d->is_load = true;
   d->transpose = 4;
   ds_calculate_addresses(inst_, wf, *d);
+  d->lane_mask = (wf.wf_size() == 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << wf.wf_size()) - 1);
   set_data(std::move(d));
 }
 

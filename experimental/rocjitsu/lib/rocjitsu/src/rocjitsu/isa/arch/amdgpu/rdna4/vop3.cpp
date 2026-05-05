@@ -312,15 +312,16 @@ void VCvtNearestI32F32Vop3::execute_impl(amdgpu::Wavefront &wf) {
       s = std::fabs(s);
     if (inst_.neg & (1u << 0))
       s = -s;
+    float rounded = std::ceil(s - 0.5f);
     int32_t r;
-    if (std::isnan(s))
+    if (std::isnan(rounded))
       r = 0;
-    else if (s >= 2147483648.0f)
+    else if (rounded >= 2147483648.0f)
       r = INT32_MAX;
-    else if (s < -2147483648.0f)
+    else if (rounded < -2147483648.0f)
       r = INT32_MIN;
     else
-      r = static_cast<int32_t>(s);
+      r = static_cast<int32_t>(rounded);
     vdst.write_lane(wf, lane, static_cast<uint32_t>(r));
   }
 }
@@ -346,15 +347,16 @@ void VCvtFloorI32F32Vop3::execute_impl(amdgpu::Wavefront &wf) {
       s = std::fabs(s);
     if (inst_.neg & (1u << 0))
       s = -s;
+    float rounded = std::floor(s);
     int32_t r;
-    if (std::isnan(s))
+    if (std::isnan(rounded))
       r = 0;
-    else if (s >= 2147483648.0f)
+    else if (rounded >= 2147483648.0f)
       r = INT32_MAX;
-    else if (s < -2147483648.0f)
+    else if (rounded < -2147483648.0f)
       r = INT32_MIN;
     else
-      r = static_cast<int32_t>(s);
+      r = static_cast<int32_t>(rounded);
     vdst.write_lane(wf, lane, static_cast<uint32_t>(r));
   }
 }
@@ -1735,7 +1737,7 @@ void VRcpF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
       s = std::fabs(s);
     if (inst_.neg & (1u << 0))
       s = -s;
-    float result = 1.0f / s;
+    float result = amdgpu::transcendental::rcp_f32(s);
     if (inst_.omod == 1)
       result *= 2.0f;
     else if (inst_.omod == 2)
@@ -3290,7 +3292,7 @@ void VMadI32I24Vop3::execute_impl(amdgpu::Wavefront &wf) {
     int32_t a = static_cast<int32_t>(src0.read_lane(wf, lane) << 8) >> 8;
     int32_t b = static_cast<int32_t>(src1.read_lane(wf, lane) << 8) >> 8;
     int32_t c = static_cast<int32_t>(src2.read_lane(wf, lane));
-    vdst.write_lane(wf, lane, static_cast<uint32_t>(a * b + c));
+    vdst.write_lane(wf, lane, static_cast<uint32_t>(static_cast<int64_t>(a) * b + c));
   }
 }
 
@@ -6379,7 +6381,7 @@ void VSRcpF16Vop3::execute_impl(amdgpu::Wavefront &wf) {
       s = std::fabs(s);
     if (inst_.neg & (1u << 0))
       s = -s;
-    float result = 1.0f / s;
+    float result = amdgpu::transcendental::rcp_f32(s);
     if (inst_.omod == 1)
       result *= 2.0f;
     else if (inst_.omod == 2)

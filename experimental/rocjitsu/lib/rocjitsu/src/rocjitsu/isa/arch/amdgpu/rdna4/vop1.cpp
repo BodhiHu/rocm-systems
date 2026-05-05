@@ -1207,15 +1207,16 @@ void VCvtNearestI32F32Vop1::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     float s = std::bit_cast<float>(src0.read_lane(wf, lane));
+    float rounded = std::ceil(s - 0.5f);
     int32_t r;
-    if (std::isnan(s))
+    if (std::isnan(rounded))
       r = 0;
-    else if (s >= 2147483648.0f)
+    else if (rounded >= 2147483648.0f)
       r = INT32_MAX;
-    else if (s < -2147483648.0f)
+    else if (rounded < -2147483648.0f)
       r = INT32_MIN;
     else
-      r = static_cast<int32_t>(s);
+      r = static_cast<int32_t>(rounded);
     vdst.write_lane(wf, lane, static_cast<uint32_t>(r));
   }
   if (inst_.src0 == amdgpu::SRC_DPP && dpp_write_mask_ != ~0ULL) {
@@ -1317,15 +1318,16 @@ void VCvtFloorI32F32Vop1::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     float s = std::bit_cast<float>(src0.read_lane(wf, lane));
+    float rounded = std::floor(s);
     int32_t r;
-    if (std::isnan(s))
+    if (std::isnan(rounded))
       r = 0;
-    else if (s >= 2147483648.0f)
+    else if (rounded >= 2147483648.0f)
       r = INT32_MAX;
-    else if (s < -2147483648.0f)
+    else if (rounded < -2147483648.0f)
       r = INT32_MIN;
     else
-      r = static_cast<int32_t>(s);
+      r = static_cast<int32_t>(rounded);
     vdst.write_lane(wf, lane, static_cast<uint32_t>(r));
   }
   if (inst_.src0 == amdgpu::SRC_DPP && dpp_write_mask_ != ~0ULL) {
@@ -6327,7 +6329,7 @@ void VRcpF16Vop1::execute_impl(amdgpu::Wavefront &wf) {
     if (!(exec & (1ULL << lane)))
       continue;
     float s = util::f16_to_f32(static_cast<uint16_t>(src0.read_lane(wf, lane)));
-    vdst.write_lane(wf, lane, util::f32_to_f16(1.0f / s));
+    vdst.write_lane(wf, lane, util::f32_to_f16(amdgpu::transcendental::rcp_f32(s)));
   }
   if (inst_.src0 == amdgpu::SRC_DPP && dpp_write_mask_ != ~0ULL) {
     uint64_t ex = wf.exec();

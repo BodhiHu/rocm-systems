@@ -2332,7 +2332,7 @@ void VMadI32I24Vop3::execute_impl(amdgpu::Wavefront &wf) {
     int32_t a = static_cast<int32_t>(src0.read_lane(wf, lane) << 8) >> 8;
     int32_t b = static_cast<int32_t>(src1.read_lane(wf, lane) << 8) >> 8;
     int32_t c = static_cast<int32_t>(src2.read_lane(wf, lane));
-    vdst.write_lane(wf, lane, static_cast<uint32_t>(a * b + c));
+    vdst.write_lane(wf, lane, static_cast<uint32_t>(static_cast<int64_t>(a) * b + c));
   }
 }
 

@@ -2143,7 +2143,7 @@ class CodeGenerator:
             if is_vop3:
                 L.extend(vop3_src_mod('s', 0, has_abs))
             math_map_f16 = {
-                'rcp': '1.0f / s',
+                'rcp': 'amdgpu::transcendental::rcp_f32(s)',
                 'sqrt': 'std::sqrt(s)',
                 'rsq': '1.0f / std::sqrt(s)',
                 'floor': 'std::floor(s)',
@@ -2308,7 +2308,7 @@ class CodeGenerator:
             if op == 'mulhi':
                 L.append(f'    {d}.write_lane(wf, lane, static_cast<uint32_t>((static_cast<int64_t>(sv0) * sv1) >> 32));')
             else:
-                L.append(f'    {d}.write_lane(wf, lane, static_cast<uint32_t>(sv0 * sv1));')
+                L.append(f'    {d}.write_lane(wf, lane, static_cast<uint32_t>(static_cast<int64_t>(sv0) * sv1));')
         elif dtype == 'u24':
             L.append(f'    uint32_t sv0 = {s0}.read_lane(wf, lane) & 0x00FFFFFFu;')
             L.append(f'    uint32_t sv1 = {s1}.read_lane(wf, lane) & 0x00FFFFFFu;')
@@ -2652,7 +2652,7 @@ class CodeGenerator:
             L.append(f'    int32_t a = static_cast<int32_t>({s0}.read_lane(wf, lane) << 8) >> 8;')
             L.append(f'    int32_t b = static_cast<int32_t>({s1}.read_lane(wf, lane) << 8) >> 8;')
             L.append(f'    int32_t c = static_cast<int32_t>({s2}.read_lane(wf, lane));')
-            L.append(f'    {d}.write_lane(wf, lane, static_cast<uint32_t>(a * b + c));')
+            L.append(f'    {d}.write_lane(wf, lane, static_cast<uint32_t>(static_cast<int64_t>(a) * b + c));')
         elif dtype in ('u24',):
             L.append(f'    uint32_t a = {s0}.read_lane(wf, lane) & 0x00FFFFFFu;')
             L.append(f'    uint32_t b = {s1}.read_lane(wf, lane) & 0x00FFFFFFu;')
@@ -4183,6 +4183,7 @@ class CodeGenerator:
         L.append('  d->is_load = true;')
         L.append(f'  d->transpose = {tr_kind};')
         L.append('  ds_calculate_addresses(inst_, wf, *d);')
+        L.append('  d->lane_mask = (wf.wf_size() == 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << wf.wf_size()) - 1);')
         L.append('  set_data(std::move(d));')
         return '\n'.join(L)
 

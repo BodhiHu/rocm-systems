@@ -8468,15 +8468,16 @@ inline void execute_v_cvt_floor_i32_f32_vop1([[maybe_unused]] Inst &inst,
     if (!(exec & (1ULL << lane)))
       continue;
     float s = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
+    float rounded = std::floor(s);
     int32_t r;
-    if (std::isnan(s))
+    if (std::isnan(rounded))
       r = 0;
-    else if (s >= 2147483648.0f)
+    else if (rounded >= 2147483648.0f)
       r = INT32_MAX;
-    else if (s < -2147483648.0f)
+    else if (rounded < -2147483648.0f)
       r = INT32_MIN;
     else
-      r = static_cast<int32_t>(s);
+      r = static_cast<int32_t>(rounded);
     inst.vdst.write_lane(wf, lane, static_cast<uint32_t>(r));
   }
 }
@@ -8493,15 +8494,16 @@ inline void execute_v_cvt_floor_i32_f32_vop3([[maybe_unused]] Inst &inst,
       s = std::fabs(s);
     if (inst.inst_.neg & (1u << 0))
       s = -s;
+    float rounded = std::floor(s);
     int32_t r;
-    if (std::isnan(s))
+    if (std::isnan(rounded))
       r = 0;
-    else if (s >= 2147483648.0f)
+    else if (rounded >= 2147483648.0f)
       r = INT32_MAX;
-    else if (s < -2147483648.0f)
+    else if (rounded < -2147483648.0f)
       r = INT32_MIN;
     else
-      r = static_cast<int32_t>(s);
+      r = static_cast<int32_t>(rounded);
     inst.vdst.write_lane(wf, lane, static_cast<uint32_t>(r));
   }
 }
@@ -8726,15 +8728,16 @@ inline void execute_v_cvt_nearest_i32_f32_vop1([[maybe_unused]] Inst &inst,
     if (!(exec & (1ULL << lane)))
       continue;
     float s = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
+    float rounded = std::ceil(s - 0.5f);
     int32_t r;
-    if (std::isnan(s))
+    if (std::isnan(rounded))
       r = 0;
-    else if (s >= 2147483648.0f)
+    else if (rounded >= 2147483648.0f)
       r = INT32_MAX;
-    else if (s < -2147483648.0f)
+    else if (rounded < -2147483648.0f)
       r = INT32_MIN;
     else
-      r = static_cast<int32_t>(s);
+      r = static_cast<int32_t>(rounded);
     inst.vdst.write_lane(wf, lane, static_cast<uint32_t>(r));
   }
 }
@@ -8751,15 +8754,16 @@ inline void execute_v_cvt_nearest_i32_f32_vop3([[maybe_unused]] Inst &inst,
       s = std::fabs(s);
     if (inst.inst_.neg & (1u << 0))
       s = -s;
+    float rounded = std::ceil(s - 0.5f);
     int32_t r;
-    if (std::isnan(s))
+    if (std::isnan(rounded))
       r = 0;
-    else if (s >= 2147483648.0f)
+    else if (rounded >= 2147483648.0f)
       r = INT32_MAX;
-    else if (s < -2147483648.0f)
+    else if (rounded < -2147483648.0f)
       r = INT32_MIN;
     else
-      r = static_cast<int32_t>(s);
+      r = static_cast<int32_t>(rounded);
     inst.vdst.write_lane(wf, lane, static_cast<uint32_t>(r));
   }
 }
@@ -11680,7 +11684,7 @@ inline void execute_v_mad_i32_i24_vop3([[maybe_unused]] Inst &inst,
     int32_t a = static_cast<int32_t>(inst.src0.read_lane(wf, lane) << 8) >> 8;
     int32_t b = static_cast<int32_t>(inst.src1.read_lane(wf, lane) << 8) >> 8;
     int32_t c = static_cast<int32_t>(inst.src2.read_lane(wf, lane));
-    inst.vdst.write_lane(wf, lane, static_cast<uint32_t>(a * b + c));
+    inst.vdst.write_lane(wf, lane, static_cast<uint32_t>(static_cast<int64_t>(a) * b + c));
   }
 }
 
@@ -13381,7 +13385,7 @@ inline void execute_v_mul_i32_i24_vop2([[maybe_unused]] Inst &inst,
       continue;
     int32_t sv0 = static_cast<int32_t>(inst.src0.read_lane(wf, lane) << 8) >> 8;
     int32_t sv1 = static_cast<int32_t>(inst.vsrc1.read_lane(wf, lane) << 8) >> 8;
-    inst.vdst.write_lane(wf, lane, static_cast<uint32_t>(sv0 * sv1));
+    inst.vdst.write_lane(wf, lane, static_cast<uint32_t>(static_cast<int64_t>(sv0) * sv1));
   }
 }
 
@@ -13394,7 +13398,7 @@ inline void execute_v_mul_i32_i24_vop3([[maybe_unused]] Inst &inst,
       continue;
     int32_t sv0 = static_cast<int32_t>(inst.src0.read_lane(wf, lane) << 8) >> 8;
     int32_t sv1 = static_cast<int32_t>(inst.src1.read_lane(wf, lane) << 8) >> 8;
-    inst.vdst.write_lane(wf, lane, static_cast<uint32_t>(sv0 * sv1));
+    inst.vdst.write_lane(wf, lane, static_cast<uint32_t>(static_cast<int64_t>(sv0) * sv1));
   }
 }
 
@@ -14425,7 +14429,7 @@ inline void execute_v_rcp_f16_vop1([[maybe_unused]] Inst &inst, [[maybe_unused]]
     if (!(exec & (1ULL << lane)))
       continue;
     float s = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
-    inst.vdst.write_lane(wf, lane, util::f32_to_f16(1.0f / s));
+    inst.vdst.write_lane(wf, lane, util::f32_to_f16(amdgpu::transcendental::rcp_f32(s)));
   }
 }
 
@@ -14440,7 +14444,7 @@ inline void execute_v_rcp_f16_vop3([[maybe_unused]] Inst &inst, [[maybe_unused]]
       s = std::fabs(s);
     if (inst.inst_.neg & (1u << 0))
       s = -s;
-    float result = 1.0f / s;
+    float result = amdgpu::transcendental::rcp_f32(s);
     if (inst.inst_.omod == 1)
       result *= 2.0f;
     else if (inst.inst_.omod == 2)

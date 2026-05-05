@@ -83,7 +83,7 @@ class SemanticsSpec:
 _DTYPE_SUFFIXES = [
     # Compound conversion types (must come before simple ones)
     'F32_UBYTE0', 'F32_UBYTE1', 'F32_UBYTE2', 'F32_UBYTE3',
-    'FLR_I32_F32', 'RPI_I32_F32',
+    'FLR_I32_F32', 'RPI_I32_F32', 'NEAREST_I32_F32', 'FLOOR_I32_F32',
     'F64_I32', 'I32_F64', 'F64_U32', 'U32_F64',
     'F64_F32', 'F32_F64',
     'F16_F32', 'F32_F16',
@@ -114,6 +114,7 @@ _DTYPE_MAP = {
     'F16_U16': 'f16_u16', 'F16_I16': 'f16_i16',
     'U16_F16': 'u16_f16', 'I16_F16': 'i16_f16',
     'FLR_I32_F32': 'flr_i32_f32', 'RPI_I32_F32': 'rpi_i32_f32',
+    'NEAREST_I32_F32': 'rpi_i32_f32', 'FLOOR_I32_F32': 'flr_i32_f32',
     'F32_UBYTE0': 'f32_ubyte0', 'F32_UBYTE1': 'f32_ubyte1',
     'F32_UBYTE2': 'f32_ubyte2', 'F32_UBYTE3': 'f32_ubyte3',
     'I32_I24': 'i24', 'U32_U24': 'u24',
