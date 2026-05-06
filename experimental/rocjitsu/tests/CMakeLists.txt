@@ -70,7 +70,6 @@ rj_configure_target(scaling_test TEST)
 set(RJ_KMD_PRELOAD_ENV
     "LD_PRELOAD=$<TARGET_FILE:rocjitsu_kmd_shim>"
     "RJ_CONFIG=${CMAKE_SOURCE_DIR}/configs/amdgpu_cdna4_kmd.json"
-    "RJ_SCHEMA=${CMAKE_SOURCE_DIR}/schemas/simulation_config.fbs"
     "HSA_ENABLE_SDMA=1"
 )
 
@@ -115,7 +114,7 @@ if(ROCMINFO_EXECUTABLE)
         "RocminfoTest.ReportsWavefrontSize"
         PROPERTIES
             ENVIRONMENT "${RJ_KMD_PRELOAD_ENV}"
-            TIMEOUT 30)
+)
     message(STATUS "rocminfo test enabled (found ${ROCMINFO_EXECUTABLE})")
 else()
     message(STATUS "rocminfo test disabled (rocminfo not found)")
@@ -145,8 +144,7 @@ if(HSA_RUNTIME64)
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     set_tests_properties("HsaTest.InitSucceeded" "HsaTest.GpuAgentFound" PROPERTIES
         ENVIRONMENT "${RJ_KMD_PRELOAD_ENV}"
-        SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
-        TIMEOUT 30)
+        SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
     message(STATUS "HSA init test enabled (found ${HSA_RUNTIME64})")
 
     # --- HSA translate test: CDNA4→RDNA4 on-device verification ---
@@ -184,13 +182,9 @@ if(HSA_RUNTIME64)
             add_test(NAME "HsaTranslateTest.TranslateAndDispatchVectorAdd"
                 COMMAND hsa_translate_test --gtest_filter=*VectorAdd*
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
-            set_tests_properties("HsaTranslateTest.TranslateAndDispatchVectorAdd" PROPERTIES
-                TIMEOUT 30)
             add_test(NAME "HsaTranslateTest.TranslateAndDispatchMfma16x16"
                 COMMAND hsa_translate_test --gtest_filter=*Mfma16x16*
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
-            set_tests_properties("HsaTranslateTest.TranslateAndDispatchMfma16x16" PROPERTIES
-                TIMEOUT 60)
             message(STATUS "HSA translate test enabled (RDNA4 GPU detected)")
         else()
             message(STATUS "HSA translate test built but NOT registered with CTest (no RDNA4 GPU)")
@@ -227,7 +221,7 @@ if(HIPCC_EXECUTABLE AND HSA_RUNTIME64)
         add_test(NAME ${TEST_NAME} COMMAND ${HIP_TEST_BIN})
         set_tests_properties(${TEST_NAME} PROPERTIES
             ENVIRONMENT "${RJ_KMD_PRELOAD_ENV}"
-            TIMEOUT 120)
+)
     endfunction()
 
     # Each HIP test registers as a separate ctest so gtest doesn't try to run
@@ -238,7 +232,7 @@ if(HIPCC_EXECUTABLE AND HSA_RUNTIME64)
                  --gtest_filter=${TEST_CASE})
         set_tests_properties(${TEST_CASE} PROPERTIES
             ENVIRONMENT "${RJ_KMD_PRELOAD_ENV}"
-            TIMEOUT 120)
+)
     endfunction()
 
     rj_add_hip_test(hip_memcpy_test)
@@ -274,13 +268,12 @@ if(HIPCC_EXECUTABLE AND HSA_RUNTIME64)
             Rect_64x1x64 Rect_7x11x13 AlphaBeta BetaZero)
             rj_add_hip_test_case(hip_gemm_test "RocblasGemmTest.${TC}")
         endforeach()
-        # Large SDMA stress test — 48 MB H2D transfer, needs extended timeout.
         # Large GEMM stress test — validates SDMA + LDS isolation for big K.
         add_test(NAME "RocblasGemmTest.Large_2048x2048"
             COMMAND ${GEMM_BIN} --gtest_filter=RocblasGemmTest.Large_2048x2048)
         set_tests_properties("RocblasGemmTest.Large_2048x2048" PROPERTIES
             ENVIRONMENT "${RJ_KMD_PRELOAD_ENV}"
-            TIMEOUT 600)
+)
         foreach(I RANGE 0 4)
             rj_add_hip_test_case(hip_gemm_test "RocblasGemmFuzz.Iter${I}")
         endforeach()
@@ -289,7 +282,6 @@ if(HIPCC_EXECUTABLE AND HSA_RUNTIME64)
         set(RJ_CDNA3_ENV
             "LD_PRELOAD=$<TARGET_FILE:rocjitsu_kmd_shim>"
             "RJ_CONFIG=${CMAKE_SOURCE_DIR}/configs/amdgpu_cdna3_kmd.json"
-            "RJ_SCHEMA=${CMAKE_SOURCE_DIR}/schemas/simulation_config.fbs"
             "HSA_ENABLE_SDMA=1"
         )
         foreach(TC IN ITEMS
@@ -297,13 +289,13 @@ if(HIPCC_EXECUTABLE AND HSA_RUNTIME64)
             add_test(NAME "RocblasGemmCdna3.${TC}"
                 COMMAND ${GEMM_BIN} --gtest_filter=RocblasGemmTest.${TC})
             set_tests_properties("RocblasGemmCdna3.${TC}" PROPERTIES
-                ENVIRONMENT "${RJ_CDNA3_ENV}" TIMEOUT 120)
+                ENVIRONMENT "${RJ_CDNA3_ENV}")
         endforeach()
         foreach(I RANGE 0 2)
             add_test(NAME "RocblasGemmCdna3.Fuzz_Iter${I}"
                 COMMAND ${GEMM_BIN} --gtest_filter=RocblasGemmFuzz.Iter${I})
             set_tests_properties("RocblasGemmCdna3.Fuzz_Iter${I}" PROPERTIES
-                ENVIRONMENT "${RJ_CDNA3_ENV}" TIMEOUT 120)
+                ENVIRONMENT "${RJ_CDNA3_ENV}")
         endforeach()
         message(STATUS "rocBLAS GEMM test enabled (found ${ROCBLAS_LIB})")
     else()

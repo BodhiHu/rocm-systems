@@ -22,19 +22,10 @@ int main(int argc, char *argv[]) {
   }
 
   // Schema path: required for building VMs from JSON.
-  std::string schema_path;
-  if (argc >= 3) {
-    schema_path = argv[2];
-  } else {
-    // Default schema path relative to working directory.
-    schema_path = "schemas/simulation_config.fbs";
-  }
-  app.set_schema_path(schema_path);
-
   // If a JSON config was provided, load it.
   if (argc >= 2) {
     try {
-      app.load_config(argv[1], schema_path);
+      app.load_config(argv[1]);
       std::printf("Loaded config: %s\n", argv[1]);
     } catch (const std::exception &e) {
       std::fprintf(stderr, "Error loading config: %s\n", e.what());

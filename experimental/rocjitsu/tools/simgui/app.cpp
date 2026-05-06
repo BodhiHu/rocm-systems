@@ -5,6 +5,7 @@
 #include "simulation_panel.h"
 #include "topology_editor.h"
 
+#include "embedded_schema.h"
 #include "rocjitsu/config/checkpoint.h"
 #include "rocjitsu/config/config_loader.h"
 
@@ -82,12 +83,11 @@ bool App::init(int width, int height, const char *title) {
   return true;
 }
 
-void App::load_config(const std::string &json_path, const std::string &schema_path) {
+void App::load_config(const std::string &json_path) {
   reset_simulation();
-  schema_path_ = schema_path;
 
   try {
-    auto loaded = config::load_config(json_path, schema_path);
+    auto loaded = config::load_config(json_path, rocjitsu::kEmbeddedSchema);
     // GUI drives stepping from the render thread - force single-threaded.
     loaded.engine_config.num_threads = 1;
     engine_config_ = loaded.engine_config;
@@ -150,13 +150,8 @@ void App::build_default_simulation() {
                      R"({"name":"cp","type":"command_processor"},)" +
                      se_children + R"(]}]},"links":[)" + links + R"(]}})";
 
-  if (schema_path_.empty()) {
-    std::fprintf(stderr, "No schema path set - cannot build simulation\n");
-    return;
-  }
-
   try {
-    auto loaded = config::load_config_from_string(json, schema_path_);
+    auto loaded = config::load_config_from_string(json, rocjitsu::kEmbeddedSchema);
     engine_config_ = loaded.engine_config;
     soc_ = loaded.soc();
     engine_ = std::make_unique<simdojo::SimulationEngine>(loaded.engine_config);

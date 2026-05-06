@@ -33,13 +33,10 @@ public:
   void run();
 
   /// @brief Load a simulation config from a JSON file.
-  void load_config(const std::string &json_path, const std::string &schema_path);
+  void load_config(const std::string &json_path);
 
   /// @brief Build simulation from current editor state.
   void build_default_simulation();
-
-  /// @brief Set the schema path for JSON config parsing.
-  void set_schema_path(const std::string &path) { schema_path_ = path; }
 
 private:
   void render_frame();
@@ -54,7 +51,6 @@ private:
   SoC *soc_ = nullptr;                                ///< Cached pointer into topology root.
 
   // Schema path for creating VMs from JSON.
-  std::string schema_path_;
 
   // Simulation control.
   bool sim_running_ = false;
