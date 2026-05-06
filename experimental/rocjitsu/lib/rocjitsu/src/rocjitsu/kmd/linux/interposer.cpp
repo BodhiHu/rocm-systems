@@ -9,6 +9,7 @@
 /// All global state is managed by SimulatedDriver's static singleton interface.
 
 #include "rocjitsu/base/rj_compiler.h"
+#include "rocjitsu/kmd/linux/remote_driver.h"
 #include "rocjitsu/kmd/linux/simulated_driver.h"
 
 #include <cerrno>
@@ -29,6 +30,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+using rocjitsu::RemoteDriver;
 using rocjitsu::SimulatedDriver;
 
 namespace {
@@ -140,15 +142,16 @@ int open(const char *path, int flags, ...) {
     return SimulatedDriver::kfd_fd();
   }
 
-  // Intercept /dev/kfd — lazily create the simulated driver.
+  // Intercept /dev/kfd — try daemon first, fall back to local singleton.
   if (std::strcmp(path, "/dev/kfd") == 0) {
+    if (RemoteDriver::get_or_create())
+      return RemoteDriver::kfd_fd();
+
     auto *drv = SimulatedDriver::get_or_create();
     if (!drv) {
       errno = ENODEV;
       return -1;
     }
-    // If the driver was previously closed (e.g., Init() failed and scope
-    // guard called Close()), re-open it to get a fresh fd.
     if (SimulatedDriver::kfd_fd() < 0) {
       drv->open();
       clear_kfd_duplicate_fds();
@@ -346,6 +349,9 @@ int ioctl(int fd, unsigned long request, ...) {
     }
   }
 
+  if (auto *remote = RemoteDriver::lookup(fd))
+    return remote->ioctl(request, arg);
+
   auto *drv = SimulatedDriver::lookup(fd);
   if (!drv && is_kfd_duplicate_fd(fd))
     drv = SimulatedDriver::lookup(SimulatedDriver::kfd_fd());
@@ -481,6 +487,9 @@ int fcntl(int fd, int cmd, ...) {
 }
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
+  if (auto *remote = RemoteDriver::lookup(fd))
+    return remote->mmap(addr, length, prot, flags, offset);
+
   auto *drv = SimulatedDriver::lookup(fd);
   if (drv)
     return drv->mmap(addr, length, prot, flags, offset);

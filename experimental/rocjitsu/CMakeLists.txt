@@ -216,6 +216,9 @@ target_include_directories(rocjitsu_shared PRIVATE ${GENERATED_DIR})
 add_dependencies(rocjitsu_shared flatbuffers_schemas)
 
 # Tools
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_subdirectory(tools/rocjitsu-daemon)
+endif()
 if(RJ_BUILD_GUI)
     add_subdirectory(tools/simgui)
 endif()
