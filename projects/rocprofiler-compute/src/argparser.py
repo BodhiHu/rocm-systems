@@ -170,6 +170,8 @@ def add_general_group(
             "Enable experimental feature(s):\n"
             "   Spatial multiplexing (--spatial-multiplexing)\n"
             "   Torch trace (--torch-trace, --list-torch-operators, --torch-operator)\n"
+            "   PC Sampling (--pc-sampling, --pc-sampling-method, "
+            "--pc-sampling-interval, --pc-sampling-sorting-type)\n"
         ),
     )
 
@@ -447,6 +449,10 @@ Examples:
         metavar="",
         dest="pc_sampling_method",
         default="stochastic",
+        base_action="store",
+        action=ExperimentalAction,
+        experimental_enabled=experimental_enabled,
+        feature_label="PC Sampling",
         help=(
             "\t\t\tSet the method of pc sampling, stochastic or host_trap. "
             "Support stochastic only >= MI300"
@@ -458,6 +464,10 @@ Examples:
         metavar="",
         dest="pc_sampling_interval",
         default=1048576,
+        base_action="store",
+        action=ExperimentalAction,
+        experimental_enabled=experimental_enabled,
+        feature_label="PC Sampling",
         help=(
             "\t\t\tSet the interval of pc sampling.\n"
             "\t\t\t  For stochastic sampling, the interval is in cycles.\n"
@@ -571,6 +581,20 @@ Examples:
         nargs=0,
         const=True,
         help="\t\t\tEnable block 30 (memory bandwidth specific) for profile mode.",
+    )
+
+    profile_group.add_argument(
+        "--pc-sampling",
+        dest="pc_sampling",
+        required=False,
+        default=False,
+        base_action="store_const",
+        action=ExperimentalAction,
+        experimental_enabled=experimental_enabled,
+        feature_label="PC Sampling",
+        nargs=0,
+        const=True,
+        help="\t\t\tEnable PC sampling (block 21) for profile mode.",
     )
 
     ## Analyze Command Line Options
@@ -752,6 +776,10 @@ Examples:
         dest="pc_sampling_sorting_type",
         default="offset",
         type=str,
+        base_action="store",
+        action=ExperimentalAction,
+        experimental_enabled=experimental_enabled,
+        feature_label="PC Sampling",
         help="\t\tSet the sorting type of pc sampling: "
         "offset or count (DEFAULT: offset).",
     )
@@ -981,4 +1009,18 @@ Examples:
         nargs=0,
         const=True,
         help="\t\tEnable block 30 (memory bandwidth specific) for analysis mode.",
+    )
+
+    analyze_group.add_argument(
+        "--pc-sampling",
+        dest="pc_sampling",
+        required=False,
+        default=False,
+        base_action="store_const",
+        action=ExperimentalAction,
+        experimental_enabled=experimental_enabled,
+        feature_label="PC Sampling",
+        nargs=0,
+        const=True,
+        help="\t\tEnable PC sampling (block 21) for analysis mode.",
     )
