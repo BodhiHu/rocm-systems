@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#include "lib/rocprofiler-sdk/hsa/queue_intercept.hpp"
+#include "lib/rocprofiler-sdk/hsa/queue_interposition.hpp"
 #include "lib/common/container/pool.hpp"
 #include "lib/common/container/pool_object.hpp"
 #include "lib/common/logging.hpp"
@@ -54,7 +54,7 @@ namespace rocprofiler
 {
 namespace hsa
 {
-namespace queue_intercept
+namespace queue_interposition
 {
 namespace
 {
@@ -206,7 +206,21 @@ ring_buffer_writer(const void* pkts, uint64_t pkt_count)
         auto        slot = tls_submit_pos & state->ring_mask;
         auto*       dst  = static_cast<char*>(state->ring_buf) + (slot * pkt_size);
         const auto* s    = src + i * pkt_size;
-        if(dst != s) memcpy(dst, s, pkt_size);
+        if(dst != s)
+        {
+            constexpr auto header_size = sizeof(uint16_t);
+            if(pkt_size > header_size)
+            {
+                ::memcpy(dst + header_size, s + header_size, pkt_size - header_size);
+                uint16_t header = 0;
+                ::memcpy(&header, s, header_size);
+                __atomic_store_n(reinterpret_cast<uint16_t*>(dst), header, __ATOMIC_RELEASE);
+            }
+            else
+            {
+                ::memcpy(dst, s, pkt_size);
+            }
+        }
         tls_submit_pos++;
     }
 }
@@ -654,7 +668,7 @@ process_doorbell_impl(const queue_state_ptr_t& state,
     // that owns the slot cannot write to it until we release gate_lock (it needs no lock to
     // write the body) so this spin terminates once the writer completes its memcpy + header
     // store, with no risk of deadlock.
-    std::vector<char> source_snapshot(pkt_count * state_ptr->pkt_size);
+    auto source_snapshot = std::vector<char>(pkt_count * state_ptr->pkt_size);
     for(uint64_t i = 0; i < pkt_count; ++i)
     {
         const auto  ring_slot = (scan_pos + i) & state_ptr->ring_mask;
@@ -1047,13 +1061,13 @@ signal_silent_store_screlease(hsa_signal_t sig, hsa_signal_value_t val)
 }  // namespace
 
 bool
-is_intercepting_inline()
+supports_queue_interposition()
 {
     return s_intercept_installed.load(std::memory_order_acquire);
 }
 
 void
-intercept_sync()
+interposition_sync()
 {
     if(async_signal_handler_exists())  // query without constructing
     {
@@ -1066,7 +1080,7 @@ intercept_sync()
 }
 
 void
-intercept_init(CoreApiTable* core_table, bool enabled)
+interposition_init(CoreApiTable* core_table, bool enabled)
 {
     ROCP_INFO << "[queue-intercept] inline intercept path ENGAGED (tracing-only, no expansion)";
 
@@ -1114,7 +1128,7 @@ intercept_init(CoreApiTable* core_table, bool enabled)
 }
 
 void
-intercept_fini()
+interposition_fini()
 {
     // disable dynamic discovery of queues
     s_intercept_dynamic.store(false, std::memory_order_release);
@@ -1123,13 +1137,13 @@ intercept_fini()
     s_intercept_active.store(false, std::memory_order_release);
 
     // wait for any in-flight signal handlers to complete and clean up the signal pool
-    intercept_sync();
+    interposition_sync();
 
     // clean up signal pool
     signal_pool_fini();
 
     get_queue_registry().wlock([](auto& map) { map.clear(); });
 }
-}  // namespace queue_intercept
+}  // namespace queue_interposition
 }  // namespace hsa
 }  // namespace rocprofiler

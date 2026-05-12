@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#include "lib/rocprofiler-sdk/hsa/queue_intercept.hpp"
+#include "lib/rocprofiler-sdk/hsa/queue_interposition.hpp"
 
 #include <gtest/gtest.h>
 
@@ -37,11 +37,11 @@ namespace rocprofiler
 {
 namespace hsa
 {
-namespace queue_intercept
+namespace queue_interposition
 {
 namespace
 {
-TEST(QueueIntercept, QueueStateDefaultInit)
+TEST(queue_interposition, queue_state_default_init)
 {
     QueueState state;
 
@@ -58,7 +58,7 @@ TEST(QueueIntercept, QueueStateDefaultInit)
     EXPECT_EQ(state.doorbell_signal.handle, 0UL);
 }
 
-TEST(QueueIntercept, RegistryInsertAndLookup)
+TEST(queue_interposition, registry_insert_and_lookup)
 {
     // Create a dummy queue pointer for testing
     // We're just using a dummy address; we never dereference it
@@ -89,7 +89,7 @@ TEST(QueueIntercept, RegistryInsertAndLookup)
     EXPECT_EQ(after_removal, nullptr);
 }
 
-TEST(QueueIntercept, DoorbellMapInsertAndLookup)
+TEST(queue_interposition, doorbell_map_insert_and_lookup)
 {
     // Create a dummy queue for testing
     auto               dummy_queue = hsa_queue_t{};
@@ -122,7 +122,7 @@ TEST(QueueIntercept, DoorbellMapInsertAndLookup)
     EXPECT_EQ(after_removal, nullptr);
 }
 
-TEST(QueueIntercept, AddWriteIndexAdvancesVirtualWptr)
+TEST(queue_interposition, add_write_index_advances_virtual_wptr)
 {
     QueueState state{};
     uint64_t   idx0 = add_write_index_impl(&state, 1);
@@ -134,7 +134,7 @@ TEST(QueueIntercept, AddWriteIndexAdvancesVirtualWptr)
     EXPECT_EQ(state.virtual_wptr.load(), 4u);
 }
 
-TEST(QueueIntercept, StoreWriteIndexSetsVirtualWptr)
+TEST(queue_interposition, store_write_index_sets_virtual_wptr)
 {
     QueueState state{};
     store_write_index_impl(&state, 42);
@@ -143,7 +143,7 @@ TEST(QueueIntercept, StoreWriteIndexSetsVirtualWptr)
     EXPECT_EQ(state.virtual_wptr.load(), 0u);
 }
 
-TEST(QueueIntercept, CasWriteIndexSuccess)
+TEST(queue_interposition, cas_write_index_success)
 {
     QueueState state{};
     state.virtual_wptr.store(10);
@@ -152,7 +152,7 @@ TEST(QueueIntercept, CasWriteIndexSuccess)
     EXPECT_EQ(state.virtual_wptr.load(), 20u);
 }
 
-TEST(QueueIntercept, CasWriteIndexFailure)
+TEST(queue_interposition, cas_write_index_failure)
 {
     QueueState state{};
     state.virtual_wptr.store(10);
@@ -161,7 +161,7 @@ TEST(QueueIntercept, CasWriteIndexFailure)
     EXPECT_EQ(state.virtual_wptr.load(), 10u);
 }
 
-TEST(QueueIntercept, LoadWriteIndexReturnsVirtualWptr)
+TEST(queue_interposition, load_write_index_returns_virtual_wptr)
 {
     QueueState state{};
     state.virtual_wptr.store(99);
@@ -177,7 +177,7 @@ get_pkt(void* ring, uint64_t idx, uint32_t mask)
 }
 }  // namespace
 
-TEST(QueueIntercept, DoorbellTraceOnlyCopiesPacket)
+TEST(queue_interposition, doorbell_trace_only_copies_packet)
 {
     auto             state = std::make_shared<QueueState>();
     alignas(64) char ring[64 * 256];
@@ -208,7 +208,7 @@ TEST(QueueIntercept, DoorbellTraceOnlyCopiesPacket)
     EXPECT_EQ(submitted->kernel_object, 0xDEADBEEFu);
 }
 
-TEST(QueueIntercept, DoorbellMultiplePacketsTraceOnly)
+TEST(queue_interposition, doorbell_multiple_packets_trace_only)
 {
     auto             state = std::make_shared<QueueState>();
     alignas(64) char ring[64 * 256];
@@ -241,7 +241,7 @@ TEST(QueueIntercept, DoorbellMultiplePacketsTraceOnly)
     }
 }
 
-TEST(QueueIntercept, DoorbellNoNewPackets)
+TEST(queue_interposition, doorbell_no_new_packets)
 {
     auto             state = std::make_shared<QueueState>();
     alignas(64) char ring[64 * 64];
@@ -264,7 +264,7 @@ TEST(QueueIntercept, DoorbellNoNewPackets)
     EXPECT_EQ(real_wdid, 0u);
 }
 
-TEST(QueueIntercept, CreateAndDestroyQueueState)
+TEST(queue_interposition, create_and_destroy_queue_state)
 {
     // char ring_mem[64 * 256];
     constexpr auto   ring_size = 64UL * 256UL;
@@ -308,7 +308,7 @@ TEST(QueueIntercept, CreateAndDestroyQueueState)
     EXPECT_EQ(lookup_queue_state_by_doorbell(doorbell), nullptr);
 }
 
-TEST(QueueIntercept, DoorbellBackpressureWaitsWhenRingFullK0)
+TEST(queue_interposition, doorbell_backpressure_waits_when_ring_full_k0)
 {
     auto             state = std::make_shared<QueueState>();
     alignas(64) char ring[64 * 8];
@@ -349,6 +349,6 @@ TEST(QueueIntercept, DoorbellBackpressureWaitsWhenRingFullK0)
     EXPECT_EQ(get_pkt(ring, 4, 3)->kernel_object, static_cast<uint64_t>(0xABCD));
 }
 }  // namespace
-}  // namespace queue_intercept
+}  // namespace queue_interposition
 }  // namespace hsa
 }  // namespace rocprofiler

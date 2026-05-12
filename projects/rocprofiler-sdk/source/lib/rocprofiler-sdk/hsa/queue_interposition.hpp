@@ -38,7 +38,7 @@ namespace rocprofiler
 {
 namespace hsa
 {
-namespace queue_intercept
+namespace queue_interposition
 {
 /**
  * @brief Per-queue state for SDK-level write pointer virtualization
@@ -211,7 +211,7 @@ destroy_queue_state(const hsa_queue_t* queue);
  * @return True if inline interception is installed and active, false otherwise
  */
 bool
-is_intercepting_inline();
+supports_queue_interposition();
 
 /**
  * @brief Install interposition wrappers into the HSA core API table
@@ -223,7 +223,7 @@ is_intercepting_inline();
  * @param core_table The HSA core API table to intercept
  */
 void
-intercept_init(CoreApiTable* core_table, bool enabled);
+interposition_init(CoreApiTable* core_table, bool enabled);
 
 /**
  * @brief Disable inline queue interception and clear tracked state
@@ -233,7 +233,7 @@ intercept_init(CoreApiTable* core_table, bool enabled);
  * Intended for finalization to avoid teardown-order hazards in static objects.
  */
 void
-intercept_fini();
+interposition_fini();
 
 /**
  * @brief Wait for all in-flight signal handlers to complete and clean up resources
@@ -242,7 +242,7 @@ intercept_fini();
  * processing is completed and that the signal pool is cleaned up.
  */
 void
-intercept_sync();
-}  // namespace queue_intercept
+interposition_sync();
+}  // namespace queue_interposition
 }  // namespace hsa
 }  // namespace rocprofiler

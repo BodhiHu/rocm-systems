@@ -308,7 +308,7 @@ notify_post_internal_thread_create(rocprofiler_runtime_library_t libs)
 rocprofiler_callback_thread_t
 create_callback_thread()
 {
-    // notify that rocprofiler library is about to create an inernal thread
+    // notify that rocprofiler library is about to create an internal thread
     notify_pre_internal_thread_create(ROCPROFILER_LIBRARY);
 
     // this will be index after emplace_back
@@ -334,7 +334,7 @@ get_task_group(rocprofiler_callback_thread_t cb_tid)
 std::unique_ptr<task_group_t>
 create_task_group(size_t pool_size)
 {
-    // notify that rocprofiler library is about to create an inernal thread
+    // notify that rocprofiler library is about to create an internal thread
     notify_pre_internal_thread_create(ROCPROFILER_LIBRARY);
 
     // construct the task group to use the newly created thread pool

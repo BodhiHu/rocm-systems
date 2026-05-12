@@ -26,7 +26,7 @@
 #include "lib/rocprofiler-sdk/context/context.hpp"
 #include "lib/rocprofiler-sdk/hsa/agent_cache.hpp"
 #include "lib/rocprofiler-sdk/hsa/queue.hpp"
-#include "lib/rocprofiler-sdk/hsa/queue_intercept.hpp"
+#include "lib/rocprofiler-sdk/hsa/queue_interposition.hpp"
 
 #include <hsa/amd_hsa_queue.h>
 
@@ -57,7 +57,7 @@ create_queue(hsa_agent_t        agent,
         if(agent_info.get_hsa_agent().handle == agent.handle)
         {
             std::unique_ptr<Queue> new_queue;
-            if(queue_intercept::is_intercepting_inline())
+            if(queue_interposition::supports_queue_interposition())
             {
                 ROCP_INFO << "[queue-intercept] creating queue via INLINE path for agent "
                           << agent.handle;
@@ -251,7 +251,7 @@ QueueController::add_queue(hsa_queue_t* id, std::unique_ptr<Queue> queue)
     });
 
     // Register queue state for SDK-level write pointer interception
-    queue_intercept::create_queue_state(id);
+    queue_interposition::create_queue_state(id);
 }
 
 void
@@ -264,7 +264,7 @@ QueueController::destroy_queue(hsa_queue_t* id)
     // return if queue does not exist
     if(!queue) return;
 
-    queue_intercept::destroy_queue_state(id);
+    queue_interposition::destroy_queue_state(id);
     queue->sync();
     if(queue->block_signal.handle != 0) get_core_table().hsa_signal_destroy_fn(queue->block_signal);
     _queues.wlock([&](auto& map) { map.erase(id); });
@@ -566,7 +566,7 @@ void
 queue_controller_sync()
 {
     // sync the queue interceptor
-    queue_intercept::intercept_sync();
+    queue_interposition::interposition_sync();
 
     if(get_queue_controller())
         get_queue_controller()->iterate_queues([](const Queue* _queue) { _queue->sync(); });
@@ -581,7 +581,7 @@ queue_controller_fini()
     // finalize queue data (e.g. clean up signal pool)
     if(enable_queue_intercept()) queue_fini();
 
-    queue_intercept::intercept_fini();
+    queue_interposition::interposition_fini();
 }
 
 void
