@@ -94,27 +94,31 @@ get_attach_table()
     return table;
 }
 
-auto&
-get_prev_notify_callback()
-{
-    static rocprofiler_attach_notify_new_code_object_t _v = nullptr;
-    return _v;
-}
-
 void
 notify_registries(hsa_executable_t executable)
 {
     rocprofiler::code_object::iterate_loaded_code_objects(
         [&](const rocprofiler::code_object::hsa::code_object& code_object) {
-            if(code_object.hsa_executable != executable) return;
+            if(code_object.hsa_executable != executable)
+            {
+                return;
+            }
 
             const auto& co = code_object.rocp_data;
 
             get_registries().wlock([&](set_type_t& t) {
                 for(auto* reg : t)
+                {
                     reg->ld_fn(co.rocp_agent, co.code_object_id, co.load_delta, co.load_size);
+                }
             });
         });
+}
+
+void
+executable_freeze_internal(hsa_executable_t executable)
+{
+    notify_registries(executable);
 }
 
 hsa_status_t
@@ -124,54 +128,57 @@ executable_freeze(hsa_executable_t executable, const char* options)
     hsa_status_t status = CHECK_NOTNULL(get_freeze_function())(executable, options);
     if(status != HSA_STATUS_SUCCESS) return status;
 
-    notify_registries(executable);
+    executable_freeze_internal(executable);
     return HSA_STATUS_SUCCESS;
+}
+
+void
+executable_destroy_internal(hsa_executable_t executable)
+{
+    rocprofiler::code_object::iterate_loaded_code_objects(
+        [&](const rocprofiler::code_object::hsa::code_object& code_object) {
+            if(code_object.hsa_executable != executable)
+            {
+                return;
+            }
+
+            get_registries().wlock([&](set_type_t& t) {
+                for(auto* reg : t)
+                {
+                    reg->unld_fn(code_object.rocp_data.code_object_id);
+                }
+            });
+        });
 }
 
 hsa_status_t
 executable_destroy(hsa_executable_t executable)
 {
-    rocprofiler::code_object::iterate_loaded_code_objects(
-        [&](const rocprofiler::code_object::hsa::code_object& code_object) {
-            if(code_object.hsa_executable != executable) return;
-
-            get_registries().wlock([&](set_type_t& t) {
-                for(auto* reg : t)
-                    reg->unld_fn(code_object.rocp_data.code_object_id);
-            });
-        });
-
+    executable_destroy_internal(executable);
     // Call underlying function
     return CHECK_NOTNULL(get_destroy_function())(executable);
 }
 
 void
-iterate_attach_code_object(hsa_executable_t executable, void*)
+attach_code_object_event(hsa_executable_t                       executable,
+                         rocprofiler_attach_code_object_phase_t phase,
+                         void* /*data*/)
 {
-    // Called for code objects already frozen at attach time; the main code_object subsystem
-    // has already processed this executable, so we can query iterate_loaded_code_objects directly.
-    notify_registries(executable);
-}
-
-void
-chained_notify_new_code_object(hsa_executable_t executable, void* data)
-{
-    // Call the previously installed callback first so the main code_object subsystem
-    // processes the new executable before we query it.
-    if(get_prev_notify_callback())
+    if(phase == ROCPROFILER_ATTACH_CODE_OBJECT_CREATED)
     {
-        get_prev_notify_callback()(executable, data);
+        executable_freeze_internal(executable);
     }
-    notify_registries(executable);
+    else
+    {
+        executable_destroy_internal(executable);
+    }
 }
 
 void
 load_attach_code_objects()
 {
     auto* attach_table = CHECK_NOTNULL(*(get_attach_table()));
-    attach_table->rocprofiler_attach_iterate_all_code_objects(iterate_attach_code_object, nullptr);
-    get_prev_notify_callback() = attach_table->rocprofiler_attach_notify_new_code_object;
-    attach_table->rocprofiler_attach_notify_new_code_object = chained_notify_new_code_object;
+    attach_table->rocprofiler_attach_add_code_object_cb(attach_code_object_event, nullptr);
 }
 }  // namespace
 
