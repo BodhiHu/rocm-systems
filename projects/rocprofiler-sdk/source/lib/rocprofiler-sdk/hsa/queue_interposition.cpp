@@ -633,7 +633,19 @@ process_doorbell_impl(const queue_state_ptr_t& state,
     std::unique_lock<std::mutex> lock{state_ptr->gate_lock};
 
     const uint64_t scan_pos = state_ptr->next_scan_pos;
-    const uint64_t scan_end = state_ptr->virtual_wptr.load(std::memory_order_acquire);
+
+    // The doorbell value is the index of the *last* packet the ringing thread has committed
+    // (header written with release).  We must NOT use virtual_wptr here: HIP graph dispatch
+    // (CLR's dispatchAqlPacketBatchFlat) does a single add_write_index for the entire batch
+    // (e.g. 2000 packets) and then commits headers + rings the doorbell in much smaller
+    // chunks (DEBUG_HIP_GRAPH_BATCH_SIZE).  Between chunks, virtual_wptr already covers all
+    // reserved slots but only the slots up to `value` have valid headers; the rest still hold
+    // INVALID and the header-wait spin below would deadlock on them.
+    //
+    // virtual_wptr serves only as a defensive upper bound in case value+1 somehow lags.
+    const uint64_t doorbell_end = static_cast<uint64_t>(value) + 1;
+    const uint64_t wptr_end     = state_ptr->virtual_wptr.load(std::memory_order_acquire);
+    const uint64_t scan_end     = (doorbell_end < wptr_end) ? doorbell_end : wptr_end;
 
     if(scan_pos >= scan_end)
     {
