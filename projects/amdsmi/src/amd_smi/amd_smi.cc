@@ -4249,20 +4249,11 @@ static amdsmi_status_t read_clk_freq_from_pp_dpm(amdsmi_processor_handle process
   return (f->num_supported > 0) ? AMDSMI_STATUS_SUCCESS : AMDSMI_STATUS_NOT_SUPPORTED;
 }
 
-// Map an amdsmi_clk_type_t to its corresponding pp_dpm_* sysfs filename, or
-// nullptr if no sysfs file is defined for that clock type.
+// Map a VCLK/DCLK clock type to its pp_dpm_* sysfs filename. rsmi does not
+// support these clock types via gpu_metrics, so amdsmi reads them directly
+// from sysfs. Returns nullptr for any other clock type.
 static const char* pp_dpm_filename_for_clk_type(amdsmi_clk_type_t clk_type) {
   switch (clk_type) {
-    case AMDSMI_CLK_TYPE_SYS:
-      return "pp_dpm_sclk";
-    case AMDSMI_CLK_TYPE_DF:
-      return "pp_dpm_fclk";
-    case AMDSMI_CLK_TYPE_DCEF:
-      return "pp_dpm_dcefclk";
-    case AMDSMI_CLK_TYPE_SOC:
-      return "pp_dpm_socclk";
-    case AMDSMI_CLK_TYPE_MEM:
-      return "pp_dpm_mclk";
     case AMDSMI_CLK_TYPE_VCLK0:
       return "pp_dpm_vclk";
     case AMDSMI_CLK_TYPE_VCLK1:
@@ -4287,26 +4278,9 @@ amdsmi_status_t amdsmi_get_clk_freq(amdsmi_processor_handle processor_handle,
     return read_clk_freq_from_pp_dpm(processor_handle, pp_dpm_filename_for_clk_type(clk_type), f);
   }
 
-  amdsmi_status_t status = rsmi_wrapper(rsmi_dev_gpu_clk_freq_get, processor_handle, 0,
-                                        static_cast<rsmi_clk_type_t>(clk_type),
-                                        reinterpret_cast<rsmi_frequencies_t*>(f));
-
-  // on gfx1151-class APUs the SMU power-gates SYS/DF/DCEF/SOC/MEM
-  // at idle and rsmi/gpu_metrics returns no data. The pp_dpm_* sysfs files
-  // always expose the supported DPM table (the '*' current-level marker is
-  // dropped while the domain is gated). Fall back to sysfs when the firmware
-  // path returns no usable data.
-  if (f != nullptr && (status != AMDSMI_STATUS_SUCCESS || f->num_supported == 0)) {
-    const char* pp_dpm_file = pp_dpm_filename_for_clk_type(clk_type);
-    if (pp_dpm_file != nullptr) {
-      amdsmi_status_t sysfs_status = read_clk_freq_from_pp_dpm(processor_handle, pp_dpm_file, f);
-      if (sysfs_status == AMDSMI_STATUS_SUCCESS) {
-        return AMDSMI_STATUS_SUCCESS;
-      }
-    }
-  }
-
-  return status;
+  return rsmi_wrapper(rsmi_dev_gpu_clk_freq_get, processor_handle, 0,
+                      static_cast<rsmi_clk_type_t>(clk_type),
+                      reinterpret_cast<rsmi_frequencies_t*>(f));
 }
 
 amdsmi_status_t amdsmi_set_clk_freq(amdsmi_processor_handle processor_handle,

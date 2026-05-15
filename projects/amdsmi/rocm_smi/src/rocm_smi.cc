@@ -1428,11 +1428,15 @@ static rsmi_status_t get_frequencies(amd::smi::DevInfoTypes type, rsmi_clk_type_
     }
   }
 
-  // Some older drivers will not have the current frequency set
-  // assert(f->current < f->num_supported);
+  // Some older drivers, and SMU power-gated domains on APUs (e.g. gfx1151
+  // SYS/DF/DCEF/SOC/MEM at idle), expose the supported DPM table in
+  // pp_dpm_* without flagging any level as current ('*' marker absent).
+  // Treat that as "current unknown" rather than discarding the parsed
+  // table: keep f->num_supported / f->frequency populated and signal
+  // "no current level" via f->current = -1 so callers can still report
+  // the frequency table.
   if (f->current >= f->num_supported) {
     f->current = -1;
-    return RSMI_STATUS_UNEXPECTED_DATA;
   }
 
   return RSMI_STATUS_SUCCESS;
@@ -2262,7 +2266,7 @@ rsmi_status_t rsmi_dev_process_isolation_set(uint32_t dv_ind, uint32_t pisolate)
 
   // To set the values,need to specify the setting for all of the partitions
   // For two partition
-  // echo "1 0"  | sudo tee  /sys/class/drm/cardX/device/enforce_isolation
+  // echo "1 0"  | sudo tee Â /sys/class/drm/cardX/device/enforce_isolation
   uint32_t partition_id = 0;
   rsmi_dev_partition_id_get(dv_ind, &partition_id);
   std::string str_val;
@@ -2321,7 +2325,7 @@ rsmi_status_t rsmi_dev_gpu_run_cleaner_shader(uint32_t dv_ind) {
   GET_DEV_FROM_INDX
 
   // To reset you need to provide the partition id
-  // echo "0" | sudo tee  /sys/class/drm/cardX/device/run_cleaner_shader
+  // echo "0" | sudo tee Â /sys/class/drm/cardX/device/run_cleaner_shader
   uint32_t partition_id = 0;
   rsmi_dev_partition_id_get(dv_ind, &partition_id);
   std::string value = std::to_string(partition_id);
@@ -3293,7 +3297,7 @@ rsmi_status_t rsmi_dev_temp_metric_get(uint32_t dv_ind, uint32_t sensor_type,
   uint16_t val_ui16;
   GET_DEV_FROM_INDX
   // DEVICE_MUTEX moved before the HBM/gpuboard early-return paths so that
-  // all code paths — including the HBM temperature block — hold the lock.
+  // all code paths â€” including the HBM temperature block â€” hold the lock.
   // Previously the mutex was acquired after those blocks, leaving them unprotected.
   DEVICE_MUTEX
 
