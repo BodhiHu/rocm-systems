@@ -4165,127 +4165,142 @@ amdsmi_status_t amdsmi_get_gpu_pci_bandwidth(amdsmi_processor_handle processor_h
                       reinterpret_cast<rsmi_pcie_bandwidth_t*>(bandwidth));
 }
 
-// TODO(bliu): other frequencies in amdsmi_clk_type_t
+// Read a pp_dpm_* sysfs file and populate amdsmi_frequencies_t.
+// Format example:
+//   0: 200Mhz
+//   1: 400Mhz *
+//   2: 800Mhz
+// Returns AMDSMI_STATUS_NOT_SUPPORTED if the file does not exist or is empty
+// (e.g. SMU power-gates the domain at idle and the kernel exposes an empty
+// file).
+static amdsmi_status_t read_clk_freq_from_pp_dpm(amdsmi_processor_handle processor_handle,
+                                                 const char* pp_dpm_file,
+                                                 amdsmi_frequencies_t* f) {
+  if (f == nullptr) {
+    return AMDSMI_STATUS_INVAL;
+  }
+
+  amd::smi::AMDSmiGPUDevice* gpu_device = nullptr;
+  amdsmi_status_t status = get_gpu_device_from_handle(processor_handle, &gpu_device);
+  if (status != AMDSMI_STATUS_SUCCESS) {
+    return status;
+  }
+
+  uint32_t drm_render = gpu_device->get_drm_render_minor();
+  std::string sysfs_path =
+      "/sys/class/drm/renderD" + std::to_string(drm_render) + "/device/" + pp_dpm_file;
+
+  std::ifstream file(sysfs_path);
+  if (!file.good()) {
+    return AMDSMI_STATUS_NOT_SUPPORTED;
+  }
+
+  f->num_supported = 0;
+  f->current = 0;
+  f->has_deep_sleep = 0;
+
+  std::string line;
+  uint32_t level_index = 0;
+
+  while (std::getline(file, line) && level_index < AMDSMI_MAX_NUM_FREQUENCIES) {
+    // Parse line format: "0: 200Mhz" or "1: 400Mhz *"
+    size_t colon_pos = line.find(':');
+    if (colon_pos == std::string::npos) {
+      continue;
+    }
+
+    std::string freq_str = line.substr(colon_pos + 1);
+
+    // Check if this is the current level (marked with *)
+    bool is_current = (freq_str.find('*') != std::string::npos);
+    if (is_current) {
+      f->current = level_index;
+    }
+
+    // Remove asterisk and surrounding whitespace
+    freq_str.erase(std::remove(freq_str.begin(), freq_str.end(), '*'), freq_str.end());
+    freq_str.erase(0, freq_str.find_first_not_of(" \t"));
+    size_t end = freq_str.find_last_not_of(" \t");
+    if (end != std::string::npos) {
+      freq_str.erase(end + 1);
+    }
+
+    // Parse "200Mhz" / "200 Mhz" / "200MHz"
+    uint64_t freq_value = 0;
+    char unit = 'M';  // Default to MHz
+
+    size_t unit_pos = freq_str.find_first_not_of("0123456789 ");
+    if (unit_pos != std::string::npos) {
+      std::string value_str = freq_str.substr(0, unit_pos);
+      value_str.erase(std::remove(value_str.begin(), value_str.end(), ' '), value_str.end());
+      try {
+        freq_value = std::stoull(value_str);
+      } catch (...) {
+        continue;  // Skip invalid lines
+      }
+      std::string unit_str = freq_str.substr(unit_pos);
+      if (!unit_str.empty()) {
+        unit = static_cast<char>(std::toupper(static_cast<unsigned char>(unit_str[0])));
+      }
+    }
+
+    f->frequency[level_index] = freq_value * amd::smi::get_multiplier_from_char(unit);
+    level_index++;
+  }
+
+  f->num_supported = level_index;
+  return (f->num_supported > 0) ? AMDSMI_STATUS_SUCCESS : AMDSMI_STATUS_NOT_SUPPORTED;
+}
+
+// Map an amdsmi_clk_type_t to its corresponding pp_dpm_* sysfs filename, or
+// nullptr if no sysfs file is defined for that clock type.
+static const char* pp_dpm_filename_for_clk_type(amdsmi_clk_type_t clk_type) {
+  switch (clk_type) {
+    case AMDSMI_CLK_TYPE_SYS:   return "pp_dpm_sclk";
+    case AMDSMI_CLK_TYPE_DF:    return "pp_dpm_fclk";
+    case AMDSMI_CLK_TYPE_DCEF:  return "pp_dpm_dcefclk";
+    case AMDSMI_CLK_TYPE_SOC:   return "pp_dpm_socclk";
+    case AMDSMI_CLK_TYPE_MEM:   return "pp_dpm_mclk";
+    case AMDSMI_CLK_TYPE_VCLK0: return "pp_dpm_vclk";
+    case AMDSMI_CLK_TYPE_VCLK1: return "pp_dpm_vclk1";
+    case AMDSMI_CLK_TYPE_DCLK0: return "pp_dpm_dclk";
+    case AMDSMI_CLK_TYPE_DCLK1: return "pp_dpm_dclk1";
+    default:                    return nullptr;
+  }
+}
+
 amdsmi_status_t amdsmi_get_clk_freq(amdsmi_processor_handle processor_handle,
                                     amdsmi_clk_type_t clk_type, amdsmi_frequencies_t* f) {
   AMDSMI_CHECK_INIT();
   // nullptr api supported
 
-  // Read VCLK/DCLK from sysfs pp_dpm files instead of gpu_metrics
+  // VCLK/DCLK have no rsmi/gpu_metrics path; read directly from pp_dpm_* sysfs.
   if (clk_type == AMDSMI_CLK_TYPE_VCLK0 || clk_type == AMDSMI_CLK_TYPE_VCLK1 ||
       clk_type == AMDSMI_CLK_TYPE_DCLK0 || clk_type == AMDSMI_CLK_TYPE_DCLK1) {
-    // Get the GPU device to access renderD number
-    amd::smi::AMDSmiGPUDevice* gpu_device = nullptr;
-    amdsmi_status_t status = get_gpu_device_from_handle(processor_handle, &gpu_device);
-    if (status != AMDSMI_STATUS_SUCCESS) {
-      return status;
-    }
-
-    // Get renderD number for this GPU
-    uint32_t drm_render = gpu_device->get_drm_render_minor();
-
-    // Determine the sysfs file name based on clock type
-    const char* pp_dpm_file = nullptr;
-    if (clk_type == AMDSMI_CLK_TYPE_VCLK0) {
-      pp_dpm_file = "pp_dpm_vclk";
-    } else if (clk_type == AMDSMI_CLK_TYPE_VCLK1) {
-      pp_dpm_file = "pp_dpm_vclk1";
-    } else if (clk_type == AMDSMI_CLK_TYPE_DCLK0) {
-      pp_dpm_file = "pp_dpm_dclk";
-    } else if (clk_type == AMDSMI_CLK_TYPE_DCLK1) {
-      pp_dpm_file = "pp_dpm_dclk1";
-    }
-
-    // Construct the sysfs path: /sys/class/drm/renderD<num>/device/pp_dpm_*
-    std::string sysfs_path =
-        "/sys/class/drm/renderD" + std::to_string(drm_render) + "/device/" + pp_dpm_file;
-
-    // Check if the file exists
-    std::ifstream file(sysfs_path);
-    if (!file.good()) {
-      // File doesn't exist, fallback to gpu_metrics for backward compatibility
-      // or return not supported
-      return AMDSMI_STATUS_NOT_SUPPORTED;
-    }
-
-    // Parse the pp_dpm file
-    // Format example:
-    // 0: 200Mhz
-    // 1: 400Mhz *
-    // 2: 800Mhz
-    if (f == nullptr) {
-      return AMDSMI_STATUS_INVAL;
-    }
-
-    f->num_supported = 0;
-    f->current = 0;
-    f->has_deep_sleep = 0;
-
-    std::string line;
-    uint32_t level_index = 0;
-
-    while (std::getline(file, line) && level_index < AMDSMI_MAX_NUM_FREQUENCIES) {
-      // Parse line format: "0: 200Mhz" or "1: 400Mhz *"
-      size_t colon_pos = line.find(':');
-      if (colon_pos == std::string::npos) {
-        continue;
-      }
-
-      // Extract level number
-      std::string level_str = line.substr(0, colon_pos);
-      level_str.erase(0, level_str.find_first_not_of(" \t"));
-      level_str.erase(level_str.find_last_not_of(" \t") + 1);
-
-      // Extract frequency value
-      std::string freq_str = line.substr(colon_pos + 1);
-
-      // Check if this is the current level (marked with *)
-      bool is_current = (freq_str.find('*') != std::string::npos);
-      if (is_current) {
-        f->current = level_index;
-      }
-
-      // Remove asterisk and spaces
-      freq_str.erase(std::remove(freq_str.begin(), freq_str.end(), '*'), freq_str.end());
-      freq_str.erase(0, freq_str.find_first_not_of(" \t"));
-      freq_str.erase(freq_str.find_last_not_of(" \t") + 1);
-
-      // Parse frequency value (e.g., "200Mhz" or "200 Mhz")
-      uint64_t freq_value = 0;
-      char unit = 'M';  // Default to MHz
-
-      size_t unit_pos = freq_str.find_first_not_of("0123456789 ");
-      if (unit_pos != std::string::npos) {
-        std::string value_str = freq_str.substr(0, unit_pos);
-        value_str.erase(std::remove(value_str.begin(), value_str.end(), ' '), value_str.end());
-
-        try {
-          freq_value = std::stoull(value_str);
-        } catch (...) {
-          continue;  // Skip invalid lines
-        }
-
-        // Extract unit (M for MHz, G for GHz, etc.)
-        std::string unit_str = freq_str.substr(unit_pos);
-        if (!unit_str.empty()) {
-          unit = static_cast<char>(std::toupper(static_cast<unsigned char>(unit_str[0])));
-        }
-      }
-
-      // Convert to Hz based on unit
-      f->frequency[level_index] = freq_value * amd::smi::get_multiplier_from_char(unit);
-      level_index++;
-    }
-
-    f->num_supported = level_index;
-    file.close();
-
-    return (f->num_supported > 0) ? AMDSMI_STATUS_SUCCESS : AMDSMI_STATUS_NOT_SUPPORTED;
+    return read_clk_freq_from_pp_dpm(processor_handle,
+                                     pp_dpm_filename_for_clk_type(clk_type), f);
   }
 
-  return rsmi_wrapper(rsmi_dev_gpu_clk_freq_get, processor_handle, 0,
-                      static_cast<rsmi_clk_type_t>(clk_type),
-                      reinterpret_cast<rsmi_frequencies_t*>(f));
+  amdsmi_status_t status = rsmi_wrapper(rsmi_dev_gpu_clk_freq_get, processor_handle, 0,
+                                        static_cast<rsmi_clk_type_t>(clk_type),
+                                        reinterpret_cast<rsmi_frequencies_t*>(f));
+
+  // ROCM-21057: on gfx1151-class APUs the SMU power-gates SYS/DF/DCEF/SOC/MEM
+  // at idle and rsmi/gpu_metrics returns no data. The pp_dpm_* sysfs files
+  // always expose the supported DPM table (the '*' current-level marker is
+  // dropped while the domain is gated). Fall back to sysfs when the firmware
+  // path returns no usable data.
+  if (f != nullptr && (status != AMDSMI_STATUS_SUCCESS || f->num_supported == 0)) {
+    const char* pp_dpm_file = pp_dpm_filename_for_clk_type(clk_type);
+    if (pp_dpm_file != nullptr) {
+      amdsmi_status_t sysfs_status = read_clk_freq_from_pp_dpm(processor_handle, pp_dpm_file, f);
+      if (sysfs_status == AMDSMI_STATUS_SUCCESS) {
+        return AMDSMI_STATUS_SUCCESS;
+      }
+    }
+  }
+
+  return status;
 }
 
 amdsmi_status_t amdsmi_set_clk_freq(amdsmi_processor_handle processor_handle,
