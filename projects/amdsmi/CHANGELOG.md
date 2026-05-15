@@ -13,6 +13,11 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
   - Added shadow detection: if `amdsmi` loads from a path other than the resolved expected path (`AMDSMI_PATH`, `ROCM_HOME`, `ROCM_PATH`, or `/opt/rocm` default), tests exit early with a clear error message and remediation steps.
   - Non-root invocations now exit with code 1 immediately with a clear message instead of failing mid-test.
 
+### Resolved Issues
+
+- **Fixed virtualization detection utilities when libDRM version < 3.62.0**.  
+  - Enables `amdsmi_get_gpu_virtualization_mode()` to work when libDRM is outdated, improving virtualization detection reliability.
+
 ## amd_smi_lib for ROCm 7.13.0
 
 ### Changed
@@ -132,9 +137,6 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
 
 - **Fixed shared mutex and self-heal**.  
   - Improved self-heal logic to correctly identify and recover from corrupted or uninitialized mutex state.
-
-- **Fixed virtualization detection utilities when libDRM version < 3.62.0**.  
-  - Enables `amdsmi_get_gpu_virtualization_mode()` to work when libDRM is outdated, improving virtualization detection reliability.
 
 - **Fixed `cu_occupancy` displaying `0%` instead of `N/A` when file is unavailable**.  
   - Process `cu_occupancy` is now initialized to `INVALID` instead of zero, so `amd-smi process` displays `N/A` rather than a misleading `0%` when the sysfs file is not accessible.
