@@ -4171,8 +4171,6 @@ amdsmi_status_t amdsmi_get_gpu_pci_bandwidth(amdsmi_processor_handle processor_h
 //   1: 400Mhz *
 //   2: 800Mhz
 // Returns AMDSMI_STATUS_NOT_SUPPORTED if the file does not exist or is empty
-// (e.g. SMU power-gates the domain at idle and the kernel exposes an empty
-// file).
 static amdsmi_status_t read_clk_freq_from_pp_dpm(amdsmi_processor_handle processor_handle,
                                                  const char* pp_dpm_file,
                                                  amdsmi_frequencies_t* f) {
@@ -4285,7 +4283,7 @@ amdsmi_status_t amdsmi_get_clk_freq(amdsmi_processor_handle processor_handle,
                                         static_cast<rsmi_clk_type_t>(clk_type),
                                         reinterpret_cast<rsmi_frequencies_t*>(f));
 
-  // ROCM-21057: on gfx1151-class APUs the SMU power-gates SYS/DF/DCEF/SOC/MEM
+  // on gfx1151-class APUs the SMU power-gates SYS/DF/DCEF/SOC/MEM
   // at idle and rsmi/gpu_metrics returns no data. The pp_dpm_* sysfs files
   // always expose the supported DPM table (the '*' current-level marker is
   // dropped while the domain is gated). Fall back to sysfs when the firmware
