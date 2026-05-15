@@ -135,6 +135,9 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
     Several items were misaligned in the default output, and this change ensures a consistent left-aligned format across all fields.
   - *This change is purely cosmetic and does not affect any functionality.*  
 
+- **Fixed `amd-smi static -C` reporting `N/A` for SYS/MEM/DF/SOC/DCEF clocks at idle on gfx1151-class APUs (ROCM-21057)**.  
+  - Extended `amdsmi_get_clk_freq()` to fall back to the `pp_dpm_*` sysfs DPM tables when the firmware/`gpu_metrics` path returns no data (the SMU power-gates these domains at idle and `STATUS_UNEXPECTED_DATA` is returned). The supported frequency table is now reported at idle, and the current level is emitted whenever the kernel exposes the `*` marker. The existing VCLK/DCLK sysfs reader was extracted into a shared helper to back both paths and remove duplication.
+
 ### Changed
 
 - **Package install no longer modifies the system-wide logrotate timer or cron schedule**.

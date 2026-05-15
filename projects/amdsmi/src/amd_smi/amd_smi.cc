@@ -4172,8 +4172,7 @@ amdsmi_status_t amdsmi_get_gpu_pci_bandwidth(amdsmi_processor_handle processor_h
 //   2: 800Mhz
 // Returns AMDSMI_STATUS_NOT_SUPPORTED if the file does not exist or is empty
 static amdsmi_status_t read_clk_freq_from_pp_dpm(amdsmi_processor_handle processor_handle,
-                                                 const char* pp_dpm_file,
-                                                 amdsmi_frequencies_t* f) {
+                                                 const char* pp_dpm_file, amdsmi_frequencies_t* f) {
   if (f == nullptr) {
     return AMDSMI_STATUS_INVAL;
   }
@@ -4254,16 +4253,26 @@ static amdsmi_status_t read_clk_freq_from_pp_dpm(amdsmi_processor_handle process
 // nullptr if no sysfs file is defined for that clock type.
 static const char* pp_dpm_filename_for_clk_type(amdsmi_clk_type_t clk_type) {
   switch (clk_type) {
-    case AMDSMI_CLK_TYPE_SYS:   return "pp_dpm_sclk";
-    case AMDSMI_CLK_TYPE_DF:    return "pp_dpm_fclk";
-    case AMDSMI_CLK_TYPE_DCEF:  return "pp_dpm_dcefclk";
-    case AMDSMI_CLK_TYPE_SOC:   return "pp_dpm_socclk";
-    case AMDSMI_CLK_TYPE_MEM:   return "pp_dpm_mclk";
-    case AMDSMI_CLK_TYPE_VCLK0: return "pp_dpm_vclk";
-    case AMDSMI_CLK_TYPE_VCLK1: return "pp_dpm_vclk1";
-    case AMDSMI_CLK_TYPE_DCLK0: return "pp_dpm_dclk";
-    case AMDSMI_CLK_TYPE_DCLK1: return "pp_dpm_dclk1";
-    default:                    return nullptr;
+    case AMDSMI_CLK_TYPE_SYS:
+      return "pp_dpm_sclk";
+    case AMDSMI_CLK_TYPE_DF:
+      return "pp_dpm_fclk";
+    case AMDSMI_CLK_TYPE_DCEF:
+      return "pp_dpm_dcefclk";
+    case AMDSMI_CLK_TYPE_SOC:
+      return "pp_dpm_socclk";
+    case AMDSMI_CLK_TYPE_MEM:
+      return "pp_dpm_mclk";
+    case AMDSMI_CLK_TYPE_VCLK0:
+      return "pp_dpm_vclk";
+    case AMDSMI_CLK_TYPE_VCLK1:
+      return "pp_dpm_vclk1";
+    case AMDSMI_CLK_TYPE_DCLK0:
+      return "pp_dpm_dclk";
+    case AMDSMI_CLK_TYPE_DCLK1:
+      return "pp_dpm_dclk1";
+    default:
+      return nullptr;
   }
 }
 
@@ -4275,8 +4284,7 @@ amdsmi_status_t amdsmi_get_clk_freq(amdsmi_processor_handle processor_handle,
   // VCLK/DCLK have no rsmi/gpu_metrics path; read directly from pp_dpm_* sysfs.
   if (clk_type == AMDSMI_CLK_TYPE_VCLK0 || clk_type == AMDSMI_CLK_TYPE_VCLK1 ||
       clk_type == AMDSMI_CLK_TYPE_DCLK0 || clk_type == AMDSMI_CLK_TYPE_DCLK1) {
-    return read_clk_freq_from_pp_dpm(processor_handle,
-                                     pp_dpm_filename_for_clk_type(clk_type), f);
+    return read_clk_freq_from_pp_dpm(processor_handle, pp_dpm_filename_for_clk_type(clk_type), f);
   }
 
   amdsmi_status_t status = rsmi_wrapper(rsmi_dev_gpu_clk_freq_get, processor_handle, 0,
