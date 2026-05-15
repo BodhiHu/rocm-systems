@@ -2266,7 +2266,7 @@ rsmi_status_t rsmi_dev_process_isolation_set(uint32_t dv_ind, uint32_t pisolate)
 
   // To set the values,need to specify the setting for all of the partitions
   // For two partition
-  // echo "1 0"  | sudo tee /sys/class/drm/cardX/device/enforce_isolation
+  // echo "1 0"  | sudo tee  /sys/class/drm/cardX/device/enforce_isolation
   uint32_t partition_id = 0;
   rsmi_dev_partition_id_get(dv_ind, &partition_id);
   std::string str_val;
@@ -2325,7 +2325,7 @@ rsmi_status_t rsmi_dev_gpu_run_cleaner_shader(uint32_t dv_ind) {
   GET_DEV_FROM_INDX
 
   // To reset you need to provide the partition id
-  // echo "0" | sudo tee /sys/class/drm/cardX/device/run_cleaner_shader
+  // echo "0" | sudo tee  /sys/class/drm/cardX/device/run_cleaner_shader
   uint32_t partition_id = 0;
   rsmi_dev_partition_id_get(dv_ind, &partition_id);
   std::string value = std::to_string(partition_id);
