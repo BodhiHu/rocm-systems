@@ -196,6 +196,7 @@ TEST(queue_interposition, doorbell_trace_only_copies_packet)
     pkt->header        = (HSA_PACKET_TYPE_KERNEL_DISPATCH << HSA_PACKET_HEADER_TYPE);
     pkt->kernel_object = 0xDEADBEEF;
 
+    // doorbell value is the index of the last committed packet (here: slot 0)
     bool doorbell_rang = false;
     process_doorbell_impl(
         state, 0, [&](hsa_signal_t, hsa_signal_value_t) { doorbell_rang = true; });
@@ -230,7 +231,8 @@ TEST(queue_interposition, doorbell_multiple_packets_trace_only)
         pkt->kernel_object = static_cast<uint64_t>(0xA000 + i);
     }
 
-    process_doorbell_impl(state, 0, [](hsa_signal_t, hsa_signal_value_t) {});
+    // doorbell value is the index of the last committed packet (here: slot 2 of 3)
+    process_doorbell_impl(state, 2, [](hsa_signal_t, hsa_signal_value_t) {});
 
     EXPECT_EQ(real_wdid, 3u);
     EXPECT_EQ(state->next_submit_pos, 3u);
@@ -329,10 +331,11 @@ TEST(queue_interposition, doorbell_backpressure_waits_when_ring_full_k0)
     src_pkt->header        = (HSA_PACKET_TYPE_KERNEL_DISPATCH << HSA_PACKET_HEADER_TYPE);
     src_pkt->kernel_object = 0xABCD;
 
+    // doorbell value is the index of the last committed packet (here: virtual slot 4)
     hsa_signal_value_t doorbell_value = -1;
     auto               fut            = std::async(std::launch::async, [&]() {
         process_doorbell_impl(
-            state, 0, [&](hsa_signal_t, hsa_signal_value_t v) { doorbell_value = v; });
+            state, 4, [&](hsa_signal_t, hsa_signal_value_t v) { doorbell_value = v; });
     });
 
     std::this_thread::sleep_for(std::chrono::milliseconds{2});
