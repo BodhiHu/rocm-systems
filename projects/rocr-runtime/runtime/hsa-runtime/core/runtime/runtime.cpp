@@ -1563,9 +1563,12 @@ hsa_status_t Runtime::IPCAttach(const hsa_amd_ipc_memory_t* handle, size_t len, 
     std::lock_guard<std::shared_mutex> lock(memory_lock_);
     auto [it, inserted] = allocation_map_.try_emplace(
         importAddress, nullptr, len, len, core::MemoryRegion::AllocateNoFlags);
-    // Only set thunk_bo if the entry doesn't already have one to avoid
-    // orphaning existing handles
-    if (!it->second.thunk_bo) {
+    // If a new thunk_bo is provided, store it. If an entry already exists with
+    // a different thunk_bo, free the old one first to avoid leaking it.
+    if (new_thunk_bo) {
+      if (it->second.thunk_bo && it->second.thunk_bo != new_thunk_bo) {
+        HSAKMT_CALL(hsaKmtMemHandleFree(it->second.thunk_bo));
+      }
       it->second.thunk_bo = new_thunk_bo;
     }
   };
