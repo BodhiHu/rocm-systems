@@ -2726,7 +2726,10 @@ bool KernelBlitManager::copyBufferBatch(const std::vector<amd::BatchCopyOp>& cop
     hsa_agent_t dstAgent;
     resolveAgents(srcMem, dstMem, srcAddr, dstAddr, srcAgent, dstAgent);
 
-    if (srcAgent.handle == dstAgent.handle && !op.metadata.preferCE_) {
+    // Swap ops must use the SDMA batch path even for same-GPU D2D,
+    // because the shader copy path cannot perform a bidirectional swap.
+    if (srcAgent.handle == dstAgent.handle && !op.metadata.preferCE_
+        && op.metadata.copyOpType_ != amd::CopyMetadata::kCopyOpSwap) {
       d2dCopyOps.push_back(op);
     } else {
       p2pCopyOps.push_back(op);
@@ -2740,6 +2743,20 @@ bool KernelBlitManager::copyBufferBatch(const std::vector<amd::BatchCopyOp>& cop
   if (!p2pCopyOps.empty()) {
     // Always pass prior wait events to maintain stream ordering for the batch.
     if (!hsaCopyBatch(p2pCopyOps, &priorWaitEvents, &batchSignals)) {
+      // Swap ops cannot fall back to shader copy (it only does one-directional
+      // copy, not a bidirectional swap). Fail the entire batch if any swap op
+      // was in the SDMA batch that failed.
+      bool has_swap = false;
+      for (const auto& op : p2pCopyOps) {
+        if (op.metadata.copyOpType_ == amd::CopyMetadata::kCopyOpSwap) {
+          has_swap = true;
+          break;
+        }
+      }
+      if (has_swap) {
+        LogError("KernelBlitManager::copyBufferBatch: SDMA batch with swap ops failed");
+        return false;
+      }
       LogWarning(
           "KernelBlitManager::copyBufferBatch: Batch copy failed, falling back to copyBuffer");
       d2dCopyOps.insert(d2dCopyOps.end(), p2pCopyOps.begin(), p2pCopyOps.end());
