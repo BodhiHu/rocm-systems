@@ -2758,6 +2758,7 @@ class AMDSMICommands:
         throttle=None,
         base_board=None,
         gpu_board=None,
+        partition=None,
     ):
         """Get Metric information for target gpu
 
@@ -2876,6 +2877,8 @@ class AMDSMICommands:
             if throttle:
                 args.violation = throttle
                 args.throttle = throttle
+            if partition:
+                args.partition = partition
             current_platform_args += [
                 "fan",
                 "voltage_curve",
@@ -2884,6 +2887,7 @@ class AMDSMICommands:
                 "xgmi_err",
                 "energy",
                 "throttle",
+                "partition",
             ]
             current_platform_values += [
                 args.fan,
@@ -2893,6 +2897,7 @@ class AMDSMICommands:
                 args.xgmi_err,
                 args.energy,
                 args.throttle,
+                args.partition,
             ]
 
         if self.helpers.is_hypervisor():
@@ -4380,6 +4385,283 @@ class AMDSMICommands:
                             )
                 values_dict["throttle"] = throttle_status
 
+        if "partition" in current_platform_args:
+            if args.partition:
+                partition_output = {}
+
+                try:
+                    gpu_partition_metrics = amdsmi_interface.amdsmi_get_gpu_partition_metrics_info(
+                        args.gpu
+                    )
+                    num_partitions = gpu_partition_metrics.get("num_partition", 0)
+
+                    # Get clock limit information for different clock types
+                    clock_limits = {}
+                    for clk_type_name in ["GFX", "VCLK0", "DCLK0", "SOC"]:
+                        try:
+                            clk_type = getattr(amdsmi_interface.AmdSmiClkType, clk_type_name)
+                            clk_info = amdsmi_interface.amdsmi_get_clk_freq(args.gpu, clk_type)
+                            if clk_info and "frequency" in clk_info:
+                                freq_list = clk_info["frequency"]
+                                if isinstance(freq_list, list) and len(freq_list) >= 2:
+                                    # frequency list contains DPM levels up to num_supported
+                                    # min = first element, max = last element
+                                    freq_list = [f // 1000000 for f in freq_list]  # Convert to MHz
+                                    clock_limits[clk_type_name] = {
+                                        "min": freq_list[0],
+                                        "max": freq_list[-1],
+                                    }
+                        except Exception as e:
+                            logging.debug(f"Failed to get {clk_type_name} clock limits: {e}")
+
+                    # Build AID-level metrics (VCLK, DCLK, SCLK clocks and activities)
+                    current_vclk0s = gpu_partition_metrics.get("current_vclk0s", [])
+                    current_dclk0s = gpu_partition_metrics.get("current_dclk0s", [])
+                    current_socclks = gpu_partition_metrics.get("current_socclks", [])
+
+                    # Get MID-level metrics
+                    current_socclks_mid = gpu_partition_metrics.get("current_socclks_mid", [])
+                    temperature_mid = gpu_partition_metrics.get("temperature_mid", [])
+
+                    # Get VCN and JPEG activity from xcp_stats
+                    xcp_vcn_busy = gpu_partition_metrics.get("xcp_stats.vcn_busy", [])
+                    xcp_jpeg_busy = gpu_partition_metrics.get("xcp_stats.jpeg_busy", [])
+
+                    # Determine number of AIDs based on array lengths
+                    num_aids = 0
+                    if isinstance(current_vclk0s, list) and current_vclk0s != "N/A":
+                        num_aids = len([x for x in current_vclk0s if x != "N/A" and x > 0])
+
+                    # Build AID partitions
+                    for aid_idx in range(num_aids):
+                        aid_key = f"AID_{aid_idx}"
+                        aid_data = {}
+
+                        # VCLK (video clock) - current, min, max
+                        if isinstance(current_vclk0s, list) and aid_idx < len(current_vclk0s):
+                            vclk = current_vclk0s[aid_idx]
+                            if vclk != "N/A" and vclk > 0:
+                                aid_data["CLK_VCLK"] = f"{vclk} MHz"
+
+                        # VCLK limits from clock_limits
+                        if "VCLK0" in clock_limits:
+                            if "min" in clock_limits["VCLK0"]:
+                                aid_data["CLK_VCLK_MIN_LIMIT"] = (
+                                    f"{clock_limits['VCLK0']['min']} MHz"
+                                )
+                            aid_data["CLK_VCLK_MAX_LIMIT"] = f"{clock_limits['VCLK0']['max']} MHz"
+
+                        # DCLK (display clock) - current and limit
+                        if isinstance(current_dclk0s, list) and aid_idx < len(current_dclk0s):
+                            dclk = current_dclk0s[aid_idx]
+                            if dclk != "N/A" and dclk > 0:
+                                aid_data["CLK_DCLK_LIMIT"] = f"{dclk} MHz"
+
+                        # DCLK limits from clock_limits
+                        if "DCLK0" in clock_limits:
+                            if "min" in clock_limits["DCLK0"]:
+                                aid_data["CLK_DCLK_MIN_LIMIT"] = (
+                                    f"{clock_limits['DCLK0']['min']} MHz"
+                                )
+                            aid_data["CLK_DCLK_MAX_LIMIT"] = f"{clock_limits['DCLK0']['max']} MHz"
+
+                        # SOCCLK (SOC clock) - current and limits
+                        if isinstance(current_socclks, list) and aid_idx < len(current_socclks):
+                            sclk = current_socclks[aid_idx]
+                            if sclk != "N/A" and sclk > 0:
+                                aid_data["CLK_SOCCLK_LIMIT"] = f"{sclk} MHz"
+
+                        # SOCCLK limits from clock_limits
+                        if "SOC" in clock_limits:
+                            if "min" in clock_limits["SOC"]:
+                                aid_data["CLK_SOCCLK_MIN_LIMIT"] = (
+                                    f"{clock_limits['SOC']['min']} MHz"
+                                )
+                            aid_data["CLK_SOCCLK_MAX_LIMIT"] = f"{clock_limits['SOC']['max']} MHz"
+
+                        # VCN activity from xcp_stats (first element per XCP corresponds to AID activity)
+                        if isinstance(xcp_vcn_busy, list) and aid_idx < len(xcp_vcn_busy):
+                            vcn_data = xcp_vcn_busy[aid_idx]
+                            if isinstance(vcn_data, list) and len(vcn_data) > 0:
+                                vcn = vcn_data[0]
+                                if vcn != "N/A":
+                                    aid_data["VCN_ACTIVITY"] = f"{vcn} %"
+
+                        # JPEG activity from xcp_stats (array per XCP/AID)
+                        if isinstance(xcp_jpeg_busy, list) and aid_idx < len(xcp_jpeg_busy):
+                            jpeg_data = xcp_jpeg_busy[aid_idx]
+                            if isinstance(jpeg_data, list):
+                                # Filter out N/A values
+                                jpeg_valid = [j for j in jpeg_data if j != "N/A"]
+                                if jpeg_valid:
+                                    jpeg_str = ", ".join([f"{j} %" for j in jpeg_valid])
+                                    aid_data["JPEG_ACTIVITY"] = f"[{jpeg_str}]"
+
+                        if aid_data:
+                            partition_output[aid_key] = aid_data
+
+                    # Build MID-level metrics (Memory Interface Die)
+                    num_mids = 0
+                    if isinstance(current_socclks_mid, list) and current_socclks_mid != "N/A":
+                        num_mids = len([x for x in current_socclks_mid if x != "N/A"])
+
+                    for mid_idx in range(num_mids):
+                        mid_key = f"MID_{mid_idx}"
+                        mid_data = {}
+
+                        # SOC clock for MID
+                        if isinstance(current_socclks_mid, list) and mid_idx < len(
+                            current_socclks_mid
+                        ):
+                            socclk_mid = current_socclks_mid[mid_idx]
+                            if socclk_mid != "N/A" and socclk_mid > 0:
+                                mid_data["CLK_SOCCLK"] = f"{socclk_mid} MHz"
+
+                        # Temperature for MID
+                        if isinstance(temperature_mid, list) and mid_idx < len(temperature_mid):
+                            temp_mid = temperature_mid[mid_idx]
+                            if temp_mid != "N/A" and temp_mid > 0:
+                                mid_data["TEMPERATURE"] = f"{temp_mid} C"
+
+                        if mid_data:
+                            partition_output[mid_key] = mid_data
+
+                    # Build XCP-level metrics (GFX clocks, usage, lock status)
+                    current_gfxclks = gpu_partition_metrics.get("current_gfxclks", [])
+                    gfxclk_lock_status = gpu_partition_metrics.get("gfxclk_lock_status", 0)
+
+                    # Get XCP stats (usage, violations, and XCD temperatures)
+                    xcp_gfx_busy = gpu_partition_metrics.get("xcp_stats.gfx_busy_inst", [])
+                    xcp_below_limit_ppt = gpu_partition_metrics.get(
+                        "xcp_stats.gfx_below_host_limit_ppt_acc", []
+                    )
+                    xcp_below_limit_thm = gpu_partition_metrics.get(
+                        "xcp_stats.gfx_below_host_limit_thm_acc", []
+                    )
+                    xcp_low_util = gpu_partition_metrics.get(
+                        "xcp_stats.gfx_low_utilization_acc", []
+                    )
+                    xcp_below_limit_total = gpu_partition_metrics.get(
+                        "xcp_stats.gfx_below_host_limit_total_acc", []
+                    )
+                    xcp_temp_xcd = gpu_partition_metrics.get("xcp_stats.temperature_xcd", [])
+
+                    # Determine number of XCPs
+                    num_xcps = 0
+                    if isinstance(xcp_gfx_busy, list) and xcp_gfx_busy != "N/A":
+                        num_xcps = len(xcp_gfx_busy)
+                    elif num_partitions != "N/A" and num_partitions > 0:
+                        num_xcps = num_partitions
+
+                    for xcp_idx in range(num_xcps):
+                        xcp_key = f"XCP_{xcp_idx}"
+                        xcp_data = {}
+
+                        # GFX clocks (current values per engine in XCP)
+                        if isinstance(current_gfxclks, list) and current_gfxclks != "N/A":
+                            if xcp_idx < len(current_gfxclks):
+                                gfx_clk = current_gfxclks[xcp_idx]
+                                if gfx_clk != "N/A":
+                                    if isinstance(gfx_clk, list):
+                                        # Filter out N/A values and format
+                                        valid_clks = [c for c in gfx_clk if c != "N/A"]
+                                        if valid_clks:
+                                            clk_str = ", ".join([f"{c} MHz" for c in valid_clks])
+                                            xcp_data["GFX_CLK"] = f"[{clk_str}]"
+                                    else:
+                                        xcp_data["GFX_CLK"] = f"{gfx_clk} MHz"
+
+                        # GFX clock min/max limits from clock_limits
+                        if "GFX" in clock_limits:
+                            xcp_data["GFX_MIN_CLK"] = f"[{clock_limits['GFX']['min']} MHz]"
+                            xcp_data["GFX_MAX_CLK"] = f"[{clock_limits['GFX']['max']} MHz]"
+
+                        # GFX clock locked status
+                        if gfxclk_lock_status != "N/A" and gfxclk_lock_status != 0:
+                            # Decode lock status bit field (one bit per engine)
+                            lock_status = []
+                            # Assuming 4 engines per XCP, 8 XCPs = 32 bits
+                            for bit in range(4):  # 4 engines per XCP
+                                bit_pos = xcp_idx * 4 + bit
+                                is_locked = (gfxclk_lock_status >> bit_pos) & 1
+                                lock_status.append("ENABLED" if is_locked else "DISABLED")
+                            xcp_data["GFX_CLK_LOCKED"] = "[" + ", ".join(lock_status) + "]"
+                        else:
+                            # All disabled if no lock status
+                            xcp_data["GFX_CLK_LOCKED"] = "[DISABLED, DISABLED, DISABLED, DISABLED]"
+
+                        # GFX usage (from xcp_stats.gfx_busy_inst)
+                        if isinstance(xcp_gfx_busy, list) and xcp_idx < len(xcp_gfx_busy):
+                            gfx_usage = xcp_gfx_busy[xcp_idx]
+                            if gfx_usage != "N/A" and isinstance(gfx_usage, list):
+                                # Filter out N/A values
+                                valid_usage = [u for u in gfx_usage if u != "N/A"]
+                                if valid_usage:
+                                    usage_str = ", ".join([f"{u} %" for u in valid_usage])
+                                    xcp_data["GFX_USAGE"] = f"[{usage_str}]"
+
+                        # Throttle/violation accumulated counters (time spent throttled)
+                        if isinstance(xcp_below_limit_ppt, list) and xcp_idx < len(
+                            xcp_below_limit_ppt
+                        ):
+                            ppt_acc = xcp_below_limit_ppt[xcp_idx]
+                            if ppt_acc != "N/A" and isinstance(ppt_acc, list):
+                                valid_ppt = [p for p in ppt_acc if p != "N/A"]
+                                if valid_ppt and any(p > 0 for p in valid_ppt):
+                                    ppt_str = ", ".join(map(str, valid_ppt))
+                                    xcp_data["GFX_THROTTLE_PPT_ACC"] = f"[{ppt_str}]"
+
+                        if isinstance(xcp_below_limit_thm, list) and xcp_idx < len(
+                            xcp_below_limit_thm
+                        ):
+                            thm_acc = xcp_below_limit_thm[xcp_idx]
+                            if thm_acc != "N/A" and isinstance(thm_acc, list):
+                                valid_thm = [t for t in thm_acc if t != "N/A"]
+                                if valid_thm and any(t > 0 for t in valid_thm):
+                                    thm_str = ", ".join(map(str, valid_thm))
+                                    xcp_data["GFX_THROTTLE_THERMAL_ACC"] = f"[{thm_str}]"
+
+                        if isinstance(xcp_low_util, list) and xcp_idx < len(xcp_low_util):
+                            low_util = xcp_low_util[xcp_idx]
+                            if low_util != "N/A" and isinstance(low_util, list):
+                                valid_util = [u for u in low_util if u != "N/A"]
+                                if valid_util and any(u > 0 for u in valid_util):
+                                    util_str = ", ".join(map(str, valid_util))
+                                    xcp_data["GFX_LOW_UTILIZATION_ACC"] = f"[{util_str}]"
+
+                        if isinstance(xcp_below_limit_total, list) and xcp_idx < len(
+                            xcp_below_limit_total
+                        ):
+                            total_acc = xcp_below_limit_total[xcp_idx]
+                            if total_acc != "N/A" and isinstance(total_acc, list):
+                                valid_total = [t for t in total_acc if t != "N/A"]
+                                if valid_total and any(t > 0 for t in valid_total):
+                                    total_str = ", ".join(map(str, valid_total))
+                                    xcp_data["GFX_THROTTLE_TOTAL_ACC"] = f"[{total_str}]"
+
+                        # XCD temperatures (eXtended Compute Die within XCP)
+                        if isinstance(xcp_temp_xcd, list) and xcp_idx < len(xcp_temp_xcd):
+                            xcd_temps = xcp_temp_xcd[xcp_idx]
+                            if xcd_temps != "N/A" and isinstance(xcd_temps, list):
+                                # Filter out N/A values
+                                valid_temps = [t for t in xcd_temps if t != "N/A" and t > 0]
+                                if valid_temps:
+                                    temp_str = ", ".join([f"{t} C" for t in valid_temps])
+                                    xcp_data["TEMPERATURE_XCD"] = f"[{temp_str}]"
+
+                        if xcp_data:
+                            partition_output[xcp_key] = xcp_data
+
+                except amdsmi_exception.AmdSmiLibraryException as e:
+                    logging.debug(
+                        "Failed to get partition metrics for gpu %s | %s",
+                        gpu_id,
+                        e.get_error_info(),
+                    )
+                    partition_output = {"error": "Failed to get partition metrics"}
+
+                values_dict["partition"] = partition_output
+
         # Store timestamp first if watching_output is enabled
         if watching_output:
             self.logger.store_output(args.gpu, "timestamp", int(time.time()))
@@ -5737,6 +6019,7 @@ class AMDSMICommands:
         throttle=None,
         base_board=None,
         gpu_board=None,
+        partition=None,
     ):
         """Get Metric information for target gpu
 
@@ -5897,6 +6180,7 @@ class AMDSMICommands:
             "throttle",
             "base_board",
             "gpu_board",
+            "partition",
         ]
         for attr in gpu_attributes:
             if hasattr(args, attr):
@@ -6067,6 +6351,7 @@ class AMDSMICommands:
                     throttle,
                     base_board,
                     gpu_board,
+                    partition,
                 )
         elif self.helpers.is_amd_hsmp_initialized():  # Only CPU is initialized
             if args.cpu == None and args.core == None:
@@ -6159,6 +6444,7 @@ class AMDSMICommands:
                 throttle,
                 base_board,
                 gpu_board,
+                partition,
             )
         if self.logger.is_json_format():
             self.logger.combine_arrays_to_json()

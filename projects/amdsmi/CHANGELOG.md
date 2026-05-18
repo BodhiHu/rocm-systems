@@ -4,6 +4,17 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
 
 ***All information listed below is for reference and subject to change.***
 
+## amd_smi_lib for ROCm 7.14.0
+
+### Added
+
+- **Added `amd-smi metric --partition` flag to display per-partition GPU metrics**.  
+  - New `-X`/`--partition` flag displays hierarchical partition metrics for multi-partition GPUs:
+    - **AID**: VCLK/DCLK/SCLK clocks with min/max limits, VCN/JPEG activity percentages
+    - **MID**: SOC clock frequency and temperature
+    - **XCP**: GFX clocks with min/max limits, lock status, usage percentages, throttle/violation accumulation counters (PPT/thermal/low-utilization), and XCD temperatures
+  - Filters N/A values from arrays for clean output; throttle/violation counters only displayed when non-zero.
+
 ## amd_smi_lib for ROCm 7.13.0
 
 ### Changed
