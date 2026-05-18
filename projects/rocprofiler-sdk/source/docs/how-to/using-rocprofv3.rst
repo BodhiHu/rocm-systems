@@ -68,8 +68,8 @@ The following table lists the commonly used ``rocprofv3`` command-line options c
    * - Aggregate tracing
      - | ``-r`` [BOOL] \| ``--runtime-trace`` [BOOL] |br| |br| |br| |br| |br| |br| |br|
        | ``-s`` [BOOL] \| ``--sys-trace`` [BOOL]
-     - | Collects tracing data for HIP runtime API, marker (ROCTx) API, RCCL API, memory operations (copies, scratch, and allocation), and kernel dispatches. Similar to ``--sys-trace`` but without HIP compiler API and the underlying HSA API tracing. |br| |br|
-       | Collects tracing data for HIP API, HSA API, marker (ROCTx) API, RCCL API, memory operations (copies, scratch, and allocations), and kernel dispatches.
+     - | Collects tracing data for HIP runtime API, marker (ROCTx) API, RCCL API, rocSHMEM API, memory operations (copies, scratch, and allocation), and kernel dispatches. Similar to ``--sys-trace`` but without HIP compiler API and the underlying HSA API tracing. |br| |br|
+       | Collects tracing data for HIP API, HSA API, marker (ROCTx) API, RCCL API, rocSHMEM API, memory operations (copies, scratch, and allocations), and kernel dispatches.
 
    * - PC sampling
      - | ``--pc-sampling-beta-enabled`` [BOOL] |br| |br| |br| |br| |br|
