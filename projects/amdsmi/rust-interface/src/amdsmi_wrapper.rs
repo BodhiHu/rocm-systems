@@ -123,6 +123,10 @@ pub const AMDSMI_MAX_NUM_JPEG: u32 = 32;
 pub const AMDSMI_MAX_NUM_JPEG_ENG_V1: u32 = 40;
 pub const AMDSMI_MAX_NUM_XCC: u32 = 8;
 pub const AMDSMI_MAX_NUM_XCP: u32 = 8;
+pub const AMDSMI_APU_MAX_CORES: u32 = 16;
+pub const AMDSMI_APU_V24_CORES: u32 = 8;
+pub const AMDSMI_APU_MAX_L3: u32 = 2;
+pub const AMDSMI_APU_MAX_IPU: u32 = 8;
 pub const AMDSMI_MAX_VF_COUNT: u32 = 32;
 pub const AMDSMI_MAX_DRIVER_NUM: u32 = 2;
 pub const AMDSMI_DFC_FW_NUMBER_OF_ENTRIES: u32 = 9;
@@ -132,6 +136,11 @@ pub const AMDSMI_MAX_UUID_ELEMENTS: u32 = 16;
 pub const AMDSMI_MAX_TA_WHITE_LIST_ELEMENTS: u32 = 8;
 pub const AMDSMI_MAX_ERR_RECORDS: u32 = 10;
 pub const AMDSMI_MAX_PROFILE_COUNT: u32 = 16;
+pub const AMDSMI_MAX_NUM_HBM_STACKS: u32 = 12;
+pub const AMDSMI_MAX_NUM_AID: u32 = 2;
+pub const AMDSMI_MAX_NUM_MID: u32 = 2;
+pub const AMDSMI_MAX_NUM_CLKS_PER_AID: u32 = 2;
+pub const AMDSMI_MAX_NUM_CLKS_PER_MID: u32 = 2;
 pub const AMDSMI_TIME_FORMAT: &[u8; 20] = b"%02d:%02d:%02d.%03d\0";
 pub const AMDSMI_DATE_FORMAT: &[u8; 35] = b"%04d-%02d-%02d:%02d:%02d:%02d.%03d\0";
 pub const AMDSMI_LIB_VERSION_MAJOR: u32 = 26;
@@ -178,7 +187,7 @@ pub type AmdsmiSocketHandle = *mut ::std::os::raw::c_void;
 pub type AmdsmiNodeHandle = *mut ::std::os::raw::c_void;
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum ProcessorTypeT {
+pub enum AmdsmiProcessorTypeT {
     AmdsmiProcessorTypeUnknown = 0,
     AmdsmiProcessorTypeAmdGpu = 1,
     AmdsmiProcessorTypeAmdCpu = 2,
@@ -1191,11 +1200,11 @@ pub struct AmdsmiAsicInfoT {
     pub target_graphics_version: u64,
     pub subsystem_id: u32,
     pub flags: u64,
-    pub reserved: [u32; 19usize],
+    pub reserved: [u32; 18usize],
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of AmdsmiAsicInfoT"][::std::mem::size_of::<AmdsmiAsicInfoT>() - 904usize];
+    ["Size of AmdsmiAsicInfoT"][::std::mem::size_of::<AmdsmiAsicInfoT>() - 896usize];
     ["Alignment of AmdsmiAsicInfoT"][::std::mem::align_of::<AmdsmiAsicInfoT>() - 8usize];
     ["Offset of field: AmdsmiAsicInfoT::market_name"]
         [::std::mem::offset_of!(AmdsmiAsicInfoT, market_name) - 0usize];
@@ -2460,28 +2469,34 @@ const _: () = {
 pub struct AmdsmiOdVoltFreqDataT {
     pub curr_sclk_range: AmdsmiRangeT,
     pub curr_mclk_range: AmdsmiRangeT,
+    pub curr_fclk_range: AmdsmiRangeT,
     pub sclk_freq_limits: AmdsmiRangeT,
     pub mclk_freq_limits: AmdsmiRangeT,
+    pub fclk_freq_limits: AmdsmiRangeT,
     pub curve: AmdsmiOdVoltCurveT,
     pub num_regions: u32,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of AmdsmiOdVoltFreqDataT"][::std::mem::size_of::<AmdsmiOdVoltFreqDataT>() - 184usize];
+    ["Size of AmdsmiOdVoltFreqDataT"][::std::mem::size_of::<AmdsmiOdVoltFreqDataT>() - 248usize];
     ["Alignment of AmdsmiOdVoltFreqDataT"]
         [::std::mem::align_of::<AmdsmiOdVoltFreqDataT>() - 8usize];
     ["Offset of field: AmdsmiOdVoltFreqDataT::curr_sclk_range"]
         [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, curr_sclk_range) - 0usize];
     ["Offset of field: AmdsmiOdVoltFreqDataT::curr_mclk_range"]
         [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, curr_mclk_range) - 32usize];
+    ["Offset of field: AmdsmiOdVoltFreqDataT::curr_fclk_range"]
+        [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, curr_fclk_range) - 64usize];
     ["Offset of field: AmdsmiOdVoltFreqDataT::sclk_freq_limits"]
-        [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, sclk_freq_limits) - 64usize];
+        [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, sclk_freq_limits) - 96usize];
     ["Offset of field: AmdsmiOdVoltFreqDataT::mclk_freq_limits"]
-        [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, mclk_freq_limits) - 96usize];
+        [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, mclk_freq_limits) - 128usize];
+    ["Offset of field: AmdsmiOdVoltFreqDataT::fclk_freq_limits"]
+        [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, fclk_freq_limits) - 160usize];
     ["Offset of field: AmdsmiOdVoltFreqDataT::curve"]
-        [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, curve) - 128usize];
+        [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, curve) - 192usize];
     ["Offset of field: AmdsmiOdVoltFreqDataT::num_regions"]
-        [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, num_regions) - 176usize];
+        [::std::mem::offset_of!(AmdsmiOdVoltFreqDataT, num_regions) - 240usize];
 };
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -2514,10 +2529,11 @@ pub struct AmdsmiGpuXcpMetricsT {
     pub gfx_below_host_limit_thm_acc: [u64; 8usize],
     pub gfx_low_utilization_acc: [u64; 8usize],
     pub gfx_below_host_limit_total_acc: [u64; 8usize],
+    pub temperature_xcd: [u16; 8usize],
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of AmdsmiGpuXcpMetricsT"][::std::mem::size_of::<AmdsmiGpuXcpMetricsT>() - 504usize];
+    ["Size of AmdsmiGpuXcpMetricsT"][::std::mem::size_of::<AmdsmiGpuXcpMetricsT>() - 520usize];
     ["Alignment of AmdsmiGpuXcpMetricsT"][::std::mem::align_of::<AmdsmiGpuXcpMetricsT>() - 8usize];
     ["Offset of field: AmdsmiGpuXcpMetricsT::gfx_busy_inst"]
         [::std::mem::offset_of!(AmdsmiGpuXcpMetricsT, gfx_busy_inst) - 0usize];
@@ -2537,6 +2553,215 @@ const _: () = {
         [::std::mem::offset_of!(AmdsmiGpuXcpMetricsT, gfx_low_utilization_acc) - 376usize];
     ["Offset of field: AmdsmiGpuXcpMetricsT::gfx_below_host_limit_total_acc"]
         [::std::mem::offset_of!(AmdsmiGpuXcpMetricsT, gfx_below_host_limit_total_acc) - 440usize];
+    ["Offset of field: AmdsmiGpuXcpMetricsT::temperature_xcd"]
+        [::std::mem::offset_of!(AmdsmiGpuXcpMetricsT, temperature_xcd) - 504usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct AmdsmiApuMetricsT {
+    pub temperature_gfx: u16,
+    pub temperature_soc: u16,
+    pub temperature_core: [u16; 16usize],
+    pub temperature_l3: [u16; 2usize],
+    pub temperature_skin: u16,
+    pub average_gfx_activity: u16,
+    pub average_mm_activity: u16,
+    pub average_vcn_activity: u16,
+    pub average_ipu_activity: [u16; 8usize],
+    pub average_core_c0_activity: [u16; 16usize],
+    pub average_dram_reads: u16,
+    pub average_dram_writes: u16,
+    pub average_ipu_reads: u16,
+    pub average_ipu_writes: u16,
+    pub average_socket_power: u32,
+    pub average_cpu_power: u16,
+    pub average_soc_power: u16,
+    pub average_gfx_power: u32,
+    pub average_core_power: [u16; 16usize],
+    pub average_ipu_power: u16,
+    pub average_apu_power: u32,
+    pub average_dgpu_power: u32,
+    pub average_all_core_power: u32,
+    pub average_sys_power: u16,
+    pub stapm_power_limit: u16,
+    pub current_stapm_power_limit: u16,
+    pub average_gfxclk_frequency: u16,
+    pub average_socclk_frequency: u16,
+    pub average_uclk_frequency: u16,
+    pub average_fclk_frequency: u16,
+    pub average_vclk_frequency: u16,
+    pub average_dclk_frequency: u16,
+    pub average_vpeclk_frequency: u16,
+    pub average_ipuclk_frequency: u16,
+    pub average_mpipu_frequency: u16,
+    pub current_gfxclk: u16,
+    pub current_socclk: u16,
+    pub current_uclk: u16,
+    pub current_fclk: u16,
+    pub current_vclk: u16,
+    pub current_dclk: u16,
+    pub current_coreclk: [u16; 16usize],
+    pub current_l3clk: [u16; 2usize],
+    pub current_core_maxfreq: u16,
+    pub current_gfx_maxfreq: u16,
+    pub throttle_status: u32,
+    pub indep_throttle_status: u64,
+    pub throttle_residency_prochot: u32,
+    pub throttle_residency_spl: u32,
+    pub throttle_residency_fppt: u32,
+    pub throttle_residency_sppt: u32,
+    pub throttle_residency_thm_core: u32,
+    pub throttle_residency_thm_gfx: u32,
+    pub throttle_residency_thm_soc: u32,
+    pub fan_pwm: u16,
+    pub average_temperature_gfx: u16,
+    pub average_temperature_soc: u16,
+    pub average_temperature_core: [u16; 16usize],
+    pub average_temperature_l3: [u16; 2usize],
+    pub average_cpu_voltage: u16,
+    pub average_soc_voltage: u16,
+    pub average_gfx_voltage: u16,
+    pub average_cpu_current: u16,
+    pub average_soc_current: u16,
+    pub average_gfx_current: u16,
+    pub time_filter_alphavalue: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of AmdsmiApuMetricsT"][::std::mem::size_of::<AmdsmiApuMetricsT>() - 344usize];
+    ["Alignment of AmdsmiApuMetricsT"][::std::mem::align_of::<AmdsmiApuMetricsT>() - 8usize];
+    ["Offset of field: AmdsmiApuMetricsT::temperature_gfx"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, temperature_gfx) - 0usize];
+    ["Offset of field: AmdsmiApuMetricsT::temperature_soc"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, temperature_soc) - 2usize];
+    ["Offset of field: AmdsmiApuMetricsT::temperature_core"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, temperature_core) - 4usize];
+    ["Offset of field: AmdsmiApuMetricsT::temperature_l3"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, temperature_l3) - 36usize];
+    ["Offset of field: AmdsmiApuMetricsT::temperature_skin"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, temperature_skin) - 40usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_gfx_activity"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_gfx_activity) - 42usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_mm_activity"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_mm_activity) - 44usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_vcn_activity"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_vcn_activity) - 46usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_ipu_activity"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_ipu_activity) - 48usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_core_c0_activity"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_core_c0_activity) - 64usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_dram_reads"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_dram_reads) - 96usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_dram_writes"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_dram_writes) - 98usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_ipu_reads"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_ipu_reads) - 100usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_ipu_writes"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_ipu_writes) - 102usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_socket_power"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_socket_power) - 104usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_cpu_power"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_cpu_power) - 108usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_soc_power"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_soc_power) - 110usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_gfx_power"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_gfx_power) - 112usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_core_power"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_core_power) - 116usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_ipu_power"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_ipu_power) - 148usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_apu_power"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_apu_power) - 152usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_dgpu_power"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_dgpu_power) - 156usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_all_core_power"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_all_core_power) - 160usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_sys_power"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_sys_power) - 164usize];
+    ["Offset of field: AmdsmiApuMetricsT::stapm_power_limit"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, stapm_power_limit) - 166usize];
+    ["Offset of field: AmdsmiApuMetricsT::current_stapm_power_limit"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, current_stapm_power_limit) - 168usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_gfxclk_frequency"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_gfxclk_frequency) - 170usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_socclk_frequency"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_socclk_frequency) - 172usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_uclk_frequency"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_uclk_frequency) - 174usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_fclk_frequency"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_fclk_frequency) - 176usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_vclk_frequency"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_vclk_frequency) - 178usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_dclk_frequency"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_dclk_frequency) - 180usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_vpeclk_frequency"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_vpeclk_frequency) - 182usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_ipuclk_frequency"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_ipuclk_frequency) - 184usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_mpipu_frequency"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_mpipu_frequency) - 186usize];
+    ["Offset of field: AmdsmiApuMetricsT::current_gfxclk"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, current_gfxclk) - 188usize];
+    ["Offset of field: AmdsmiApuMetricsT::current_socclk"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, current_socclk) - 190usize];
+    ["Offset of field: AmdsmiApuMetricsT::current_uclk"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, current_uclk) - 192usize];
+    ["Offset of field: AmdsmiApuMetricsT::current_fclk"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, current_fclk) - 194usize];
+    ["Offset of field: AmdsmiApuMetricsT::current_vclk"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, current_vclk) - 196usize];
+    ["Offset of field: AmdsmiApuMetricsT::current_dclk"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, current_dclk) - 198usize];
+    ["Offset of field: AmdsmiApuMetricsT::current_coreclk"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, current_coreclk) - 200usize];
+    ["Offset of field: AmdsmiApuMetricsT::current_l3clk"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, current_l3clk) - 232usize];
+    ["Offset of field: AmdsmiApuMetricsT::current_core_maxfreq"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, current_core_maxfreq) - 236usize];
+    ["Offset of field: AmdsmiApuMetricsT::current_gfx_maxfreq"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, current_gfx_maxfreq) - 238usize];
+    ["Offset of field: AmdsmiApuMetricsT::throttle_status"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, throttle_status) - 240usize];
+    ["Offset of field: AmdsmiApuMetricsT::indep_throttle_status"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, indep_throttle_status) - 248usize];
+    ["Offset of field: AmdsmiApuMetricsT::throttle_residency_prochot"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, throttle_residency_prochot) - 256usize];
+    ["Offset of field: AmdsmiApuMetricsT::throttle_residency_spl"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, throttle_residency_spl) - 260usize];
+    ["Offset of field: AmdsmiApuMetricsT::throttle_residency_fppt"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, throttle_residency_fppt) - 264usize];
+    ["Offset of field: AmdsmiApuMetricsT::throttle_residency_sppt"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, throttle_residency_sppt) - 268usize];
+    ["Offset of field: AmdsmiApuMetricsT::throttle_residency_thm_core"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, throttle_residency_thm_core) - 272usize];
+    ["Offset of field: AmdsmiApuMetricsT::throttle_residency_thm_gfx"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, throttle_residency_thm_gfx) - 276usize];
+    ["Offset of field: AmdsmiApuMetricsT::throttle_residency_thm_soc"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, throttle_residency_thm_soc) - 280usize];
+    ["Offset of field: AmdsmiApuMetricsT::fan_pwm"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, fan_pwm) - 284usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_temperature_gfx"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_temperature_gfx) - 286usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_temperature_soc"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_temperature_soc) - 288usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_temperature_core"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_temperature_core) - 290usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_temperature_l3"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_temperature_l3) - 322usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_cpu_voltage"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_cpu_voltage) - 326usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_soc_voltage"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_soc_voltage) - 328usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_gfx_voltage"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_gfx_voltage) - 330usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_cpu_current"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_cpu_current) - 332usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_soc_current"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_soc_current) - 334usize];
+    ["Offset of field: AmdsmiApuMetricsT::average_gfx_current"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, average_gfx_current) - 336usize];
+    ["Offset of field: AmdsmiApuMetricsT::time_filter_alphavalue"]
+        [::std::mem::offset_of!(AmdsmiApuMetricsT, time_filter_alphavalue) - 340usize];
 };
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -2610,10 +2835,16 @@ pub struct AmdsmiGpuMetricsT {
     pub pcie_lc_perf_other_end_recovery: u32,
     pub vram_max_bandwidth: u64,
     pub xgmi_link_status: [u16; 8usize],
+    pub temperature_hbm_stacks: [u16; 12usize],
+    pub temperature_mid: [u16; 2usize],
+    pub temperature_aid: [u16; 2usize],
+    pub current_uclk_aid: [u16; 2usize],
+    pub current_socclks_mid: [u16; 2usize],
+    pub apu_metrics: *mut AmdsmiApuMetricsT,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of AmdsmiGpuMetricsT"][::std::mem::size_of::<AmdsmiGpuMetricsT>() - 4544usize];
+    ["Size of AmdsmiGpuMetricsT"][::std::mem::size_of::<AmdsmiGpuMetricsT>() - 4720usize];
     ["Alignment of AmdsmiGpuMetricsT"][::std::mem::align_of::<AmdsmiGpuMetricsT>() - 8usize];
     ["Offset of field: AmdsmiGpuMetricsT::common_header"]
         [::std::mem::offset_of!(AmdsmiGpuMetricsT, common_header) - 0usize];
@@ -2748,11 +2979,23 @@ const _: () = {
     ["Offset of field: AmdsmiGpuMetricsT::xcp_stats"]
         [::std::mem::offset_of!(AmdsmiGpuMetricsT, xcp_stats) - 480usize];
     ["Offset of field: AmdsmiGpuMetricsT::pcie_lc_perf_other_end_recovery"]
-        [::std::mem::offset_of!(AmdsmiGpuMetricsT, pcie_lc_perf_other_end_recovery) - 4512usize];
+        [::std::mem::offset_of!(AmdsmiGpuMetricsT, pcie_lc_perf_other_end_recovery) - 4640usize];
     ["Offset of field: AmdsmiGpuMetricsT::vram_max_bandwidth"]
-        [::std::mem::offset_of!(AmdsmiGpuMetricsT, vram_max_bandwidth) - 4520usize];
+        [::std::mem::offset_of!(AmdsmiGpuMetricsT, vram_max_bandwidth) - 4648usize];
     ["Offset of field: AmdsmiGpuMetricsT::xgmi_link_status"]
-        [::std::mem::offset_of!(AmdsmiGpuMetricsT, xgmi_link_status) - 4528usize];
+        [::std::mem::offset_of!(AmdsmiGpuMetricsT, xgmi_link_status) - 4656usize];
+    ["Offset of field: AmdsmiGpuMetricsT::temperature_hbm_stacks"]
+        [::std::mem::offset_of!(AmdsmiGpuMetricsT, temperature_hbm_stacks) - 4672usize];
+    ["Offset of field: AmdsmiGpuMetricsT::temperature_mid"]
+        [::std::mem::offset_of!(AmdsmiGpuMetricsT, temperature_mid) - 4696usize];
+    ["Offset of field: AmdsmiGpuMetricsT::temperature_aid"]
+        [::std::mem::offset_of!(AmdsmiGpuMetricsT, temperature_aid) - 4700usize];
+    ["Offset of field: AmdsmiGpuMetricsT::current_uclk_aid"]
+        [::std::mem::offset_of!(AmdsmiGpuMetricsT, current_uclk_aid) - 4704usize];
+    ["Offset of field: AmdsmiGpuMetricsT::current_socclks_mid"]
+        [::std::mem::offset_of!(AmdsmiGpuMetricsT, current_socclks_mid) - 4708usize];
+    ["Offset of field: AmdsmiGpuMetricsT::apu_metrics"]
+        [::std::mem::offset_of!(AmdsmiGpuMetricsT, apu_metrics) - 4712usize];
 };
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -3367,7 +3610,31 @@ extern "C" {
 extern "C" {
     pub fn amdsmi_get_processor_type(
         processor_handle: AmdsmiProcessorHandle,
-        processor_type: *mut ProcessorTypeT,
+        processor_type: *mut AmdsmiProcessorTypeT,
+    ) -> AmdsmiStatusT;
+}
+extern "C" {
+    pub fn amdsmi_get_processor_info(
+        processor_handle: AmdsmiProcessorHandle,
+        len: usize,
+        name: *mut ::std::os::raw::c_char,
+    ) -> AmdsmiStatusT;
+}
+extern "C" {
+    pub fn amdsmi_get_processor_count_from_handles(
+        processor_handles: *mut AmdsmiProcessorHandle,
+        processor_count: *mut u32,
+        nr_cpusockets: *mut u32,
+        nr_cpucores: *mut u32,
+        nr_gpus: *mut u32,
+    ) -> AmdsmiStatusT;
+}
+extern "C" {
+    pub fn amdsmi_get_processor_handles_by_type(
+        socket_handle: AmdsmiSocketHandle,
+        processor_type: AmdsmiProcessorTypeT,
+        processor_handles: *mut AmdsmiProcessorHandle,
+        processor_count: *mut u32,
     ) -> AmdsmiStatusT;
 }
 extern "C" {
