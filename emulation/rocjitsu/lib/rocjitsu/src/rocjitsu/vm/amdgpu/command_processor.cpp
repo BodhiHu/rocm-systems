@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "rocjitsu/vm/amdgpu/command_processor.h"
-#include "rocjitsu/vm/amdgpu/kernel_symbol.h"
+#include "rocjitsu/code/kernel_symbol.h"
 
 #include "rocjitsu/base/rj_compiler.h"
 RJ_DIAGNOSTIC_PUSH

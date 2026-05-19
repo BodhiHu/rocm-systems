@@ -7,7 +7,6 @@
 #include <string>
 
 namespace rocjitsu {
-namespace amdgpu {
 
 /// Resolve the kernel symbol name from an in-memory AMDHSA code object.
 ///
@@ -24,5 +23,4 @@ namespace amdgpu {
 std::string find_kernel_symbol(const uint8_t *kernel_object_ptr, const uint8_t *elf_base,
                                uint64_t elf_accessible);
 
-} // namespace amdgpu
 } // namespace rocjitsu

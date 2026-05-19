@@ -1,13 +1,13 @@
 // Copyright (c) 2026 Advanced Micro Devices, Inc.
 // SPDX-License-Identifier: MIT
 
-#include "rocjitsu/vm/amdgpu/kernel_symbol.h"
+#include "rocjitsu/code/kernel_symbol.h"
 
-#include <elf.h>
+#include "rocjitsu/code/amdgpu_elf.h"
+
 #include <string_view>
 
 namespace rocjitsu {
-namespace amdgpu {
 namespace {
 
 bool in_range(const uint8_t *ptr, uint64_t size, const uint8_t *base, uint64_t range_size) {
@@ -97,14 +97,12 @@ std::string find_kernel_symbol(const uint8_t *kernel_object_ptr, const uint8_t *
   }
 
   // Fallback: scan msgpack in PT_NOTE for .kd symbol strings.
-  // Returns the first match (no per-kernel matching).
   for (uint16_t i = 0; i < ehdr->e_phnum; ++i) {
     if (phdrs[i].p_type != PT_NOTE || phdrs[i].p_filesz < sizeof(Elf64_Nhdr))
       continue;
     if (!in_range(elf_base + phdrs[i].p_offset, phdrs[i].p_filesz, elf_base, elf_accessible))
       continue;
     auto *nhdr = reinterpret_cast<const Elf64_Nhdr *>(elf_base + phdrs[i].p_offset);
-    constexpr uint32_t NT_AMDGPU_METADATA = 32;
     if (nhdr->n_type != NT_AMDGPU_METADATA)
       continue;
 
@@ -137,5 +135,4 @@ std::string find_kernel_symbol(const uint8_t *kernel_object_ptr, const uint8_t *
   return {};
 }
 
-} // namespace amdgpu
 } // namespace rocjitsu
