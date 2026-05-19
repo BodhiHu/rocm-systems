@@ -20,6 +20,27 @@ import shutil
 # Add the pytest directory to Python path for rocprofsys package
 sys.path.insert(0, str(Path(__file__).parent))
 
+# ─── ASSERT_REGEX AUDIT ─── (temporary, remove after audit is complete)
+# Logs every _assert_regex invocation to a file so we can verify which
+# *_pass_regex / *_fail_regex kwargs actually match the mode-derived lookup
+# key. Path is overridable via ROCPROFSYS_ASSERT_REGEX_AUDIT_LOG env var.
+import logging as _audit_logging  # noqa: E402
+
+_AUDIT_PATH = os.environ.get(
+    "ROCPROFSYS_ASSERT_REGEX_AUDIT_LOG", "/tmp/assert_regex_audit.log"
+)
+Path(_AUDIT_PATH).parent.mkdir(parents=True, exist_ok=True)
+_ASSERT_REGEX_AUDIT_LOG = _audit_logging.getLogger("rocprofsys.assert_regex_audit")
+if not _ASSERT_REGEX_AUDIT_LOG.handlers:
+    _h = _audit_logging.FileHandler(_AUDIT_PATH, mode="a")
+    _h.setFormatter(
+        _audit_logging.Formatter("%(asctime)s pid=%(process)d %(message)s")
+    )
+    _ASSERT_REGEX_AUDIT_LOG.addHandler(_h)
+    _ASSERT_REGEX_AUDIT_LOG.setLevel(_audit_logging.INFO)
+    _ASSERT_REGEX_AUDIT_LOG.propagate = False
+# ─── END AUDIT ───
+
 import pytest
 from pytest import StashKey
 
@@ -2196,11 +2217,42 @@ def assert_regex(subtests, record_subtest_failure, request):
         **kwargs,
     ) -> None:
         # If mode is provided, look up mode-specific regexes from kwargs
+        # ─── ASSERT_REGEX AUDIT ─── (temporary)
+        _audit_keys = sorted(
+            k for k in kwargs.keys()
+            if k.endswith("_pass_regex") or k.endswith("_fail_regex")
+        )
+        # ─── END AUDIT ───
         if mode is not None:
             # Normalize mode name (hyphens to underscores)
             mode_key = mode.replace("-", "_")
+            # ─── ASSERT_REGEX AUDIT ─── (temporary)
+            _pass_lookup = f"{mode_key}_pass_regex"
+            _fail_lookup = f"{mode_key}_fail_regex"
+            _ASSERT_REGEX_AUDIT_LOG.info(
+                "node=%r mode=%r kwarg_keys=%s lookup_pass=%r pass_hit=%s "
+                "lookup_fail=%r fail_hit=%s",
+                request.node.nodeid,
+                mode,
+                _audit_keys,
+                _pass_lookup,
+                kwargs.get(_pass_lookup) is not None,
+                _fail_lookup,
+                kwargs.get(_fail_lookup) is not None,
+            )
+            # ─── END AUDIT ───
             pass_regex = kwargs.get(f"{mode_key}_pass_regex") or pass_regex
             fail_regex = kwargs.get(f"{mode_key}_fail_regex") or fail_regex
+        else:
+            # ─── ASSERT_REGEX AUDIT ─── (temporary)
+            _ASSERT_REGEX_AUDIT_LOG.info(
+                "node=%r mode=None kwarg_keys=%s pass_provided=%s fail_provided=%s",
+                request.node.nodeid,
+                _audit_keys,
+                pass_regex is not None,
+                fail_regex is not None,
+            )
+            # ─── END AUDIT ───
 
         with subtests.test(subtest_name):
             validation = validate_regex(
