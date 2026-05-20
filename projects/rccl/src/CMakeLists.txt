@@ -93,6 +93,7 @@ set(SRC_FILES
   include/BfdBacktrace.hpp
   include/bitops.h
   include/bootstrap.h
+  include/bootstrap_trace.h
   include/ce_coll.h
   include/channel.h
   include/checks.h
@@ -247,6 +248,7 @@ set(SRC_FILES
   misc/argcheck.cc
   misc/api_trace.c
   misc/api_trace.cc
+  misc/bootstrap_trace.cc
 # misc/cudawrap.cc
 # misc/gdrwrap.cc
   misc/ibvsymbols.cc
