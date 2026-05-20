@@ -4,17 +4,10 @@
 
 Full documentation for ROCm Systems Profiler is available at [https://rocm.docs.amd.com/projects/rocprofiler-systems/en/latest/](https://rocm.docs.amd.com/projects/rocprofiler-systems/en/latest/).
 
-## ROCm Systems Profiler 1.6.0 for ROCm 7.13.0
+## ROCm Systems Profiler 1.7.0 for ROCm 7.14.0
 
 ### Added
 
-- GPU graphics and memory clock frequency metrics (`gfx_clock`, `mem_clock`) via
-  AMD SMI, exposing `current_gfxclk` and `current_uclk` in MHz as PMC samples.
-  Configure via `ROCPROFSYS_AMD_SMI_METRICS=gfx_clock,mem_clock`.
-- Kernel Fusion Driver (KFD) event tracing support to capture page faults, page
-  migrations, queue evictions, GPU unmap events, and dropped events. Requires
-  ROCProfiler-SDK 1.2.2 or later. Enable with
-  `ROCPROFSYS_ROCM_DOMAINS=kfd_events`.
 - Unified-memory profiling reports (`unified_memory.txt` and
   `unified_memory.json`) summarizing KFD page-fault and page-migration events,
   including per-GPU counts, trigger breakdown (`gpu_page_fault`,
@@ -22,6 +15,13 @@ Full documentation for ROCm Systems Profiler is available at [https://rocm.docs.
   bandwidth. Enable with `ROCPROFSYS_USE_UNIFIED_MEMORY_PROFILING=ON`; requires
   `HSA_XNACK=1` on an XNACK-capable AMD GPU and ROCProfiler-SDK 1.2.2 or
   later. The required KFD tracing domains are enabled automatically.
+
+## ROCm Systems Profiler 1.6.0 for ROCm 7.13.0
+
+### Added
+
+- GPU graphics and memory clock frequency metrics (`gfx_clock`, `mem_clock`) via AMD SMI, exposing `current_gfxclk` and `current_uclk` in MHz as PMC samples. Configure via `ROCPROFSYS_AMD_SMI_METRICS=gfx_clock,mem_clock`.
+- Kernel Fusion Driver (KFD) event tracing support to capture page faults, page migrations, queue evictions, GPU unmap events, and dropped events. Requires ROCProfiler-SDK 1.2.1 or later. Enable with `ROCPROFSYS_ROCM_DOMAINS=kfd_events`.
 - Support for pause and resume of profiling via `roctxProfilerPause` and `roctxProfilerResume`.
 - Support for selective region tracing via the `ROCPROFSYS_SELECTED_REGIONS` environment variable, limiting tracing to specified regions.
 - `--selected-regions` CLI argument to `rocprof-sys-sample`, `rocprof-sys-run`, and `rocprof-sys-instrument` for specifying selective region tracing from the command line.
