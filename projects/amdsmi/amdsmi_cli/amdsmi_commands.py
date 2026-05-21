@@ -4506,18 +4506,16 @@ class AMDSMICommands:
                                 vcn_data = xcp_vcn_busy[aid_idx]
                                 if isinstance(vcn_data, list) and len(vcn_data) > 0:
                                     vcn = vcn_data[0]
-                                    if vcn != "N/A":
-                                        aid_data["VCN_ACTIVITY"] = f"{vcn} %"
+                                    aid_data["VCN_ACTIVITY"] = f"{vcn} %" if vcn != "N/A" else "N/A"
 
                             # JPEG activity from xcp_stats (array per XCP/AID)
                             if isinstance(xcp_jpeg_busy, list) and aid_idx < len(xcp_jpeg_busy):
                                 jpeg_data = xcp_jpeg_busy[aid_idx]
                                 if isinstance(jpeg_data, list):
-                                    # Filter out N/A values
-                                    jpeg_valid = [j for j in jpeg_data if j != "N/A"]
-                                    if jpeg_valid:
-                                        jpeg_str = ", ".join([f"{j} %" for j in jpeg_valid])
-                                        aid_data["JPEG_ACTIVITY"] = f"[{jpeg_str}]"
+                                    jpeg_str = ", ".join(
+                                        [f"{j} %" if j != "N/A" else "N/A" for j in jpeg_data]
+                                    )
+                                    aid_data["JPEG_ACTIVITY"] = f"[{jpeg_str}]"
 
                         if aid_data:
                             partition_output[aid_key] = aid_data
@@ -4538,7 +4536,7 @@ class AMDSMICommands:
                                 current_socclks_mid
                             ):
                                 socclk_mid = current_socclks_mid[mid_idx]
-                                if socclk_mid != "N/A" and socclk_mid > 0:
+                                if socclk_mid != "N/A":
                                     mid_data["CLK_SOCCLK"] = f"{socclk_mid} MHz"
 
                         # Temperature fields - only include if --temperature flag is set or showing all
@@ -4546,7 +4544,7 @@ class AMDSMICommands:
                             # Temperature for MID
                             if isinstance(temperature_mid, list) and mid_idx < len(temperature_mid):
                                 temp_mid = temperature_mid[mid_idx]
-                                if temp_mid != "N/A" and temp_mid > 0:
+                                if temp_mid != "N/A":
                                     mid_data["TEMPERATURE"] = f"{temp_mid} C"
 
                         if mid_data:
@@ -4572,7 +4570,18 @@ class AMDSMICommands:
                     )
                     xcp_temp_xcd = gpu_partition_metrics.get("xcp_stats.temperature_xcd", [])
 
+                    # Get violation status and activity for throttle fields
+                    violation_status = {}
+                    if show_throttle or show_all:
+                        try:
+                            violation_status = amdsmi_interface.amdsmi_get_violation_status(
+                                args.gpu
+                            )
+                        except Exception as e:
+                            logging.debug(f"Failed to get violation status: {e}")
+
                     # Determine number of XCPs
+                    # For partition section, show XCPs that have actual data even if num_partition is N/A
                     num_xcps = 0
                     if isinstance(xcp_gfx_busy, list) and xcp_gfx_busy != "N/A":
                         num_xcps = len(xcp_gfx_busy)
@@ -4591,13 +4600,13 @@ class AMDSMICommands:
                                     gfx_clk = current_gfxclks[xcp_idx]
                                     if gfx_clk != "N/A":
                                         if isinstance(gfx_clk, list):
-                                            # Filter out N/A values and format
-                                            valid_clks = [c for c in gfx_clk if c != "N/A"]
-                                            if valid_clks:
-                                                clk_str = ", ".join(
-                                                    [f"{c} MHz" for c in valid_clks]
-                                                )
-                                                xcp_data["GFX_CLK"] = f"[{clk_str}]"
+                                            clk_str = ", ".join(
+                                                [
+                                                    f"{c} MHz" if c != "N/A" else "N/A"
+                                                    for c in gfx_clk
+                                                ]
+                                            )
+                                            xcp_data["GFX_CLK"] = f"[{clk_str}]"
                                         else:
                                             xcp_data["GFX_CLK"] = f"{gfx_clk} MHz"
 
@@ -4628,11 +4637,28 @@ class AMDSMICommands:
                             if isinstance(xcp_gfx_busy, list) and xcp_idx < len(xcp_gfx_busy):
                                 gfx_usage = xcp_gfx_busy[xcp_idx]
                                 if gfx_usage != "N/A" and isinstance(gfx_usage, list):
-                                    # Filter out N/A values
-                                    valid_usage = [u for u in gfx_usage if u != "N/A"]
-                                    if valid_usage:
-                                        usage_str = ", ".join([f"{u} %" for u in valid_usage])
-                                        xcp_data["GFX_USAGE"] = f"[{usage_str}]"
+                                    usage_str = ", ".join(
+                                        [f"{u} %" if u != "N/A" else "N/A" for u in gfx_usage]
+                                    )
+                                    xcp_data["GFX_BUSY_INST"] = f"[{usage_str}]"
+
+                            # JPEG usage (from xcp_stats.jpeg_busy)
+                            if isinstance(xcp_jpeg_busy, list) and xcp_idx < len(xcp_jpeg_busy):
+                                jpeg_usage = xcp_jpeg_busy[xcp_idx]
+                                if jpeg_usage != "N/A" and isinstance(jpeg_usage, list):
+                                    jpeg_str = ", ".join(
+                                        [f"{j} %" if j != "N/A" else "N/A" for j in jpeg_usage]
+                                    )
+                                    xcp_data["JPEG_BUSY"] = f"[{jpeg_str}]"
+
+                            # VCN usage (from xcp_stats.vcn_busy)
+                            if isinstance(xcp_vcn_busy, list) and xcp_idx < len(xcp_vcn_busy):
+                                vcn_usage = xcp_vcn_busy[xcp_idx]
+                                if vcn_usage != "N/A" and isinstance(vcn_usage, list):
+                                    vcn_str = ", ".join(
+                                        [f"{v} %" if v != "N/A" else "N/A" for v in vcn_usage]
+                                    )
+                                    xcp_data["VCN_BUSY"] = f"[{vcn_str}]"
 
                         # Throttle fields - only include if --throttle flag is set or showing all
                         if show_throttle or show_all:
@@ -4642,38 +4668,134 @@ class AMDSMICommands:
                             ):
                                 ppt_acc = xcp_below_limit_ppt[xcp_idx]
                                 if ppt_acc != "N/A" and isinstance(ppt_acc, list):
-                                    valid_ppt = [p for p in ppt_acc if p != "N/A"]
-                                    if valid_ppt and any(p > 0 for p in valid_ppt):
-                                        ppt_str = ", ".join(map(str, valid_ppt))
-                                        xcp_data["GFX_THROTTLE_PPT_ACC"] = f"[{ppt_str}]"
+                                    ppt_str = ", ".join([str(p) for p in ppt_acc])
+                                    xcp_data["GFX_CLK_BELOW_HOST_LIMIT_POWER_ACCUMULATED"] = (
+                                        f"[{ppt_str}]"
+                                    )
 
                             if isinstance(xcp_below_limit_thm, list) and xcp_idx < len(
                                 xcp_below_limit_thm
                             ):
                                 thm_acc = xcp_below_limit_thm[xcp_idx]
                                 if thm_acc != "N/A" and isinstance(thm_acc, list):
-                                    valid_thm = [t for t in thm_acc if t != "N/A"]
-                                    if valid_thm and any(t > 0 for t in valid_thm):
-                                        thm_str = ", ".join(map(str, valid_thm))
-                                        xcp_data["GFX_THROTTLE_THERMAL_ACC"] = f"[{thm_str}]"
+                                    thm_str = ", ".join([str(t) for t in thm_acc])
+                                    xcp_data["GFX_CLK_BELOW_HOST_LIMIT_THERMAL_ACCUMULATED"] = (
+                                        f"[{thm_str}]"
+                                    )
 
                             if isinstance(xcp_low_util, list) and xcp_idx < len(xcp_low_util):
                                 low_util = xcp_low_util[xcp_idx]
                                 if low_util != "N/A" and isinstance(low_util, list):
-                                    valid_util = [u for u in low_util if u != "N/A"]
-                                    if valid_util and any(u > 0 for u in valid_util):
-                                        util_str = ", ".join(map(str, valid_util))
-                                        xcp_data["GFX_LOW_UTILIZATION_ACC"] = f"[{util_str}]"
+                                    util_str = ", ".join([str(u) for u in low_util])
+                                    xcp_data["LOW_UTILIZATION_ACCUMULATED"] = f"[{util_str}]"
 
                             if isinstance(xcp_below_limit_total, list) and xcp_idx < len(
                                 xcp_below_limit_total
                             ):
                                 total_acc = xcp_below_limit_total[xcp_idx]
                                 if total_acc != "N/A" and isinstance(total_acc, list):
-                                    valid_total = [t for t in total_acc if t != "N/A"]
-                                    if valid_total and any(t > 0 for t in valid_total):
-                                        total_str = ", ".join(map(str, valid_total))
-                                        xcp_data["GFX_THROTTLE_TOTAL_ACC"] = f"[{total_str}]"
+                                    total_str = ", ".join([str(t) for t in total_acc])
+                                    xcp_data["TOTAL_GFX_CLK_BELOW_HOST_LIMIT_ACCUMULATED"] = (
+                                        f"[{total_str}]"
+                                    )
+
+                            # Violation status fields (active violations)
+                            if violation_status:
+                                if "active_gfx_clk_below_host_limit_pwr" in violation_status:
+                                    active_pwr = violation_status[
+                                        "active_gfx_clk_below_host_limit_pwr"
+                                    ]
+                                    if isinstance(active_pwr, list) and xcp_idx < len(active_pwr):
+                                        pwr_status = active_pwr[xcp_idx]
+                                        if isinstance(pwr_status, list):
+                                            status_str = ", ".join([str(s) for s in pwr_status])
+                                            xcp_data[
+                                                "GFX_CLK_BELOW_HOST_LIMIT_POWER_VIOLATION_STATUS"
+                                            ] = f"[{status_str}]"
+
+                                if "active_gfx_clk_below_host_limit_thm" in violation_status:
+                                    active_thm = violation_status[
+                                        "active_gfx_clk_below_host_limit_thm"
+                                    ]
+                                    if isinstance(active_thm, list) and xcp_idx < len(active_thm):
+                                        thm_status = active_thm[xcp_idx]
+                                        if isinstance(thm_status, list):
+                                            status_str = ", ".join([str(s) for s in thm_status])
+                                            xcp_data[
+                                                "GFX_CLK_BELOW_HOST_LIMIT_THERMAL_VIOLATION_STATUS"
+                                            ] = f"[{status_str}]"
+
+                                if "active_gfx_clk_below_host_limit_total" in violation_status:
+                                    active_total = violation_status[
+                                        "active_gfx_clk_below_host_limit_total"
+                                    ]
+                                    if isinstance(active_total, list) and xcp_idx < len(
+                                        active_total
+                                    ):
+                                        total_status = active_total[xcp_idx]
+                                        if isinstance(total_status, list):
+                                            status_str = ", ".join([str(s) for s in total_status])
+                                            xcp_data[
+                                                "TOTAL_GFX_CLK_BELOW_HOST_LIMIT_VIOLATION_STATUS"
+                                            ] = f"[{status_str}]"
+
+                                if "active_low_utilization" in violation_status:
+                                    active_util = violation_status["active_low_utilization"]
+                                    if isinstance(active_util, list) and xcp_idx < len(active_util):
+                                        util_status = active_util[xcp_idx]
+                                        if isinstance(util_status, list):
+                                            status_str = ", ".join([str(s) for s in util_status])
+                                            xcp_data["LOW_UTILIZATION_VIOLATION_STATUS"] = (
+                                                f"[{status_str}]"
+                                            )
+
+                            # Violation activity fields (per-activity violations)
+                            if violation_status:
+                                if "per_gfx_clk_below_host_limit_pwr" in violation_status:
+                                    per_pwr = violation_status["per_gfx_clk_below_host_limit_pwr"]
+                                    if isinstance(per_pwr, list) and xcp_idx < len(per_pwr):
+                                        pwr_activity = per_pwr[xcp_idx]
+                                        if isinstance(pwr_activity, list):
+                                            activity_str = ", ".join([str(a) for a in pwr_activity])
+                                            xcp_data[
+                                                "GFX_CLK_BELOW_HOST_LIMIT_POWER_VIOLATION_ACTIVITY"
+                                            ] = f"[{activity_str}]"
+
+                                if "per_gfx_clk_below_host_limit_thm" in violation_status:
+                                    per_thm = violation_status["per_gfx_clk_below_host_limit_thm"]
+                                    if isinstance(per_thm, list) and xcp_idx < len(per_thm):
+                                        thm_activity = per_thm[xcp_idx]
+                                        if isinstance(thm_activity, list):
+                                            activity_str = ", ".join([str(a) for a in thm_activity])
+                                            xcp_data[
+                                                "GFX_CLK_BELOW_HOST_LIMIT_THERMAL_VIOLATION_ACTIVITY"
+                                            ] = f"[{activity_str}]"
+
+                                if "per_gfx_clk_below_host_limit_total" in violation_status:
+                                    per_total = violation_status[
+                                        "per_gfx_clk_below_host_limit_total"
+                                    ]
+                                    if isinstance(per_total, list) and xcp_idx < len(per_total):
+                                        total_activity = per_total[xcp_idx]
+                                        if isinstance(total_activity, list):
+                                            activity_str = ", ".join(
+                                                [str(a) for a in total_activity]
+                                            )
+                                            xcp_data[
+                                                "TOTAL_GFX_CLK_BELOW_HOST_LIMIT_VIOLATION_ACTIVITY"
+                                            ] = f"[{activity_str}]"
+
+                                if "per_low_utilization" in violation_status:
+                                    per_util = violation_status["per_low_utilization"]
+                                    if isinstance(per_util, list) and xcp_idx < len(per_util):
+                                        util_activity = per_util[xcp_idx]
+                                        if isinstance(util_activity, list):
+                                            activity_str = ", ".join(
+                                                [str(a) for a in util_activity]
+                                            )
+                                            xcp_data["LOW_UTILIZATION_VIOLATION_ACTIVITY"] = (
+                                                f"[{activity_str}]"
+                                            )
 
                         # Temperature fields - only include if --temperature flag is set or showing all
                         if show_temperature or show_all:
@@ -4681,11 +4803,10 @@ class AMDSMICommands:
                             if isinstance(xcp_temp_xcd, list) and xcp_idx < len(xcp_temp_xcd):
                                 xcd_temps = xcp_temp_xcd[xcp_idx]
                                 if xcd_temps != "N/A" and isinstance(xcd_temps, list):
-                                    # Filter out N/A values
-                                    valid_temps = [t for t in xcd_temps if t != "N/A" and t > 0]
-                                    if valid_temps:
-                                        temp_str = ", ".join([f"{t} C" for t in valid_temps])
-                                        xcp_data["TEMPERATURE_XCD"] = f"[{temp_str}]"
+                                    temp_str = ", ".join(
+                                        [f"{t} C" if t != "N/A" else "N/A" for t in xcd_temps]
+                                    )
+                                    xcp_data["TEMPERATURE_XCD"] = f"[{temp_str}]"
 
                         if xcp_data:
                             partition_output[xcp_key] = xcp_data

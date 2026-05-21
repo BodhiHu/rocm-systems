@@ -12,8 +12,7 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
   - New `-X`/`--partition` flag displays hierarchical partition metrics for multi-partition GPUs:
     - **AID**: VCLK/DCLK/SCLK clocks with min/max limits, VCN/JPEG activity percentages
     - **MID**: SOC clock frequency and temperature
-    - **XCP**: GFX clocks with min/max limits, lock status, usage percentages, throttle/violation accumulation counters (PPT/thermal/low-utilization), and XCD temperatures
-  - Filters N/A values from arrays for clean output; throttle/violation counters only displayed when non-zero.
+    - **XCP**: GFX clocks with min/max limits, lock status, GFX_BUSY_INST/JPEG_BUSY/VCN_BUSY usage, throttle accumulation counters, violation status and activity fields, and XCD temperatures
 
 ## amd_smi_lib for ROCm 7.13.0
 
