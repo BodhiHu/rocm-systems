@@ -147,8 +147,21 @@ get_stream_id(hipStream_t stream)
     // Stream ID already exists
     if(stream_id) return *stream_id;
 
-    ROCP_CI_LOG_IF(WARNING, !rocprofiler::registration::supports_attachment()) << fmt::format(
-        "Stream ID is not present in {} when attach feature is not being used", __FUNCTION__);
+    // Stream not in map - handle differently based on attach mode
+    if(!rocprofiler::registration::supports_attachment())
+    {
+        // Non-attach mode: Stream should have been registered at creation.
+        // This is unexpected and should be caught in CI builds.
+        ROCP_CI_LOG(WARNING) << fmt::format(
+            "Stream ID is not present in {} when attach feature is not being used", __FUNCTION__);
+    }
+    else
+    {
+        // Attach mode: Pre-existing streams are expected to be missing.
+        // Add them on-demand when first encountered.
+        ROCP_INFO << fmt::format("Stream {} not in map during attach - adding on-demand",
+                                 static_cast<void*>(stream));
+    }
     return add_stream(stream, false);
 }
 
