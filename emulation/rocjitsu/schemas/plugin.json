@@ -1,0 +1,41 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Emulator Plugin Manifest",
+    "type": "object",
+    "required": ["abi_version", "name", "version"],
+    "properties": {
+        "abi_version": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "name": {
+            "type": "string"
+        },
+        "description": {
+            "type": "string"
+        },
+        "version": {
+            "type": "string"
+        },
+        "contact": {
+            "type": "string"
+        },
+        "arguments": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "default": true
+                },
+                "additionalProperties": false
+            }
+        }
+    },
+    "additionalProperties": false
+}
