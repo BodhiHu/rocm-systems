@@ -116,8 +116,12 @@ static ncclResult_t ncclRmaProxyCtxAlloc(struct ncclComm* comm, ncclGin_t* ginCo
   // Allocate the signals on the GPU and then register the memory region with the GIN plugin.
   // Enforcing strong ordering on the signals mr is vital to ensure ordering between puts and signals.
   size_t signalsBufSize = (comm->nRanks + 1) * sizeof(uint64_t);
+#if !defined(__HIP_PLATFORM_AMD__) && ! defined(__HIPCC__)
   NCCLCHECK(ncclCuMemAlloc((void **)&rmaProxyCtx->signalsDev, &rmaProxyCtx->signalsCumemhandle,
                            CU_MEM_HANDLE_TYPE_NONE, signalsBufSize /*, comm->memManager*/));
+#else
+  CUDACHECK(hipExtMallocWithFlags((void**)&rmaProxyCtx->signalsDev, signalsBufSize, hipDeviceMallocFinegrained));
+#endif
   CUDACHECK(cudaMemset(rmaProxyCtx->signalsDev, 0, signalsBufSize));
   NCCLCHECK(ncclRmaProxyRegMrSym(ginComm, rmaProxyCtx->ginCollComm, rmaProxyCtx->props, rmaProxyCtx->signalsDev, signalsBufSize,
                                  NCCL_PTR_CUDA, NCCL_NET_MR_FLAG_FORCE_SO,
@@ -184,8 +188,12 @@ static ncclResult_t ncclRmaProxyCtxAllocGraph(struct ncclComm* comm, ncclGin_t* 
 
   // Allocate the flush buffer on the GPU and then register the memory region with the GIN plugin.
   size_t flushBufSize = comm->nRanks * sizeof(uint64_t);
+#if !defined(__HIP_PLATFORM_AMD__) && ! defined(__HIPCC__)
   NCCLCHECK(ncclCuMemAlloc((void **)&rmaProxyCtx->flushBufDev, &rmaProxyCtx->flushBufCumemhandle,
-                            CU_MEM_HANDLE_TYPE_NONE, flushBufSize/*, comm->memManager*/));
+                           CU_MEM_HANDLE_TYPE_NONE, flushBufSize/*, comm->memManager*/));
+#else
+  CUDACHECK(hipExtMallocWithFlags((void**)&rmaProxyCtx->flushBufDev, flushBufSize, hipDeviceMallocFinegrained));
+#endif
   CUDACHECK(cudaMemset(rmaProxyCtx->flushBufDev, 0, flushBufSize));
   NCCLCHECK(ncclRmaProxyRegMrSym(ginComm, rmaProxyCtx->ginCollComm, rmaProxyCtx->props, rmaProxyCtx->flushBufDev, flushBufSize,
                                   NCCL_PTR_CUDA, NCCL_NET_MR_FLAG_FORCE_SO,

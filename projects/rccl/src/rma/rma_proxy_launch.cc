@@ -25,13 +25,27 @@
 
 ncclResult_t ncclCuStreamBatchMemOp(hipStream_t stream, unsigned int numOps, hipStreamBatchMemOpParams* batchParams) {
   ncclResult_t ret = ncclSuccess;
+#if HIP_VERSION >= 71360850
   const unsigned int maxOpsPerBatch = 255;
 
   for (unsigned int offset = 0; offset < numOps; offset += maxOpsPerBatch) {
     unsigned int opsInThisChunk = (numOps - offset < maxOpsPerBatch) ? (numOps - offset) : maxOpsPerBatch;
     CUCHECKGOTO(hipStreamBatchMemOp(stream, opsInThisChunk, &batchParams[offset], 0), ret, fail);
   }
-
+#else
+  for (int opIdx = 0; opIdx < numOps; opIdx++) {
+    if (batchParams[opIdx].operation == CU_STREAM_MEM_OP_WRITE_VALUE_64) {
+      CUCHECKGOTO(hipStreamWriteValue64(stream, batchParams[opIdx].writeValue.address,
+                                        batchParams[opIdx].writeValue.value,
+                                       batchParams[opIdx].writeValue.flags), ret, fail);
+    } else if (batchParams[opIdx].operation == CU_STREAM_MEM_OP_WAIT_VALUE_64) {
+      CUCHECKGOTO(hipStreamWaitValue64(stream, batchParams[opIdx].waitValue.address,
+                                        batchParams[opIdx].waitValue.value,
+                                       batchParams[opIdx].waitValue.flags, UINT64_MAX), ret, fail);
+    }
+  }
+#endif
+	
 exit:
   return ret;
 fail:
