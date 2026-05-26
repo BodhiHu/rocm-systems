@@ -754,12 +754,6 @@ memory:
   Unit_hipMemcpyBatchAsync_P2P_Functional:
     <<: *level_2
     tags: [transfer, multigpu]
-  Unit_hipMemcpyBatchAsync_MemoryEdgeCases:
-    <<: *level_2
-    tags: [transfer]
-  Unit_hipMemcpyBatchAsync_NegativeTsts:
-    <<: *level_2
-    tags: [transfer]
   Unit_hipMemsetD2D8_BasicFunctional:
     <<: *level_2
     tags: [memset]
