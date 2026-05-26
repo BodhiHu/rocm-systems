@@ -6763,3 +6763,24 @@ def test_reconfigure_stdio_utf8_end_to_end_makes_non_ascii_print_safe():
     wrapper.write("│ box │\n")  # would raise UnicodeEncodeError under ascii/strict
     wrapper.flush()
     assert raw.getvalue() == "│ box │\n".encode("utf-8")
+
+
+##############################################################################
+# get_matrix_ops_type Tests
+##############################################################################
+
+
+def test_get_matrix_ops_type():
+    """
+    CDNA2/3/4 GPU series should return MFMA.
+    Non-CDNA GPU series should return WMMA, including unknown series or empty str.
+    """
+    from utils.utils_analysis import get_matrix_ops_type
+
+    assert get_matrix_ops_type("MI200") == "MFMA"
+    assert get_matrix_ops_type("MI300") == "MFMA"
+    assert get_matrix_ops_type("MI350") == "MFMA"
+
+    assert get_matrix_ops_type("navi3") == "WMMA"
+    assert get_matrix_ops_type("unknown_series") == "WMMA"
+    assert get_matrix_ops_type("") == "WMMA"
