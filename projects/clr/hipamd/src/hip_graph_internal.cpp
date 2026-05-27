@@ -440,28 +440,11 @@ void GraphExec::BuildSyncPlan() {
   // PASS 1: Assign a compact HW-event slot only to segments whose completion
   // signal is consumed — cross-device/stream successor, or leaf when
   // leaf-sync is required. Same-stream successors are ordered by the
-  // in-order queue and need no signal;
+  // in-order queue and need no signal.
+  // needs_completion_signal is pre-computed by PrecomputeStreamAssignment()
+  // using the same criteria, so we reuse it directly.
   for (size_t i = 0; i < segments_.size(); ++i) {
-    const auto& segment = segments_[i];
-    bool needed = false;
-    for (int succ_id : segment.segment_ids_edges) {
-      if (succ_id < 0 || succ_id >= static_cast<int>(segments_.size())) continue;
-      const auto& succ_seg = segments_[succ_id];
-      if (succ_seg.dev_id != segment.dev_id ||
-          succ_seg.stream_id != segment.stream_id) {
-        needed = true;
-        break;
-      }
-    }
-    // Every leaf gets a signal when leaf-sync is required, including leaves
-    // on stream_id == 0. Needed for child-graph nesting: a parent's
-    // per-segment completion barrier must observe the child's leaves on
-    // every sub-stream, not just rely on in-order semantics of the parent's
-    // per-segment stream.
-    if (!needed && segment.segment_ids_edges.empty() && IsLeafNodeSyncRequired()) {
-      needed = true;
-    }
-    if (needed) {
+    if (segments_[i].needs_completion_signal) {
       sync_plan_.seg_to_hw_event[i] = sync_plan_.num_hw_events++;
     }
   }
@@ -1182,12 +1165,15 @@ void GraphExec::PrecomputeStreamAssignment() {
     }
   }
 
+  const bool leaf_sync_required = IsLeafNodeSyncRequired();
   for (auto& seg : segments_) {
     seg.needs_completion_signal = false;
-    // Leaf segments always need a signal so EnqueueSegmentedGraph can sync
-    // the graph back to the launch stream.
     if (seg.segment_ids_edges.empty()) {
-      seg.needs_completion_signal = true;
+      // Leaf segments need a signal when there are multiple leaves so
+      // EnqueueSegmentedGraph can sync every leaf back to the launch stream.
+      if (leaf_sync_required) {
+        seg.needs_completion_signal = true;
+      }
       continue;
     }
     for (int edge_id : seg.segment_ids_edges) {
