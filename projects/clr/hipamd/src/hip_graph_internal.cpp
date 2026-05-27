@@ -2071,6 +2071,18 @@ hipError_t GraphExec::EnqueueSegment(const Segment& segment, hip::Stream* stream
       }
     } else {
       // Node doesn't support capture - execute individually.
+      // Flat dispatch bypasses the Barriers() tracker (ActiveSignal is skipped).
+      // Enqueue Markers before and after the non-captured node to:
+      //   Before: resync the Barriers() tracker so releaseGpuMemoryFence/WaitCurrent
+      //           can track queue progress for the node's internal operations.
+      //   After:  ensure the node's commands (e.g. host node blocking callbacks) are
+      //           fully flushed to the HW queue before the next flat batch is
+      //           dispatched, which writes directly to the HW queue.
+      auto pre_marker = new amd::Marker(*stream, kMarkerDisableFlush, {});
+      if (pre_marker != nullptr) {
+        pre_marker->enqueue();
+        pre_marker->release();
+      }
       if (DEBUG_HIP_GRAPH_DOT_PRINT) {
         node->stream_id_ = stream->GetStreamId();
         node->hw_queue_id_ = stream->getQueueID();
@@ -2079,6 +2091,11 @@ hipError_t GraphExec::EnqueueSegment(const Segment& segment, hip::Stream* stream
       status = node->CreateCommand(node->GetQueue());
       if (status != hipSuccess) return status;
       node->EnqueueCommands(stream);
+      auto post_marker = new amd::Marker(*stream, kMarkerDisableFlush, {});
+      if (post_marker != nullptr) {
+        post_marker->enqueue();
+        post_marker->release();
+      }
     }
   }
 

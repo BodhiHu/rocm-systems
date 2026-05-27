@@ -1898,7 +1898,6 @@ class GraphMemcpyNode : public GraphNode {
     }
     return false;
   }
-
 };
 
 class GraphMemcpyNode1D : public GraphMemcpyNode {
@@ -2176,7 +2175,6 @@ class GraphMemcpyNode1D : public GraphMemcpyNode {
     }
     return false;
   }
-
 };
 
 class GraphMemcpyNodeFromSymbol : public GraphMemcpyNode1D {
