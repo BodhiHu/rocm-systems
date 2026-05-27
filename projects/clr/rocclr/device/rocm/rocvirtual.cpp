@@ -1529,13 +1529,6 @@ bool VirtualGPU::dispatchAqlPacketBatchFlat(const std::vector<uint8_t>& flatPack
              (thisChunk - firstCount) * kPacketSize);
     }
 
-    // Attach signal to the last packet when requested (before per-packet logging).
-    auto* lastSlotPtr = reinterpret_cast<hsa_kernel_dispatch_packet_t*>(
-        queueBase + ((startIndex + chunkEnd - 1) & queueMask) * kPacketSize);
-    if (isLastChunk && (attach_signal || blocking) && timestamp_ == nullptr) {
-      lastSlotPtr->completion_signal = Barriers().ActiveSignal();
-    }
-
     // Per-packet fixups: profiling signals, kernel-name printing, and inline barrier logging.
     if (timestamp_ != nullptr || IsLogEnabled(amd::LOG_DETAIL_DEBUG, amd::LOG_KERN2) ||
         IsLogEnabled(amd::LOG_DETAIL_DEBUG, amd::LOG_AQL)) {
@@ -1611,6 +1604,12 @@ bool VirtualGPU::dispatchAqlPacketBatchFlat(const std::vector<uint8_t>& flatPack
                               Hsa::queue_load_read_index_scacquire(gpu_queue_), slotIdx, tag);
         }
       }
+    }
+
+    auto* lastSlotPtr = reinterpret_cast<hsa_kernel_dispatch_packet_t*>(
+        queueBase + ((startIndex + chunkEnd - 1) & queueMask) * kPacketSize);
+    if (isLastChunk && (attach_signal || blocking) && timestamp_ == nullptr) {
+      lastSlotPtr->completion_signal = Barriers().ActiveSignal();
     }
 
     // Write valid headers and ring the doorbell for this chunk.
