@@ -65,7 +65,8 @@ SharedMemory::SharedMemory(SharedMemory&& rhs) {
 SharedMemory::~SharedMemory() {
   if (ptr_ == nullptr) return;
   auto err = Runtime::runtime_singleton_->IPCDetach(ptr_);
-  assert(err == HSA_STATUS_SUCCESS && "IPC detach failed.");
+  // Best-effort cleanup in destructor - continue on failure
+  (void)err;
 }
 
 void IPCSignal::CreateHandle(Signal* signal, hsa_amd_ipc_signal_t* ipc_handle) {

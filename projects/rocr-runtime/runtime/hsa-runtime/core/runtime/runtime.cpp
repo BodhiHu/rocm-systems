@@ -3967,7 +3967,7 @@ Runtime::MappedHandleAllowedAgent::~MappedHandleAllowedAgent() {
   }
   else {
     hsa_status_t status = targetAgent->driver().DestroyImportedShareableHandle(&shareable_handle);
-    assert(status == HSA_STATUS_SUCCESS);
+    // Best-effort cleanup in destructor - continue on failure
     (void)status;
   }
 }

@@ -279,9 +279,10 @@ template <bool useGCR, bool scopeFields> hsa_status_t BlitSdma<useGCR, scopeFiel
   if (queue_resource_.QueueId != 0) {
     // Release queue resources from the kernel
     auto err = agent_->driver().DestroyQueue(queue_resource_.QueueId);
-    assert(err == HSA_STATUS_SUCCESS);
-    (void)err;
     memset(&queue_resource_, 0, sizeof(queue_resource_));
+    if (err != HSA_STATUS_SUCCESS) {
+      return err;
+    }
   }
 
   if (queue_start_addr_ != NULL) {

@@ -105,7 +105,7 @@ AieAqlQueue::AieAqlQueue(core::SharedQueue* shared_queue, AieAgent* agent, size_
 
 AieAqlQueue::~AieAqlQueue() {
   auto err = AieAqlQueue::Inactivate();
-  assert(err == HSA_STATUS_SUCCESS && "Destroy queue failed.");
+  // Best-effort cleanup in destructor - continue on failure
   (void)err;
   if (ring_buf_) {
     auto& agent = static_cast<AieAgent&>(*GetAgent());
