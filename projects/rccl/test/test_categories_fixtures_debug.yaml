@@ -22,6 +22,7 @@ test_categories:
       - "NetSocketTests.*"
       - "Ipcsocket.*"
       - "XmlTest.*"
+      - "NetDevsPolicyTests.*"
     exclude_windows:
       - "*"
     labels:

@@ -238,6 +238,7 @@ if(BUILD_TESTS)
       ArgCheckTests.cpp
       EnqueueTests.cpp
       IpcsocketTests.cpp
+      NetDevsPolicyTests.cpp
       NetSocketTests.cpp
       ProxyTests.cpp
       RcclWrapTests.cpp
