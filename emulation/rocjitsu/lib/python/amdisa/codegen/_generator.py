@@ -2356,6 +2356,13 @@ class CodeGenerator:
         for enc in self.isa_spec.inst_encodings:
             inst_classes = []
             class_func_impls = []
+            # Track whether the inst loop below actually emitted any
+            # ``amdgpu::execute_<tmpl>(*this, wf)`` shared-template call.
+            # The execute_shared.h include is later gated on this flag so
+            # the include strictly tracks emitted call sites instead of
+            # re-evaluating a parallel predicate that could drift from the
+            # body-emission predicate.
+            emitted_shared_call = False
             # Collect instructions from this encoding plus any child
             # alt encodings that contribute to this file.
             all_insts = list(enc.insts)
@@ -2990,6 +2997,7 @@ class CodeGenerator:
                                 f'{_dpp_cleanup}'
                                 f'{_sdwa_postamble}}}'
                             )
+                            emitted_shared_call = True
                             body_key = (inst.mnemonic, enc.enc_name)
                             self._shared_execute_bodies[body_key] = (
                                 inst,
@@ -3150,20 +3158,19 @@ class CodeGenerator:
                     )
 
                 # Include the unified shared execute template header when
-                # any instruction in this encoding delegates to a template.
-                if self.shared_plan is not None:
-                    has_shared = any(
-                        self._can_share_execute(i.mnemonic)
-                        for i in all_insts
-                        if self.semantics and i.name in self.semantics.instructions
-                    )
-                    if has_shared:
-                        cpp_includes.append(
-                            (
-                                'rocjitsu/isa/arch/amdgpu/shared/execute_shared.h',
-                                False,
-                            )
+                # the inst loop above actually emitted at least one
+                # ``amdgpu::execute_<tmpl>(*this, wf)`` call.  Deriving the
+                # include from observed emission (rather than re-evaluating
+                # a parallel predicate over ``_can_share_execute``) keeps
+                # the include strictly in sync with the call sites, even
+                # when future changes alter the body-emission gate.
+                if emitted_shared_call:
+                    cpp_includes.append(
+                        (
+                            'rocjitsu/isa/arch/amdgpu/shared/execute_shared.h',
+                            False,
                         )
+                    )
 
                 # Build per-ISA header includes.
                 h_includes = [
