@@ -17,8 +17,8 @@ import numpy as np
 import pandas as pd
 import pytest
 import yaml
-from scipy.stats import zscore
 from conftest import require_torch
+from scipy.stats import zscore
 
 # Runtime config options
 config = {}
