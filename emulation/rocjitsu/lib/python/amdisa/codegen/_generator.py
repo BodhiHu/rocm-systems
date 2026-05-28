@@ -645,7 +645,6 @@ class CodeGenerator:
                 'scalar_bitcmp',
                 'scalar_saveexec',
                 'scalar_bfe',
-                'vector_cmp_class',
                 'vector_swap',
                 'vector_mov',
                 'vector_binop',

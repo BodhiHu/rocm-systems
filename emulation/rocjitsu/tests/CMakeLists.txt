@@ -52,6 +52,8 @@ add_executable(
     decode_execute_benchmark.cpp
     util_simd_test.cpp
     v_add_simd_benchmark.cpp
+    vop1_cvt_f64_scalar_correctness_test.cpp
+    vopc_cmp_class_scalar_correctness_test.cpp
     execution_plugin_test.cpp
 )
 target_link_libraries(

@@ -2932,41 +2932,42 @@ inline void execute_v_cmp_class_f16_vop3([[maybe_unused]] Inst &inst,
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
-    if ([&]() -> bool {
-          float s0 = [&]() {
-            float sv = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
-            if (inst.inst_.abs & (1u << 0))
-              sv = std::fabs(sv);
-            if (inst.inst_.neg & (1u << 0))
-              sv = -sv;
-            return sv;
-          }();
-          uint32_t mask = static_cast<uint32_t>(inst.src1.read_lane(wf, lane));
-          bool match = false;
-          if ((mask & 0x001u) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000u) == 0)
-            match = true;
-          if ((mask & 0x002u) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000u) != 0)
-            match = true;
-          if ((mask & 0x004u) && std::isinf(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x008u) && std::isnormal(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x010u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0f && std::signbit(s0))
-            match = true;
-          if ((mask & 0x020u) && s0 == 0.0f && std::signbit(s0))
-            match = true;
-          if ((mask & 0x040u) && s0 == 0.0f && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x080u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0f && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x100u) && std::isnormal(s0) && s0 > 0)
-            match = true;
-          if ((mask & 0x200u) && std::isinf(s0) && s0 > 0)
-            match = true;
-          return match;
-        }())
+    uint16_t s0_raw = static_cast<uint16_t>(inst.src0.read_lane(wf, lane));
+    if (inst.inst_.abs & (1u << 0))
+      s0_raw &= 0x7FFFu;
+    if (inst.inst_.neg & (1u << 0))
+      s0_raw ^= 0x8000u;
+    uint32_t mask = inst.src1.read_lane(wf, lane);
+    bool match = false;
+    uint16_t f16_exp = (s0_raw >> 10) & 0x1F;
+    uint16_t f16_mant = s0_raw & 0x3FF;
+    bool f16_sign = (s0_raw & 0x8000) != 0;
+    bool is_nan = (f16_exp == 0x1F) && (f16_mant != 0);
+    bool is_inf = (f16_exp == 0x1F) && (f16_mant == 0);
+    bool is_zero = (f16_exp == 0) && (f16_mant == 0);
+    bool is_denorm = (f16_exp == 0) && (f16_mant != 0);
+    bool is_normal = (f16_exp >= 1) && (f16_exp <= 30);
+    if ((mask & 0x001) && is_nan && (s0_raw & 0x0200) == 0)
+      match = true;
+    if ((mask & 0x002) && is_nan && (s0_raw & 0x0200) != 0)
+      match = true;
+    if ((mask & 0x004) && is_inf && f16_sign)
+      match = true;
+    if ((mask & 0x008) && is_normal && f16_sign)
+      match = true;
+    if ((mask & 0x010) && is_denorm && f16_sign)
+      match = true;
+    if ((mask & 0x020) && is_zero && f16_sign)
+      match = true;
+    if ((mask & 0x040) && is_zero && !f16_sign)
+      match = true;
+    if ((mask & 0x080) && is_denorm && !f16_sign)
+      match = true;
+    if ((mask & 0x100) && is_normal && !f16_sign)
+      match = true;
+    if ((mask & 0x200) && is_inf && !f16_sign)
+      match = true;
+    if (match)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
@@ -2982,34 +2983,38 @@ inline void execute_v_cmp_class_f16_vopc([[maybe_unused]] Inst &inst,
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
-    if ([&]() -> bool {
-          float s0 = util::f16_to_f32(static_cast<uint16_t>(inst.src0.read_lane(wf, lane)));
-          uint32_t mask = static_cast<uint32_t>(inst.vsrc1.read_lane(wf, lane));
-          bool match = false;
-          if ((mask & 0x001u) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000u) == 0)
-            match = true;
-          if ((mask & 0x002u) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000u) != 0)
-            match = true;
-          if ((mask & 0x004u) && std::isinf(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x008u) && std::isnormal(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x010u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0f && std::signbit(s0))
-            match = true;
-          if ((mask & 0x020u) && s0 == 0.0f && std::signbit(s0))
-            match = true;
-          if ((mask & 0x040u) && s0 == 0.0f && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x080u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0f && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x100u) && std::isnormal(s0) && s0 > 0)
-            match = true;
-          if ((mask & 0x200u) && std::isinf(s0) && s0 > 0)
-            match = true;
-          return match;
-        }())
+    uint16_t s0_raw = static_cast<uint16_t>(inst.src0.read_lane(wf, lane));
+    uint32_t mask = inst.vsrc1.read_lane(wf, lane);
+    bool match = false;
+    uint16_t f16_exp = (s0_raw >> 10) & 0x1F;
+    uint16_t f16_mant = s0_raw & 0x3FF;
+    bool f16_sign = (s0_raw & 0x8000) != 0;
+    bool is_nan = (f16_exp == 0x1F) && (f16_mant != 0);
+    bool is_inf = (f16_exp == 0x1F) && (f16_mant == 0);
+    bool is_zero = (f16_exp == 0) && (f16_mant == 0);
+    bool is_denorm = (f16_exp == 0) && (f16_mant != 0);
+    bool is_normal = (f16_exp >= 1) && (f16_exp <= 30);
+    if ((mask & 0x001) && is_nan && (s0_raw & 0x0200) == 0)
+      match = true;
+    if ((mask & 0x002) && is_nan && (s0_raw & 0x0200) != 0)
+      match = true;
+    if ((mask & 0x004) && is_inf && f16_sign)
+      match = true;
+    if ((mask & 0x008) && is_normal && f16_sign)
+      match = true;
+    if ((mask & 0x010) && is_denorm && f16_sign)
+      match = true;
+    if ((mask & 0x020) && is_zero && f16_sign)
+      match = true;
+    if ((mask & 0x040) && is_zero && !f16_sign)
+      match = true;
+    if ((mask & 0x080) && is_denorm && !f16_sign)
+      match = true;
+    if ((mask & 0x100) && is_normal && !f16_sign)
+      match = true;
+    if ((mask & 0x200) && is_inf && !f16_sign)
+      match = true;
+    if (match)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
@@ -3025,41 +3030,36 @@ inline void execute_v_cmp_class_f32_vop3([[maybe_unused]] Inst &inst,
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
-    if ([&]() -> bool {
-          float s0 = [&]() {
-            float sv = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
-            if (inst.inst_.abs & (1u << 0))
-              sv = std::fabs(sv);
-            if (inst.inst_.neg & (1u << 0))
-              sv = -sv;
-            return sv;
-          }();
-          uint32_t mask = static_cast<uint32_t>(inst.src1.read_lane(wf, lane));
-          bool match = false;
-          if ((mask & 0x001u) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000u) == 0)
-            match = true;
-          if ((mask & 0x002u) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000u) != 0)
-            match = true;
-          if ((mask & 0x004u) && std::isinf(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x008u) && std::isnormal(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x010u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0f && std::signbit(s0))
-            match = true;
-          if ((mask & 0x020u) && s0 == 0.0f && std::signbit(s0))
-            match = true;
-          if ((mask & 0x040u) && s0 == 0.0f && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x080u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0f && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x100u) && std::isnormal(s0) && s0 > 0)
-            match = true;
-          if ((mask & 0x200u) && std::isinf(s0) && s0 > 0)
-            match = true;
-          return match;
-        }())
+    float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
+    if (inst.inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst.inst_.neg & (1u << 0))
+      s0 = -s0;
+    uint32_t mask = inst.src1.read_lane(wf, lane);
+    bool match = false;
+    if ((mask & 0x001) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000) == 0)
+      match = true;
+    if ((mask & 0x002) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000) != 0)
+      match = true;
+    if ((mask & 0x004) && std::isinf(s0) && s0 < 0)
+      match = true;
+    if ((mask & 0x008) && std::isnormal(s0) && s0 < 0)
+      match = true;
+    if ((mask & 0x010) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) && s0 != 0.0f &&
+        std::signbit(s0))
+      match = true;
+    if ((mask & 0x020) && s0 == 0.0f && std::signbit(s0))
+      match = true;
+    if ((mask & 0x040) && s0 == 0.0f && !std::signbit(s0))
+      match = true;
+    if ((mask & 0x080) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) && s0 != 0.0f &&
+        !std::signbit(s0))
+      match = true;
+    if ((mask & 0x100) && std::isnormal(s0) && s0 > 0)
+      match = true;
+    if ((mask & 0x200) && std::isinf(s0) && s0 > 0)
+      match = true;
+    if (match)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
@@ -3075,34 +3075,32 @@ inline void execute_v_cmp_class_f32_vopc([[maybe_unused]] Inst &inst,
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
-    if ([&]() -> bool {
-          float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
-          uint32_t mask = static_cast<uint32_t>(inst.vsrc1.read_lane(wf, lane));
-          bool match = false;
-          if ((mask & 0x001u) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000u) == 0)
-            match = true;
-          if ((mask & 0x002u) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000u) != 0)
-            match = true;
-          if ((mask & 0x004u) && std::isinf(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x008u) && std::isnormal(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x010u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0f && std::signbit(s0))
-            match = true;
-          if ((mask & 0x020u) && s0 == 0.0f && std::signbit(s0))
-            match = true;
-          if ((mask & 0x040u) && s0 == 0.0f && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x080u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0f && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x100u) && std::isnormal(s0) && s0 > 0)
-            match = true;
-          if ((mask & 0x200u) && std::isinf(s0) && s0 > 0)
-            match = true;
-          return match;
-        }())
+    float s0 = std::bit_cast<float>(inst.src0.read_lane(wf, lane));
+    uint32_t mask = inst.vsrc1.read_lane(wf, lane);
+    bool match = false;
+    if ((mask & 0x001) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000) == 0)
+      match = true;
+    if ((mask & 0x002) && std::isnan(s0) && (std::bit_cast<uint32_t>(s0) & 0x00400000) != 0)
+      match = true;
+    if ((mask & 0x004) && std::isinf(s0) && s0 < 0)
+      match = true;
+    if ((mask & 0x008) && std::isnormal(s0) && s0 < 0)
+      match = true;
+    if ((mask & 0x010) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) && s0 != 0.0f &&
+        std::signbit(s0))
+      match = true;
+    if ((mask & 0x020) && s0 == 0.0f && std::signbit(s0))
+      match = true;
+    if ((mask & 0x040) && s0 == 0.0f && !std::signbit(s0))
+      match = true;
+    if ((mask & 0x080) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) && s0 != 0.0f &&
+        !std::signbit(s0))
+      match = true;
+    if ((mask & 0x100) && std::isnormal(s0) && s0 > 0)
+      match = true;
+    if ((mask & 0x200) && std::isinf(s0) && s0 > 0)
+      match = true;
+    if (match)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
@@ -3118,43 +3116,38 @@ inline void execute_v_cmp_class_f64_vop3([[maybe_unused]] Inst &inst,
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
-    if ([&]() -> bool {
-          double s0 = [&]() {
-            double sv = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
-            if (inst.inst_.abs & (1u << 0))
-              sv = std::fabs(sv);
-            if (inst.inst_.neg & (1u << 0))
-              sv = -sv;
-            return sv;
-          }();
-          uint32_t mask = static_cast<uint32_t>(inst.src1.read_lane64(wf, lane));
-          bool match = false;
-          if ((mask & 0x001u) && std::isnan(s0) &&
-              (std::bit_cast<uint64_t>(s0) & 0x0008000000000000ULL) == 0)
-            match = true;
-          if ((mask & 0x002u) && std::isnan(s0) &&
-              (std::bit_cast<uint64_t>(s0) & 0x0008000000000000ULL) != 0)
-            match = true;
-          if ((mask & 0x004u) && std::isinf(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x008u) && std::isnormal(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x010u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0 && std::signbit(s0))
-            match = true;
-          if ((mask & 0x020u) && s0 == 0.0 && std::signbit(s0))
-            match = true;
-          if ((mask & 0x040u) && s0 == 0.0 && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x080u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0 && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x100u) && std::isnormal(s0) && s0 > 0)
-            match = true;
-          if ((mask & 0x200u) && std::isinf(s0) && s0 > 0)
-            match = true;
-          return match;
-        }())
+    double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
+    if (inst.inst_.abs & (1u << 0))
+      s0 = std::fabs(s0);
+    if (inst.inst_.neg & (1u << 0))
+      s0 = -s0;
+    uint32_t mask = inst.src1.read_lane(wf, lane);
+    bool match = false;
+    if ((mask & 0x001) && std::isnan(s0) &&
+        (std::bit_cast<uint64_t>(s0) & 0x0008000000000000ULL) == 0)
+      match = true;
+    if ((mask & 0x002) && std::isnan(s0) &&
+        (std::bit_cast<uint64_t>(s0) & 0x0008000000000000ULL) != 0)
+      match = true;
+    if ((mask & 0x004) && std::isinf(s0) && s0 < 0)
+      match = true;
+    if ((mask & 0x008) && std::isnormal(s0) && s0 < 0)
+      match = true;
+    if ((mask & 0x010) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) && s0 != 0.0 &&
+        std::signbit(s0))
+      match = true;
+    if ((mask & 0x020) && s0 == 0.0 && std::signbit(s0))
+      match = true;
+    if ((mask & 0x040) && s0 == 0.0 && !std::signbit(s0))
+      match = true;
+    if ((mask & 0x080) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) && s0 != 0.0 &&
+        !std::signbit(s0))
+      match = true;
+    if ((mask & 0x100) && std::isnormal(s0) && s0 > 0)
+      match = true;
+    if ((mask & 0x200) && std::isinf(s0) && s0 > 0)
+      match = true;
+    if (match)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
@@ -3170,36 +3163,34 @@ inline void execute_v_cmp_class_f64_vopc([[maybe_unused]] Inst &inst,
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
-    if ([&]() -> bool {
-          double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
-          uint32_t mask = static_cast<uint32_t>(inst.vsrc1.read_lane64(wf, lane));
-          bool match = false;
-          if ((mask & 0x001u) && std::isnan(s0) &&
-              (std::bit_cast<uint64_t>(s0) & 0x0008000000000000ULL) == 0)
-            match = true;
-          if ((mask & 0x002u) && std::isnan(s0) &&
-              (std::bit_cast<uint64_t>(s0) & 0x0008000000000000ULL) != 0)
-            match = true;
-          if ((mask & 0x004u) && std::isinf(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x008u) && std::isnormal(s0) && s0 < 0)
-            match = true;
-          if ((mask & 0x010u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0 && std::signbit(s0))
-            match = true;
-          if ((mask & 0x020u) && s0 == 0.0 && std::signbit(s0))
-            match = true;
-          if ((mask & 0x040u) && s0 == 0.0 && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x080u) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) &&
-              s0 != 0.0 && !std::signbit(s0))
-            match = true;
-          if ((mask & 0x100u) && std::isnormal(s0) && s0 > 0)
-            match = true;
-          if ((mask & 0x200u) && std::isinf(s0) && s0 > 0)
-            match = true;
-          return match;
-        }())
+    double s0 = std::bit_cast<double>(inst.src0.read_lane64(wf, lane));
+    uint32_t mask = inst.vsrc1.read_lane(wf, lane);
+    bool match = false;
+    if ((mask & 0x001) && std::isnan(s0) &&
+        (std::bit_cast<uint64_t>(s0) & 0x0008000000000000ULL) == 0)
+      match = true;
+    if ((mask & 0x002) && std::isnan(s0) &&
+        (std::bit_cast<uint64_t>(s0) & 0x0008000000000000ULL) != 0)
+      match = true;
+    if ((mask & 0x004) && std::isinf(s0) && s0 < 0)
+      match = true;
+    if ((mask & 0x008) && std::isnormal(s0) && s0 < 0)
+      match = true;
+    if ((mask & 0x010) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) && s0 != 0.0 &&
+        std::signbit(s0))
+      match = true;
+    if ((mask & 0x020) && s0 == 0.0 && std::signbit(s0))
+      match = true;
+    if ((mask & 0x040) && s0 == 0.0 && !std::signbit(s0))
+      match = true;
+    if ((mask & 0x080) && !std::isnormal(s0) && !std::isinf(s0) && !std::isnan(s0) && s0 != 0.0 &&
+        !std::signbit(s0))
+      match = true;
+    if ((mask & 0x100) && std::isnormal(s0) && s0 > 0)
+      match = true;
+    if ((mask & 0x200) && std::isinf(s0) && s0 > 0)
+      match = true;
+    if (match)
       vcc |= (1ULL << lane);
     else
       vcc &= ~(1ULL << lane);
