@@ -713,27 +713,13 @@ public:
                             grbm_value = Primitives::grbm_se_index_value(se_index);
                         }
 
-                        bool bIsWGPcounter11 = Primitives::GFXIP_LEVEL == 11 &&
-                                               (block_info->attr & CounterBlockSqAttr);
+                        bool bIsWGPcounter11 =
+                            Primitives::GFXIP_LEVEL == 11 &&
+                            (block_info->attr & (CounterBlockSqAttr | CounterBlockWgpAttr));
                         bool bIsWGPcounter12 = Primitives::GFXIP_LEVEL >= 12 &&
                                                (block_info->attr & CounterBlockWgpAttr);
 
-                        if(bIsWGPcounter11)
-                        {
-                            for(int wgp = 0; wgp < wgp_per_sa; wgp++)
-                            {
-                                grbm_value =
-                                    Primitives::grbm_se_sh_wgp_index_value(se_index, sarray, wgp);
-                                SetGrbmGfxIndex(cmd_buffer, grbm_value);
-                                builder.BuildCopyCounterDataPacket(cmd_buffer,
-                                                                   reg_info.register_addr_lo,
-                                                                   reg_info.register_addr_hi,
-                                                                   buf + read_counter,
-                                                                   1);
-                                read_counter += 2;
-                            }
-                        }
-                        else if(bIsWGPcounter12)
+                        if(bIsWGPcounter11 || bIsWGPcounter12)
                         {
                             for(int wgp = 0; wgp < wgp_per_sa; wgp++)
                             {

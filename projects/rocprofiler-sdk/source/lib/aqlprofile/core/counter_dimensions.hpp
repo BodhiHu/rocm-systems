@@ -113,10 +113,9 @@ public:
         shader_engine = HasAttr(CounterBlockSeAttr);
         shader_array  = HasAttr(CounterBlockSaAttr);
 
-        if(bIsGFX9)
-            compute_unit = HasAttr(CounterBlockTcAttr) && shader_engine;
-        else if(bIsGFX11 || bIsGFX12)
-            workgroup_processor = HasAttr(CounterBlockSqAttr);
+        if(bIsGFX9) compute_unit = HasAttr(CounterBlockTcAttr) && shader_engine;
+
+        workgroup_processor = HasAttr(CounterBlockWgpAttr);
 
         se_num  = pm4_factory->GetShaderEnginesNumber();
         sarrays = pm4_factory->GetShaderArraysNumber() * se_num;
