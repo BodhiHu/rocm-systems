@@ -3335,7 +3335,7 @@ void VLshlrevB64Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     vdst.write_lane64(wf, lane,
                       (static_cast<uint64_t>(src1.read_lane64(wf, lane))
-                       << (static_cast<uint64_t>(src0.read_lane64(wf, lane)) & 63u)));
+                       << (static_cast<uint64_t>(src0.read_lane(wf, lane)) & 63u)));
   }
 }
 
@@ -5757,9 +5757,9 @@ void VLshlAddU32Vop3::execute_impl(amdgpu::Wavefront &wf) {
   for (uint32_t lane = 0; lane < wf.wf_size(); ++lane) {
     if (!(exec & (1ULL << lane)))
       continue;
-    vdst.write_lane(
-        wf, lane,
-        ((src0.read_lane(wf, lane) << src1.read_lane(wf, lane)) + src2.read_lane(wf, lane)));
+    vdst.write_lane(wf, lane,
+                    ((src0.read_lane(wf, lane) << (src1.read_lane(wf, lane) & 31u)) +
+                     src2.read_lane(wf, lane)));
   }
 }
 
@@ -8421,7 +8421,7 @@ void VLshrrevB64Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     vdst.write_lane64(wf, lane,
                       (static_cast<uint64_t>(src1.read_lane64(wf, lane)) >>
-                       (static_cast<uint64_t>(src0.read_lane64(wf, lane)) & 63u)));
+                       (static_cast<uint64_t>(src0.read_lane(wf, lane)) & 63u)));
   }
 }
 
@@ -8445,7 +8445,7 @@ void VAshrrevI64Vop3::execute_impl(amdgpu::Wavefront &wf) {
       continue;
     vdst.write_lane64(wf, lane, [&]() {
       auto v = static_cast<int64_t>(static_cast<int64_t>(src1.read_lane64(wf, lane)));
-      return static_cast<uint64_t>(v >> (static_cast<int64_t>(src0.read_lane64(wf, lane)) & 63u));
+      return static_cast<uint64_t>(v >> (static_cast<int64_t>(src0.read_lane(wf, lane)) & 63u));
     }());
   }
 }

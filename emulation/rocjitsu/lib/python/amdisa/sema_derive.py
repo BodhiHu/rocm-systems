@@ -1145,6 +1145,18 @@ class _VectorTernary(_ScalarDeriver):
             result = SemaNode(SemaNodeKind.ADD, ty=ty, children=(mul, src2))
         elif op in ('fma', 'fmac'):
             result = SemaNode(SemaNodeKind.FMA, ty=ty, children=(src0, src1, src2))
+        elif op == 'lshl_add':
+            # HW masks the shift count to low log2(width) bits (low 5 for
+            # 32-bit ops, low 6 for 64-bit).  Emit the masked SHL+ADD tree
+            # explicitly so the lowered C++ does not invoke a uint64_t
+            # left-shift by >= 64, which is undefined behavior.  Mirrors the
+            # ``shl``/``shr`` handling in the scalar deriver.
+            mask_val = '63u' if ty.size == 64 else '31u'
+            masked_amt = SemaNode(
+                SemaNodeKind.AND, ty=SemaType.U32, children=(src1, _lit(mask_val))
+            )
+            shifted = SemaNode(SemaNodeKind.SHL, ty=ty, children=(src0, masked_amt))
+            result = SemaNode(SemaNodeKind.ADD, ty=ty, children=(shifted, src2))
         else:
             result = SemaNode(
                 SemaNodeKind.CALL,

@@ -61,6 +61,7 @@ class OperandMap:
         dtype: str | None = None,
         src_width: int | None = None,
         dst_width: int | None = None,
+        op_widths: dict[str, int] | None = None,
     ) -> OperandMap:
         is_64 = dtype in ('b64', 'i64', 'u64', 'f64')
         is_scalar = exec_model == ExecModel.SCALAR
@@ -68,8 +69,28 @@ class OperandMap:
         default_width = 64 if is_64 else 32
         sw = src_width if src_width is not None else default_width
         dw = dst_width if dst_width is not None else default_width
-        src_b = {i: OperandBinding(name, reg, sw) for i, name in enumerate(src_ops)}
-        dst_b = {i: OperandBinding(name, reg, dw) for i, name in enumerate(dst_ops)}
+
+        def _per_op(name: str, fallback: int) -> int:
+            # ``op_widths`` lets callers override the dtype/src_width/dst_width
+            # default per operand by name, for instructions where a single
+            # dtype-level width does not match every lane access (e.g. the
+            # 64-bit shift family takes a 32-bit shift count).  Functional-sim
+            # only distinguishes 32-bit vs 64-bit lane I/O, so narrower
+            # declared sizes still bind through the 32-bit read_lane path.
+            if op_widths is not None:
+                override = op_widths.get(name)
+                if override is not None:
+                    return 64 if override == 64 else 32
+            return fallback
+
+        src_b = {
+            i: OperandBinding(name, reg, _per_op(name, sw))
+            for i, name in enumerate(src_ops)
+        }
+        dst_b = {
+            i: OperandBinding(name, reg, _per_op(name, dw))
+            for i, name in enumerate(dst_ops)
+        }
         return OperandMap(src_bindings=src_b, dst_bindings=dst_b)
 
 

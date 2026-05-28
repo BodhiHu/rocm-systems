@@ -2618,7 +2618,7 @@ inline void execute_v_ashrrev_i64_vop3([[maybe_unused]] Inst &inst,
     inst.vdst.write_lane64(wf, lane, [&]() {
       auto v = static_cast<int64_t>(static_cast<int64_t>(inst.src1.read_lane64(wf, lane)));
       return static_cast<uint64_t>(v >>
-                                   (static_cast<int64_t>(inst.src0.read_lane64(wf, lane)) & 63u));
+                                   (static_cast<int64_t>(inst.src0.read_lane(wf, lane)) & 63u));
     }());
   }
 }
@@ -11028,7 +11028,7 @@ inline void execute_v_lshl_add_u32_vop3([[maybe_unused]] Inst &inst,
     if (!(exec & (1ULL << lane)))
       continue;
     inst.vdst.write_lane(wf, lane,
-                         ((inst.src0.read_lane(wf, lane) << inst.src1.read_lane(wf, lane)) +
+                         ((inst.src0.read_lane(wf, lane) << (inst.src1.read_lane(wf, lane) & 31u)) +
                           inst.src2.read_lane(wf, lane)));
   }
 }
@@ -11042,7 +11042,7 @@ inline void execute_v_lshl_add_u64_vop3([[maybe_unused]] Inst &inst,
       continue;
     inst.vdst.write_lane64(wf, lane,
                            ((static_cast<uint64_t>(inst.src0.read_lane64(wf, lane))
-                             << static_cast<uint64_t>(inst.src1.read_lane64(wf, lane))) +
+                             << (static_cast<uint64_t>(inst.src1.read_lane(wf, lane)) & 63u)) +
                             static_cast<uint64_t>(inst.src2.read_lane64(wf, lane))));
   }
 }
@@ -11121,7 +11121,7 @@ inline void execute_v_lshlrev_b64_vop3([[maybe_unused]] Inst &inst,
       continue;
     inst.vdst.write_lane64(wf, lane,
                            (static_cast<uint64_t>(inst.src1.read_lane64(wf, lane))
-                            << (static_cast<uint64_t>(inst.src0.read_lane64(wf, lane)) & 63u)));
+                            << (static_cast<uint64_t>(inst.src0.read_lane(wf, lane)) & 63u)));
   }
 }
 
@@ -11186,7 +11186,7 @@ inline void execute_v_lshrrev_b64_vop3([[maybe_unused]] Inst &inst,
       continue;
     inst.vdst.write_lane64(wf, lane,
                            (static_cast<uint64_t>(inst.src1.read_lane64(wf, lane)) >>
-                            (static_cast<uint64_t>(inst.src0.read_lane64(wf, lane)) & 63u)));
+                            (static_cast<uint64_t>(inst.src0.read_lane(wf, lane)) & 63u)));
   }
 }
 

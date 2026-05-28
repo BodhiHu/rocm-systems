@@ -686,6 +686,21 @@ class CodeGenerator:
                 elif 'frexp_mant_f64' in name_lower:
                     omap_kwargs['src_width'] = 64
                     omap_kwargs['dst_width'] = 64
+                # 64-bit shift family: src0 (or src1 for v_lshl_add_u64) is a
+                # 32-bit shift count.  Without per-operand widths the
+                # b64/i64/u64 dtype default forces a read_lane64 on a 32-bit
+                # operand, which can read past the operand-bound VGPR/SGPR
+                # allocation before the &63u arithmetic mask hides the high
+                # 32 bits of the result.
+                if name_lower in (
+                    'v_lshlrev_b64',
+                    'v_lshrrev_b64',
+                    'v_ashrrev_i64',
+                    'v_lshl_add_u64',
+                ):
+                    omap_kwargs['op_widths'] = {
+                        op.name: op.size for op in inst.operands
+                    }
                 omap = OperandMap.from_operand_names(
                     src_ops, dst_ops, sema_block.pragma, omap_dtype, **omap_kwargs
                 )
