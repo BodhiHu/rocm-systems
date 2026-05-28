@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 import yaml
 from scipy.stats import zscore
+from conftest import require_torch
 
 # Runtime config options
 config = {}
@@ -2784,7 +2785,6 @@ def test_iteration_multiplexing_data_types(
 
 @pytest.mark.torch_trace
 def test_torch_trace_profile(
-    require_torch,
     binary_handler_profile_rocprof_compute,
     binary_handler_analyze_rocprof_compute,
     capsys,
@@ -3121,7 +3121,7 @@ def test_torch_trace_profile(
 
 
 @pytest.mark.torch_trace
-def test_torch_trace_overhead(require_torch, binary_handler_profile_rocprof_compute):
+def test_torch_trace_overhead(binary_handler_profile_rocprof_compute):
     """
     Measure overhead introduced by --torch-trace flag.
     Compares execution time with and without the flag to ensure overhead is acceptable.
@@ -3432,7 +3432,6 @@ def test_multi_rank_no_warning_with_iteration_multiplexing(
     ],
 )
 def test_profile_invalid_workloads_torch_trace(
-    require_torch,
     binary_handler_profile_rocprof_compute,
     workload_cmd,
     expected_exit,
@@ -3537,7 +3536,6 @@ def test_profile_invalid_workloads_no_torch_trace(
 
 @pytest.mark.torch_trace
 def test_torch_trace_deep_tensor_wraps_overhead(
-    require_torch,
     binary_handler_profile_rocprof_compute,
 ):
     """Optional manual benchmark for deep tensor wrap overhead.
