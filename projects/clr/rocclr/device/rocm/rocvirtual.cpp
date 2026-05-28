@@ -160,13 +160,15 @@ static inline void logAqlBarrierPacket(const hsa_queue_t* queue, uint16_t header
                                        const hsa_barrier_and_packet_t* pkt,
                                        uint64_t rptr, uint64_t wptr,
                                        const char* prefix = "") {
+  uint16_t pktType = extractAqlBits(header, HSA_PACKET_HEADER_TYPE, HSA_PACKET_HEADER_WIDTH_TYPE);
+  const char* typeStr = (pktType == HSA_PACKET_TYPE_BARRIER_OR) ? "Barrier-OR" : "Barrier-AND";
   ClPrint(amd::LOG_DETAIL_DEBUG, amd::LOG_AQL,
-          "SWq=0x%zx, HWq=0x%zx, id=%d,%s Barrier-AND Header = "
+          "SWq=0x%zx, HWq=0x%zx, id=%d,%s %s Header = "
           "0x%x (type=%d, barrier=%d, acquire=%d, release=%d), "
           "dep_signal=[0x%zx, 0x%zx, 0x%zx, 0x%zx, 0x%zx], "
           "completion_signal=0x%zx, rptr=%lu, wptr=%lu",
-          queue, queue->base_address, queue->id, prefix, header,
-          extractAqlBits(header, HSA_PACKET_HEADER_TYPE, HSA_PACKET_HEADER_WIDTH_TYPE),
+          queue, queue->base_address, queue->id, prefix, typeStr, header,
+          pktType,
           extractAqlBits(header, HSA_PACKET_HEADER_BARRIER, HSA_PACKET_HEADER_WIDTH_BARRIER),
           extractAqlBits(header, HSA_PACKET_HEADER_SCACQUIRE_FENCE_SCOPE,
                          HSA_PACKET_HEADER_WIDTH_SCACQUIRE_FENCE_SCOPE),
