@@ -743,6 +743,12 @@ memory:
     <<: *level_2
     tags: [transfer]
   Unit_hipMemcpyBatchAsync_H2D_Functional: *level_2
+  Unit_hipMemcpyBatchAsync_H2D_Pageable_DuringApiCall_SourceAccess:
+    <<: *level_2
+    tags: [transfer]
+  Unit_hipMemcpyBatchAsync_H2D_Pageable_Stream_SourceAccess:
+    <<: *level_2
+    tags: [transfer, stream]
   Unit_hipMemcpyBatchAsync_D2H_Functional: *level_2
   Unit_hipMemcpyBatchAsync_H2H_Functional: *level_2
   Unit_hipMemcpyBatchAsync_Mixed_Functional:

@@ -134,12 +134,12 @@ void FillDeviceBuffers(const std::vector<void *> &ptrs, size_t copy_size,
 }
 
 void FillHostBuffers(std::vector<LinearAllocGuard<int>> &buffers,
-                     size_t copy_size) {
+                     size_t copy_size, int value = kPatternValue) {
   const size_t copy_elements = CopyElements(copy_size);
 
   for (size_t i = 0; i < buffers.size(); ++i) {
     std::fill_n(buffers[i].host_ptr(), copy_elements,
-                kPatternValue + static_cast<int>(i));
+                value + static_cast<int>(i));
   }
 }
 
@@ -177,12 +177,12 @@ void VerifyDeviceBuffers(const std::vector<void *> &ptrs, size_t copy_size,
 }
 
 void VerifyHostBuffers(std::vector<LinearAllocGuard<int>> &buffers,
-                       size_t copy_size) {
+                       size_t copy_size, int expected = kPatternValue) {
   const size_t copy_elements = CopyElements(copy_size);
 
   for (size_t i = 0; i < buffers.size(); ++i) {
     VerifyArrayFromBothEnds(buffers[i].host_ptr(), copy_elements,
-                            kPatternValue + static_cast<int>(i), i);
+                            expected + static_cast<int>(i), i);
   }
 }
 
@@ -587,6 +587,93 @@ HIP_TEST_CASE(Unit_hipMemcpyBatchAsync_H2D_Functional) {
   HIP_CHECK(hipStreamSynchronize(nullptr));
 
   VerifyDeviceBuffers(dst_ptrs, copy_size);
+}
+
+/**
+ * Test Description
+ * ------------------------
+ * - Verifies that pageable H2D source access is complete before
+ * hipMemcpyBatchAsync returns when srcAccessOrder is DuringApiCall.
+ * Test source
+ * ------------------------
+ * - catch/unit/memory/hipMemcpyBatchAsync.cc
+ * Test requirements
+ * ------------------------
+ *  - HIP_VERSION >= 7.1
+ */
+HIP_TEST_CASE(
+    Unit_hipMemcpyBatchAsync_H2D_Pageable_DuringApiCall_SourceAccess) {
+  constexpr size_t copy_count = 8;
+  constexpr size_t copy_size = kLargeCopySize;
+  constexpr int kOriginalValue = 17;
+  constexpr int kAlteredValue = 23;
+  BatchConfig config{copy_count, copy_size};
+  std::vector<LinearAllocGuard<int>> src =
+      AllocateBatchBuffers(LinearAllocs::malloc, config);
+  std::vector<LinearAllocGuard<int>> dst =
+      AllocateBatchBuffers(LinearAllocs::hipMalloc, config);
+  std::vector<void *> src_ptrs = MakeBatchPtrs(src);
+  std::vector<void *> dst_ptrs = MakeBatchPtrs(dst);
+  std::vector<size_t> sizes(config.copy_count, config.copy_size);
+  size_t attrs_idxs[1] = {0};
+  hipMemcpyAttributes attr{
+      hipMemcpySrcAccessOrderDuringApiCall, {}, {}, hipMemcpyFlagDefault};
+
+  FillHostBuffers(src, copy_size, kOriginalValue);
+
+  HIP_CHECK(hipMemcpyBatchAsync(dst_ptrs.data(), src_ptrs.data(), sizes.data(),
+                                copy_count, &attr, attrs_idxs, 1, nullptr,
+                                nullptr));
+  FillHostBuffers(src, copy_size, kAlteredValue);
+  HIP_CHECK(hipStreamSynchronize(nullptr));
+  VerifyHostBuffers(src, copy_size, kAlteredValue);
+}
+
+/**
+ * Test Description
+ * ------------------------
+ * - Verifies that pageable H2D source access observes previous same-stream
+ * writes to the source when srcAccessOrder is Stream.
+ * Test source
+ * ------------------------
+ * - catch/unit/memory/hipMemcpyBatchAsync.cc
+ * Test requirements
+ * ------------------------
+ *  - HIP_VERSION >= 7.1
+ */
+HIP_TEST_CASE(Unit_hipMemcpyBatchAsync_H2D_Pageable_Stream_SourceAccess) {
+  constexpr size_t copy_count = 1;
+  size_t copy_size = GENERATE(kSmallCopySize, kLargeCopySize);
+  constexpr int kInitialValue = 31;
+  constexpr int kStreamProducedValue = 47;
+  BatchConfig config{copy_count, copy_size};
+  StreamGuard stream_guard(Streams::created);
+  std::vector<LinearAllocGuard<int>> producer =
+      AllocateBatchBuffers(LinearAllocs::hipMalloc, config);
+  std::vector<LinearAllocGuard<int>> src =
+      AllocateBatchBuffers(LinearAllocs::malloc, config);
+  std::vector<LinearAllocGuard<int>> dst =
+      AllocateBatchBuffers(LinearAllocs::hipMalloc, config);
+  std::vector<void *> src_ptrs = MakeBatchPtrs(src);
+  std::vector<void *> dst_ptrs = MakeBatchPtrs(dst);
+  std::vector<size_t> sizes(config.copy_count, config.copy_size);
+  size_t attrs_idxs[1] = {0};
+  hipMemcpyAttributes attr{
+      hipMemcpySrcAccessOrderStream, {}, {}, hipMemcpyFlagDefault};
+
+  FillDeviceBuffers(MakeBatchPtrs(producer), copy_size, kStreamProducedValue);
+  FillHostBuffers(src, copy_size, kInitialValue);
+
+  for (size_t i = 0; i < copy_count; ++i) {
+    HIP_CHECK(hipMemcpyAsync(src_ptrs[i], producer[i].ptr(), copy_size,
+                             hipMemcpyDeviceToHost, stream_guard.stream()));
+  }
+  HIP_CHECK(hipMemcpyBatchAsync(dst_ptrs.data(), src_ptrs.data(), sizes.data(),
+                                copy_count, &attr, attrs_idxs, 1, nullptr,
+                                stream_guard.stream()));
+  HIP_CHECK(hipStreamSynchronize(stream_guard.stream()));
+
+  VerifyDeviceBuffers(dst_ptrs, copy_size, kStreamProducedValue);
 }
 
 /**

@@ -7,6 +7,8 @@
 #include "memcpy_performance_common.hh"
 
 #include <cstring>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -53,7 +55,7 @@ size_t AlignUp(size_t value, size_t alignment) {
 class MemcpyBatchAsync : public Benchmark<MemcpyBatchAsync> {
 public:
   void operator()(void **dsts, void **srcs, size_t *sizes, size_t count,
-                  bool prefer_ce) {
+                  bool prefer_ce, hipStream_t stream) {
     size_t attrs_idxs[1] = {0};
     hipMemcpyAttributes attr{};
     attr.srcAccessOrder = hipMemcpySrcAccessOrderStream;
@@ -62,24 +64,71 @@ public:
     size_t *attr_indices = prefer_ce ? attrs_idxs : nullptr;
     const size_t num_attrs = prefer_ce ? 1 : 0;
 
-    TIMED_SECTION(kTimerTypeCpu) {
+    TIMED_SECTION_STREAM(kTimerTypeCpu, stream) {
       HIP_CHECK(hipMemcpyBatchAsync(dsts, srcs, sizes, count, attrs,
-                                    attr_indices, num_attrs, nullptr, nullptr));
+                                    attr_indices, num_attrs, nullptr, stream));
     }
   }
 };
 
-void RunDeviceToDeviceBenchmark(size_t copy_size, size_t batch_copy_count,
-                                size_t allocation_alignment, bool prefer_ce,
-                                PointerPattern pointer_pattern) {
-  MemcpyBatchAsync benchmark;
+class MemcpySequentialAsync : public Benchmark<MemcpySequentialAsync> {
+public:
+  void operator()(void **dsts, void **srcs, size_t *sizes, size_t count,
+                  hipMemcpyKind kind, hipStream_t stream) {
+    TIMED_SECTION_STREAM(kTimerTypeCpu, stream) {
+      for (size_t i = 0; i < count; ++i) {
+        HIP_CHECK(hipMemcpyAsync(dsts[i], srcs[i], sizes[i], kind, stream));
+      }
+    }
+  }
+};
+
+template <typename BenchmarkType>
+void AddCommonSectionNames(BenchmarkType &benchmark, size_t copy_size,
+                           size_t batch_copy_count,
+                           size_t allocation_alignment,
+                           PointerPattern pointer_pattern) {
   benchmark.AddSectionName(std::to_string(allocation_alignment) +
                            "-byte aligned");
   benchmark.AddSectionName(GetPointerPatternSectionName(pointer_pattern));
   benchmark.AddSectionName(GetSizeSectionName(copy_size));
   benchmark.AddSectionName(std::to_string(batch_copy_count) + " copies");
   benchmark.RegisterBandwidth(copy_size * batch_copy_count);
+}
 
+std::string FormatSpeedupRatio(float batch_mean, float sequential_mean) {
+  std::ostringstream ratio;
+  ratio << std::fixed << std::setprecision(2) << sequential_mean / batch_mean;
+  return ratio.str();
+}
+
+void RunComparison(void **dsts, void **srcs, size_t *sizes, size_t count,
+                   size_t copy_size, size_t batch_copy_count,
+                   size_t allocation_alignment, bool prefer_ce,
+                   PointerPattern pointer_pattern, hipMemcpyKind kind) {
+  const StreamGuard stream_guard{Streams::created};
+  const hipStream_t stream = stream_guard.stream();
+
+  MemcpySequentialAsync sequential_benchmark;
+  sequential_benchmark.SetDisplayOutput(false);
+  const auto sequential_stats =
+      sequential_benchmark.Run(dsts, srcs, sizes, count, kind, stream);
+  const float sequential_mean = std::get<0>(sequential_stats);
+
+  MemcpyBatchAsync batch_benchmark;
+  AddCommonSectionNames(batch_benchmark, copy_size, batch_copy_count,
+                        allocation_alignment, pointer_pattern);
+  batch_benchmark.RegisterStatsSuffix(
+      [sequential_mean](float batch_mean) {
+        return " Ratio " + FormatSpeedupRatio(batch_mean, sequential_mean) +
+               "x";
+      });
+  batch_benchmark.Run(dsts, srcs, sizes, count, prefer_ce, stream);
+}
+
+void RunDeviceToDeviceBenchmark(size_t copy_size, size_t batch_copy_count,
+                                size_t allocation_alignment, bool prefer_ce,
+                                PointerPattern pointer_pattern) {
   const size_t stride = AlignUp(copy_size, allocation_alignment);
   const size_t offset_bytes =
       pointer_pattern == PointerPattern::UnalignedPointers ? 1 : 0;
@@ -101,21 +150,14 @@ void RunDeviceToDeviceBenchmark(size_t copy_size, size_t batch_copy_count,
     dsts[i] = dst_allocation.ptr() + offset_bytes + (i * stride);
   }
 
-  benchmark.Run(dsts.data(), srcs.data(), sizes.data(), sizes.size(),
-                prefer_ce);
+  RunComparison(dsts.data(), srcs.data(), sizes.data(), sizes.size(),
+                copy_size, batch_copy_count, allocation_alignment, prefer_ce,
+                pointer_pattern, hipMemcpyDeviceToDevice);
 }
 
 void RunPeerToPeerBenchmark(size_t copy_size, size_t batch_copy_count,
                             size_t allocation_alignment, bool prefer_ce,
                             PointerPattern pointer_pattern) {
-  MemcpyBatchAsync benchmark;
-  benchmark.AddSectionName(std::to_string(allocation_alignment) +
-                           "-byte aligned");
-  benchmark.AddSectionName(GetPointerPatternSectionName(pointer_pattern));
-  benchmark.AddSectionName(GetSizeSectionName(copy_size));
-  benchmark.AddSectionName(std::to_string(batch_copy_count) + " copies");
-  benchmark.RegisterBandwidth(copy_size * batch_copy_count);
-
   const size_t stride = AlignUp(copy_size, allocation_alignment);
   const size_t offset_bytes =
       pointer_pattern == PointerPattern::UnalignedPointers ? 1 : 0;
@@ -143,8 +185,9 @@ void RunPeerToPeerBenchmark(size_t copy_size, size_t batch_copy_count,
   }
 
   HIP_CHECK(hipSetDevice(src_device));
-  benchmark.Run(dsts.data(), srcs.data(), sizes.data(), sizes.size(),
-                prefer_ce);
+  RunComparison(dsts.data(), srcs.data(), sizes.data(), sizes.size(),
+                copy_size, batch_copy_count, allocation_alignment, prefer_ce,
+                pointer_pattern, hipMemcpyDeviceToDevice);
 }
 
 void RunHostDeviceBenchmark(size_t copy_size, size_t batch_copy_count,
@@ -152,14 +195,6 @@ void RunHostDeviceBenchmark(size_t copy_size, size_t batch_copy_count,
                             LinearAllocs src_allocation_type,
                             LinearAllocs dst_allocation_type, bool prefer_ce,
                             PointerPattern pointer_pattern) {
-  MemcpyBatchAsync benchmark;
-  benchmark.AddSectionName(std::to_string(allocation_alignment) +
-                           "-byte aligned");
-  benchmark.AddSectionName(GetPointerPatternSectionName(pointer_pattern));
-  benchmark.AddSectionName(GetSizeSectionName(copy_size));
-  benchmark.AddSectionName(std::to_string(batch_copy_count) + " copies");
-  benchmark.RegisterBandwidth(copy_size * batch_copy_count);
-
   const size_t stride = AlignUp(copy_size, allocation_alignment);
   const size_t offset_bytes =
       pointer_pattern == PointerPattern::UnalignedPointers ? 1 : 0;
@@ -185,8 +220,12 @@ void RunHostDeviceBenchmark(size_t copy_size, size_t batch_copy_count,
     dsts[i] = dst_allocation.ptr() + offset_bytes + (i * stride);
   }
 
-  benchmark.Run(dsts.data(), srcs.data(), sizes.data(), sizes.size(),
-                prefer_ce);
+  const hipMemcpyKind kind = src_allocation_type == LinearAllocs::hipMalloc
+                                 ? hipMemcpyDeviceToHost
+                                 : hipMemcpyHostToDevice;
+  RunComparison(dsts.data(), srcs.data(), sizes.data(), sizes.size(),
+                copy_size, batch_copy_count, allocation_alignment, prefer_ce,
+                pointer_pattern, kind);
 }
 
 } // namespace
