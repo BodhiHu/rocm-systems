@@ -226,7 +226,10 @@ def generate_machine_specs(
     specs.num_dies = mi_gpu_specs.get_num_dies(specs.gpu_arch, specs.gpu_model)
 
     specs.cache_sizes = set_cache_sizes(
-        gpu_info["num_compute_units"], gpu_info["gpu_cache_info"], specs.num_dies
+        soc_info["gpu_arch"],
+        gpu_info["num_compute_units"],
+        gpu_info["gpu_cache_info"],
+        specs.num_dies,
     )
 
     return specs
@@ -945,7 +948,9 @@ def totall2_banks(
     return None
 
 
-def set_cache_sizes(num_cu: int, cache_info: dict, num_dies: int) -> dict[str, int]:
+def set_cache_sizes(
+    gpu_arch: str, num_cu: int, cache_info: dict, num_dies: int
+) -> dict[str, int]:
     """
     Extrapolate the cache sizes for AMD-SMI cache info output
     """
@@ -954,7 +959,7 @@ def set_cache_sizes(num_cu: int, cache_info: dict, num_dies: int) -> dict[str, i
     if not cache_info:
         console_error("Failed to retrieve GPU cache information from AMD-SMI.")
 
-    cache_sizes = {}
+    cache_sizes = {"L0": 0, "L1": 0, "L2": 0, "MALL": 0}
     for cache_values in cache_info["cache"]:
         # Cache level is L1 and we are looking for vL1d which means
         # there should be a cache instance per CU available on the GPU
@@ -962,7 +967,10 @@ def set_cache_sizes(num_cu: int, cache_info: dict, num_dies: int) -> dict[str, i
             cache_values["cache_level"] == 1
             and cache_values["num_cache_instance"] == num_cu
         ):
-            cache_sizes["L1"] = cache_values["cache_size"] * 1024
+            if gpu_arch in ["gfx908", "gfx90a", "gfx940", "gfx941", "gfx942", "gfx950"]:
+                cache_sizes["L1"] = cache_values["cache_size"] * 1024
+            else:
+                cache_sizes["L0"] = cache_values["cache_size"] * 1024
         # Cache levels L2 and L3/MALL are shared across all CUs
         # therefore only have one cache instance
         elif cache_values["cache_level"] == 2:

@@ -20,6 +20,7 @@ from utils.logger import (
     demarcate,
 )
 from utils.roofline_calc import (
+    CACHE_HIERARCHY,
     MATRIX_DATATYPES,
     PEAK_OPS_DATATYPES,
     SUPPORTED_DATATYPES,
@@ -346,13 +347,14 @@ class Roofline:
 
                 plot_points_data = []
                 cache_colors = {
+                    "ai_l0": "brown",
                     "ai_l1": "blue",
                     "ai_l2": "green",
                     "ai_hbm": "red",
                     "ai_lds": "orange",
                 }
 
-                for cache_level in ["ai_l1", "ai_l2", "ai_hbm"]:
+                for cache_level in ["ai_l0", "ai_l1", "ai_l2", "ai_hbm"]:
                     if cache_level in self.__ai_data:
                         x_vals = self.__ai_data[cache_level][0]
                         y_vals = self.__ai_data[cache_level][1]
@@ -466,6 +468,23 @@ class Roofline:
             kernel_names = self.__ai_data.get("kernelNames", [])
             symbols_list = [SYMBOLS[i % len(SYMBOLS)] for i in range(len(kernel_names))]
             show_in_legend = not self.__run_parameters["is_standalone"]
+            if self.__ai_data["ai_l0"][0]:
+                fig.add_trace(
+                    go.Scatter(
+                        x=self.__ai_data["ai_l0"][0],
+                        y=self.__ai_data["ai_l0"][1],
+                        name="L1",
+                        mode="markers",
+                        marker=dict(
+                            color="blue",
+                            size=10,
+                            symbol=symbols_list[: len(self.__ai_data["ai_l0"][0])],
+                        ),
+                        showlegend=show_in_legend,
+                    ),
+                    **subplot_kwargs,
+                )
+
             if self.__ai_data["ai_l1"][0]:
                 fig.add_trace(
                     go.Scatter(
@@ -522,7 +541,7 @@ class Roofline:
         #######################
         mem_level_config = self.__run_parameters.get("mem_level", "ALL")
         cache_hierarchy = (
-            ["HBM", "L2", "L1", "LDS"]
+            CACHE_HIERARCHY[self.__run_parameters["gpu_arch"]]
             if mem_level_config == "ALL" or mem_level_config == ["ALL"]
             else (
                 mem_level_config
@@ -1052,6 +1071,8 @@ class Roofline:
 
         self.__ai_data = ai_data
 
+        print(f"ai_data:\n{self.__ai_data}")
+
         workload_dir = self.__run_parameters.get("workload_dir", "")
         if not (Path(workload_dir) / "roofline.csv").is_file():
             console_log(
@@ -1063,6 +1084,8 @@ class Roofline:
         self.__ceiling_data = construct_roof(
             roofline_parameters=self.__run_parameters, dtype=dtype
         )
+
+        print(f"ceiling data:\n{self.__ceiling_data}")
 
         self.roof_setup()
 
@@ -1078,6 +1101,7 @@ class Roofline:
             "HBM": "blue+",
             "L2": "green+",
             "L1": "red+",
+            "L0": "brown+",
             "LDS": "orange+",
             "VALU": "white",
             "Matrix": "magenta+",
@@ -1099,13 +1123,14 @@ class Roofline:
 
         # Plot bandwidth lines
         cache_hierarchy = (
-            ["HBM", "L2", "L1", "LDS"]
+            CACHE_HIERARCHY[self.__run_parameters["gpu_arch"]]
             if mem_level == "ALL" or mem_level == ["ALL"]
             else mem_level
         )
 
         for cache_level in cache_hierarchy:
             cache_key = cache_level.lower()
+            print(f"cache key: {cache_key}")
             if self.__ceiling_data[cache_key][0] is None:
                 continue
             plt.plot(
@@ -1133,13 +1158,18 @@ class Roofline:
             )
 
         # Plot VALU and Matrix Ops Peak
-        if dtype in PEAK_OPS_DATATYPES and self.__ceiling_data["valu"][0] is not None:
+        if (
+            dtype in PEAK_OPS_DATATYPES
+            and self.__ceiling_data["valu"]
+            and self.__ceiling_data["valu"][0] is not None
+        ):
+            valu_y = [
+                max(self.__ceiling_data["valu"][1][0] - 0.1, 1e-9),
+                max(self.__ceiling_data["valu"][1][1] - 0.1, 1e-9),
+            ]
             plt.plot(
                 self.__ceiling_data["valu"][0],
-                [
-                    self.__ceiling_data["valu"][1][0] - 0.1,
-                    self.__ceiling_data["valu"][1][1] - 0.1,
-                ],
+                valu_y,
                 label=f"Peak VALU-{dtype}",
                 marker="braille",
                 color=color_scheme["VALU"],
@@ -1165,17 +1195,19 @@ class Roofline:
 
         if (
             dtype in MATRIX_DATATYPES
+            and self.__ceiling_data["matrix_ops"]
             and self.__ceiling_data["matrix_ops"][0] is not None
         ):
             matrix_ops_type = get_matrix_ops_type(
                 getattr(self.__mspec, "gpu_series", "unknown_series")
             )
+            matrix_y = [
+                max(self.__ceiling_data["matrix_ops"][1][0] - 0.1, 1e-9),
+                max(self.__ceiling_data["matrix_ops"][1][1] - 0.1, 1e-9),
+            ]
             plt.plot(
                 self.__ceiling_data["matrix_ops"][0],
-                [
-                    self.__ceiling_data["matrix_ops"][1][0] - 0.1,
-                    self.__ceiling_data["matrix_ops"][1][1] - 0.1,
-                ],
+                matrix_y,
                 label=f"Peak {matrix_ops_type}-{dtype}",
                 marker="braille",
                 color=color_scheme["Matrix"],
@@ -1207,26 +1239,27 @@ class Roofline:
 
             kernel_names = self.__ai_data.get("kernelNames", [])
             for i in range(len(self.__ai_data.get("kernelNames", []))):
-                # Zero intensity level means no data reported for this cache level
-                if self.__ai_data[key][0][i] > 0 and self.__ai_data[key][1][i] > 0:
-                    plt.plot(
-                        [self.__ai_data[key][0][i]],
-                        [self.__ai_data[key][1][i]],
-                        label=f"AI_{cache_level}_{kernel_names[i][:40]}",
-                        color=color_scheme[cache_level],
-                        marker=kernel_markers[i % len(kernel_markers)],
+                if self.__ai_data[key]:
+                    # Zero intensity level means no data reported for this cache level
+                    if self.__ai_data[key][0][i] > 0 and self.__ai_data[key][1][i] > 0:
+                        plt.plot(
+                            [self.__ai_data[key][0][i]],
+                            [self.__ai_data[key][1][i]],
+                            label=f"AI_{cache_level}_{kernel_names[i][:40]}",
+                            color=color_scheme[cache_level],
+                            marker=kernel_markers[i % len(kernel_markers)],
+                        )
+                    val1 = (
+                        self.__ai_data[key][0][i]
+                        if i < len(self.__ai_data[key][0])
+                        else "N/A"
                     )
-                val1 = (
-                    self.__ai_data[key][0][i]
-                    if i < len(self.__ai_data[key][0])
-                    else "N/A"
-                )
-                val2 = (
-                    self.__ai_data[key][1][i]
-                    if i < len(self.__ai_data[key][1])
-                    else "N/A"
-                )
-                console_debug("roofline", f"AI_{kernel_names[i]}: {val1}, {val2}")
+                    val2 = (
+                        self.__ai_data[key][1][i]
+                        if i < len(self.__ai_data[key][1])
+                        else "N/A"
+                    )
+                    console_debug("roofline", f"AI_{kernel_names[i]}: {val1}, {val2}")
         plt.xlabel(f"Arithmetic Intensity ({ops_flops}s/Byte)")
         plt.ylabel("Performance (GFLOP/sec)")
         wdir = self.__run_parameters.get("workload_dir", "")

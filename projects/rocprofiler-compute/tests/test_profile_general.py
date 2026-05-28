@@ -1446,6 +1446,8 @@ def test_roofline_plot_points_data_generation():
     - Performance values (GFLOPs/s)
     - Memory/Compute bound status
     - Cache level information
+
+    Simulates a CDNA4 roofline run- has HMB, L1, and L2 cache levels.
     """
     skip_unsupported_roofline_soc()
 
@@ -1546,6 +1548,7 @@ def test_roofline_bound_status_calculation():
     """
     Test _determine_kernel_bound_status() correctly classifies kernels as
     Memory Bound or Compute Bound based on their AI and performance vs ceilings.
+    Simulates a CDNA4 roofline run- has HBM, valu, and matrix ops.
     """
     skip_unsupported_roofline_soc()
 
