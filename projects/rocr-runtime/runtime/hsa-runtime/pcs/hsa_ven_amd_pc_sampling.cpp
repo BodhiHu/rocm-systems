@@ -166,10 +166,12 @@ hsa_status_t hsa_ven_amd_pcs_get_capabilities(hsa_agent_t hsa_agent, uint64_t* c
 
   *capabilities = 0;
 
-  // Set multithreaded callback capability flag if device has more than one XCC
-  if (gpu_agent->properties().NumXcc > 1) {
-    *capabilities |= HSA_VEN_AMD_PCS_CAPABILITY_MULTITHREADED_CALLBACKS;
-  }
+  // Callbacks can be invoked from multiple threads: the internal consumer thread
+  // and any client thread calling hsa_ven_amd_pcs_flush. While delivery is serialized
+  // (callbacks don't run concurrently), they can originate from different threads.
+  // Always set this flag so clients know to use thread-safe callback implementations.
+  (void)gpu_agent;  // NumXcc no longer affects this flag
+  *capabilities |= HSA_VEN_AMD_PCS_CAPABILITY_MULTITHREADED_CALLBACKS;
 
   return HSA_STATUS_SUCCESS;
   CATCH;
