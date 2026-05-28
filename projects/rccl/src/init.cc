@@ -1074,6 +1074,7 @@ fail:
 #endif
 static void showVersion() {
   char versionInfo[2048+2*HOST_NAME_MAX], hostInfo[HOST_NAME_MAX], libPathInfo[2048];
+  char runtimeInfo[256] = {0};
 
   // Retrieve Hostname info
   if (gethostname(hostInfo, sizeof(hostInfo)-1) != 0) {
@@ -1090,10 +1091,35 @@ static void showVersion() {
     strncpy(libPathInfo, "Unknown", sizeof(libPathInfo)-1);
   }
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  // Append HIP/ROCm runtime versions if they differ from the compile-time versions.
+  // Compile-time HIP_VERSION = MAJOR*10000000 + MINOR*100000 + PATCH (see hip/hip_version.h).
+  int hipRuntimeVer = 0;
+  char hipRuntimeStr[64] = {0};
+  if (hipRuntimeGetVersion(&hipRuntimeVer) == hipSuccess && hipRuntimeVer != HIP_VERSION) {
+    snprintf(hipRuntimeStr, sizeof(hipRuntimeStr),
+             "\nHIP runtime  : %d.%d.%d",
+             hipRuntimeVer / 10000000, (hipRuntimeVer / 100000) % 100, hipRuntimeVer % 100000);
+  }
+
+  char rocmRuntimeStr[64] = {0};
+#if ROCM_VERSION >= 60000
+  // getROCmVersion() is provided by librocm-core (linked via rocm-core target).
+  unsigned int rocmMajor = 0, rocmMinor = 0, rocmPatch = 0;
+  if (getROCmVersion(&rocmMajor, &rocmMinor, &rocmPatch) == VerSuccess &&
+      (rocmMajor != ROCM_VERSION_MAJOR || rocmMinor != ROCM_VERSION_MINOR || rocmPatch != ROCM_VERSION_PATCH)) {
+    snprintf(rocmRuntimeStr, sizeof(rocmRuntimeStr),
+             "\nROCm runtime : %u.%u.%u", rocmMajor, rocmMinor, rocmPatch);
+  }
+#endif
+
+  snprintf(runtimeInfo, sizeof(runtimeInfo), "%s%s", hipRuntimeStr, rocmRuntimeStr);
+#endif
+
   snprintf(versionInfo, sizeof(versionInfo),
-    "%s-%s\n%s\n"
+    "%s-%s\n%s%s\n"
     "%-12s : %s\n%12s : %s",
-    VERSION_STRING, rcclGitHash, VERSION_STRING_EXTENDED,
+    VERSION_STRING, rcclGitHash, VERSION_STRING_EXTENDED, runtimeInfo,
     "Hostname", hostInfo, "Librccl path", libPathInfo
   );
 
