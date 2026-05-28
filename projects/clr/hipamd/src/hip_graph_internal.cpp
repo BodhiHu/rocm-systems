@@ -1169,8 +1169,8 @@ void GraphExec::PrecomputeStreamAssignment() {
   for (auto& seg : segments_) {
     seg.needs_completion_signal = false;
     if (seg.segment_ids_edges.empty()) {
-      // Leaf segments need a signal when there are multiple leaves so
-      // EnqueueSegmentedGraph can sync every leaf back to the launch stream.
+      // Leaf segments need a completion signal so EnqueueSegmentedGraph can
+      // sync them back to the launch stream via graph_accumulate dep_signals.
       if (leaf_sync_required) {
         seg.needs_completion_signal = true;
       }
@@ -1414,8 +1414,8 @@ hipError_t GraphExec::CaptureAndFormPacketsForGraph() {
     bool first_node_is_uncaptured = !segment.nodes.empty() &&
                                     !segment.nodes[0]->GraphCaptureEnabled();
 
-    // If the first node is non-capturable, create a leading empty batch so
-    // BuildSyncPlan can prepend dependency barriers that execute before it
+    // Leading empty batch: gives BuildSyncPlan a slot to prepend the cross-dep
+    // BARRIER_AND so it physically precedes the uncaptured node's GPU commands.
     if (first_node_is_uncaptured) {
       currentSegBatch.packet_batches.emplace_back();
     }
@@ -1486,10 +1486,8 @@ hipError_t GraphExec::CaptureAndFormPacketsForGraph() {
       }
     }
 
-    // If the last node is non-captured, always create a dedicated trailing
-    // PacketBatch for the completion barrier. This must be separate from the
-    // leading batch (which holds dep barriers) to avoid the completion signal
-    // firing before uncaptured nodes execute.
+    // Trailing empty batch: separate slot for the completion barrier so it
+    // cannot fire before the uncaptured last node's commands finish.
     bool last_node_uncaptured = currentSegBatch.has_uncaptured_nodes &&
         !segment.nodes.empty() && !currentSegBatch.node_capture_status.back();
     if (last_node_uncaptured) {
@@ -2036,11 +2034,8 @@ hipError_t GraphExec::EnqueueSegment(const Segment& segment, hip::Stream* stream
     return hipSuccess;
   }
 
-  // If the first node is uncaptured, dispatch the leading PacketBatch
-  // (cross-dep barriers parked by BuildSyncPlan) BEFORE the node so the
-  // cross-dep wait physically precedes the node's own AQL packet. Without
-  // this the node's packet could fire on in-order semantics alone and
-  // appear to complete before cross-stream deps are satisfied.
+  // Dispatch the leading batch (cross-dep barrier from BuildSyncPlan) before
+  // the uncaptured first node so the AQL barrier precedes its GPU commands.
   if (segBatch && !segBatch->node_capture_status.empty() &&
       !segBatch->node_capture_status[0] &&
       batchIndex < segBatch->packet_batches.size()) {
