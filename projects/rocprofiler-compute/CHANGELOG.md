@@ -2,6 +2,25 @@
 
 Full documentation for ROCm Compute Profiler is available at [https://rocm.docs.amd.com/projects/rocprofiler-compute/en/latest/](https://rocm.docs.amd.com/projects/rocprofiler-compute/en/latest/).
 
+## Unreleased
+
+### Added
+
+* Added Roofline profiling and analysis support for gfx1151 architecture
+  * gfx11 supports Wave Matrix Multiply Accumulate (WMMA), replacing MFMA operations
+
+### Changed
+
+### Removed
+
+### Optimized
+
+### Resolved issues
+
+### Upcoming changes
+
+### Known issues
+
 ## ROCm Compute Profiler 3.7.0 for ROCm 7.14.0
 
 ### Added

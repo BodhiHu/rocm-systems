@@ -1085,8 +1085,6 @@ class Roofline:
             roofline_parameters=self.__run_parameters, dtype=dtype
         )
 
-        print(f"ceiling data:\n{self.__ceiling_data}")
-
         self.roof_setup()
 
         # Check proper datatype input - takes single str
@@ -1130,7 +1128,6 @@ class Roofline:
 
         for cache_level in cache_hierarchy:
             cache_key = cache_level.lower()
-            print(f"cache key: {cache_key}")
             if self.__ceiling_data[cache_key][0] is None:
                 continue
             plt.plot(
