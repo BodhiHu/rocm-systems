@@ -54,6 +54,7 @@ add_executable(
     v_add_simd_benchmark.cpp
     vop1_cvt_f64_scalar_correctness_test.cpp
     vopc_cmp_class_scalar_correctness_test.cpp
+    vop3_shift64_scalar_correctness_test.cpp
     execution_plugin_test.cpp
 )
 target_link_libraries(
