@@ -255,16 +255,16 @@ int ualoe_nl_open(const char* name, ualoe_handle_t* handle) {
   rc = ualoe_nl_connect(nl_handle, name);
   if (rc) goto free_socket;
 
-  pthread_mutex_lock(&handle_lock);
-  LIST_INSERT_HEAD(&open_handles, nl_handle, lentry);
-  pthread_mutex_unlock(&handle_lock);
-
   /**
    * For now, keep cdev fd for ioctl calls until netlink support is
    * added for all operations.
    */
   rc = ualoe_cdev_open(name, &nl_handle->cdev_fd);
   if (rc) goto free_socket;
+
+  pthread_mutex_lock(&handle_lock);
+  LIST_INSERT_HEAD(&open_handles, nl_handle, lentry);
+  pthread_mutex_unlock(&handle_lock);
 
   *handle = nl_handle->fd;
 
