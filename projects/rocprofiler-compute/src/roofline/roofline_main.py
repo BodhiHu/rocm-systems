@@ -145,6 +145,18 @@ class Roofline:
         else:
             return "Compute Bound"
 
+    def l0_l1_label_workaround(self, label: str) -> str:
+        """
+        On gfx1151 the benchmark reports L0 cache and L1 buffer; remap L0 to L1
+            for displaying on the roofline plots. Goal is to not confuse users by
+            keeping the cache level labels consistent, despite differing hardware
+            block layouts between gfx9 and gfx10+ (gfx10+ renamed GL1->GL0 and
+            introduced a GL1 intermediate buffer).
+        """
+        if self.__mspec.gpu_arch == "gfx1151" and label == "L0":
+            return "L1"
+        return label
+
     @demarcate
     def construct_plotly_figures(
         self, ai_data: dict[str, Any]
@@ -468,12 +480,12 @@ class Roofline:
             kernel_names = self.__ai_data.get("kernelNames", [])
             symbols_list = [SYMBOLS[i % len(SYMBOLS)] for i in range(len(kernel_names))]
             show_in_legend = not self.__run_parameters["is_standalone"]
-            if self.__ai_data["ai_l0"][0]:
+            if self.__ai_data["ai_l0"][0] and self.__mspec.gpu_arch == "gfx1151":
                 fig.add_trace(
                     go.Scatter(
                         x=self.__ai_data["ai_l0"][0],
                         y=self.__ai_data["ai_l0"][1],
-                        name="L1",
+                        name="L1",  # replacing L0 with L1
                         mode="markers",
                         marker=dict(
                             color="blue",
@@ -485,7 +497,7 @@ class Roofline:
                     **subplot_kwargs,
                 )
 
-            if self.__ai_data["ai_l1"][0]:
+            if self.__ai_data["ai_l1"][0] and self.__mspec.gpu_arch != "gfx1151":
                 fig.add_trace(
                     go.Scatter(
                         x=self.__ai_data["ai_l1"][0],
@@ -1131,7 +1143,7 @@ class Roofline:
             plt.plot(
                 self.__ceiling_data[cache_key][0],
                 self.__ceiling_data[cache_key][1],
-                label=f"{cache_level}-{dtype}",
+                label=f"{self.l0_l1_label_workaround(cache_level)}-{dtype}",
                 marker="braille",
                 color=color_scheme[cache_level],
             )
@@ -1239,7 +1251,7 @@ class Roofline:
                     plt.plot(
                         [self.__ai_data[key][0][i]],
                         [self.__ai_data[key][1][i]],
-                        label=f"AI_{cache_level}_{kernel_names[i][:40]}",
+                        label=f"AI_{self.l0_l1_label_workaround(cache_level)}_{kernel_names[i][:40]}",
                         color=color_scheme[cache_level],
                         marker=kernel_markers[i % len(kernel_markers)],
                     )
