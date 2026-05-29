@@ -178,12 +178,12 @@ int ualoe_cdev_close(ualoe_handle_t handle) {
   int rc;
 
   rc = ualoe_cdev_find_handle(handle, &cdev_handle);
-  if (!rc) {
-    pthread_mutex_lock(&cdev_handle_lock);
-    LIST_REMOVE(cdev_handle, lentry);
-    pthread_mutex_unlock(&cdev_handle_lock);
-    free(cdev_handle);
-  }
+  if (rc) return rc;
+
+  pthread_mutex_lock(&cdev_handle_lock);
+  LIST_REMOVE(cdev_handle, lentry);
+  pthread_mutex_unlock(&cdev_handle_lock);
+  free(cdev_handle);
 
   ualoe_cb_fini(handle);
 
