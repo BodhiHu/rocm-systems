@@ -1425,7 +1425,11 @@ hsa_status_t Runtime::IPCCreate(void* ptr, size_t len, hsa_amd_ipc_memory_t* han
     // Release the imported BO handle immediately after setting metadata.
     // Using hsaKmtMemHandleFreePreserveMetadata instead of hsaKmtMemHandleFree
     // to preserve metadata for later IPC attach operations.
-    HSAKMT_CALL(hsaKmtMemHandleFreePreserveMetadata(res.buf_handle));
+    status = HSAKMT_CALL(hsaKmtMemHandleFreePreserveMetadata(res.buf_handle));
+    if (status != HSAKMT_STATUS_SUCCESS) {
+      runtime_singleton_->DmaBufClose(dmabuf_fd);
+      return HSA_STATUS_ERROR;
+    }
   }
 
   runtime_singleton_->DmaBufClose(dmabuf_fd);
