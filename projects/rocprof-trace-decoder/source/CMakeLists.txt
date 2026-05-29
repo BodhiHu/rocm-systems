@@ -12,6 +12,10 @@ if(NOT DEFINED VERSION_PATCH)
     set(VERSION_PATCH 7)
 endif()
 
+# C is needed for LLVMConfig.cmake's check_c_source_compiles probes
+# (FindFFI/FindTerminfo). C++20 is needed for designated initializers in
+# trace_parser.hpp (MSVC enforces /std:c++20). Both are no-ops when the
+# parent project already enabled them.
 project(
     rocprof-trace-decoder
     VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}
@@ -46,9 +50,13 @@ endif()
 
 include(CMakePackageConfigHelpers)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
+if(MSVC)
+    add_compile_options($<$<CONFIG:Release>:/O2>)
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
+endif()
 
 # Collect source files
 file(
@@ -198,6 +206,7 @@ endif()
 if(TTD_DISASM_COMPILE_DEFS)
     target_compile_definitions(rocprof-trace-decoder-objects PRIVATE ${TTD_DISASM_COMPILE_DEFS})
 endif()
+target_compile_definitions(rocprof-trace-decoder-objects PRIVATE ROCPROF_TRACE_DECODER_BUILDING_LIBRARY)
 set_target_properties(rocprof-trace-decoder-objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 option(SQTT_LOGGING "Enable SQTT logging" OFF)
@@ -276,6 +285,7 @@ if(DEFINED BUILD_TESTS AND BUILD_TESTS)
     if(TTD_DISASM_COMPILE_DEFS)
         target_compile_definitions(rocprof-trace-decoder-sanitized PRIVATE ${TTD_DISASM_COMPILE_DEFS})
     endif()
+    target_compile_definitions(rocprof-trace-decoder-sanitized PRIVATE ROCPROF_TRACE_DECODER_BUILDING_LIBRARY)
     target_compile_options(rocprof-trace-decoder-sanitized PRIVATE -fsanitize=address,undefined -g -O1)
     target_link_options(rocprof-trace-decoder-sanitized PRIVATE -fsanitize=address,undefined)
     if(ARCH_MODEL)

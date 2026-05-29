@@ -44,12 +44,6 @@
 #    define DELTA(x)
 #endif
 
-#if defined(_MSC_VER)
-#    define PUBLIC_API extern "C" __declspec(dllexport)
-#else
-#    define PUBLIC_API extern "C" __attribute__((visibility("default")))
-#endif
-
 namespace quick_scan
 {
 bool avx512_available()
@@ -183,7 +177,9 @@ template <bool EmitEvents> rocprofiler_thread_trace_decoder_status_t process_eve
 
 } // namespace
 
-PUBLIC_API rocprofiler_thread_trace_decoder_status_t rocprof_trace_decoder_quick_scan(
+extern "C"
+{
+ROCPROF_TRACE_DECODER_API rocprofiler_thread_trace_decoder_status_t rocprof_trace_decoder_quick_scan(
     rocprof_trace_decoder_handle_t handle,
     uint64_t chunk_index,
     const void* data,
@@ -339,7 +335,7 @@ PUBLIC_API rocprofiler_thread_trace_decoder_status_t rocprof_trace_decoder_quick
     return status;
 }
 
-PUBLIC_API rocprofiler_thread_trace_decoder_status_t rocprof_trace_decoder_build_standalone(
+ROCPROF_TRACE_DECODER_API rocprofiler_thread_trace_decoder_status_t rocprof_trace_decoder_build_standalone(
     rocprof_trace_decoder_handle_t handle,
     uint64_t chunk_index,
     const void* data,
@@ -431,3 +427,5 @@ PUBLIC_API rocprofiler_thread_trace_decoder_status_t rocprof_trace_decoder_build
     *size_out = used;
     return ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS;
 }
+
+} // extern "C"

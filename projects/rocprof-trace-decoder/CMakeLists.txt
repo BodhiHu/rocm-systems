@@ -18,12 +18,17 @@ endif()
 set(VERSION_PATCH ${VERSION_PATCH})
 
 # Set module name and project name.
+# Enable C alongside CXX: LLVMConfig.cmake (FindFFI/FindTerminfo) runs C
+# compile checks via check_c_source_compiles when the LLVM disasm backend
+# is in use.
 project(
     rocprof-trace-decoder
     VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}
     LANGUAGES C CXX)
 set(PROJECT_NAME ${CMAKE_PROJECT_NAME})
 
+# C++20 is required: trace_parser.hpp uses designated initializers, which
+# MSVC only accepts with /std:c++20.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
