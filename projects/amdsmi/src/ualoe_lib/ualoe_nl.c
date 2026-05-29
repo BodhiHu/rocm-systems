@@ -1882,9 +1882,11 @@ static int ifoe_nl_parse_netport_state(const struct nlattr* attr, void* data) {
       state->loopback_mode = mnl_attr_get_u32(attr);
       break;
     case CFG_ATTR_NETPORT_IFOE_MAC_ADDR:
+      if (mnl_attr_get_payload_len(attr) < UALOE_MAC_ADDRESS_SIZE) return MNL_CB_ERROR;
       memcpy(state->ifoe_mac_addr, mnl_attr_get_payload(attr), UALOE_MAC_ADDRESS_SIZE);
       break;
     case CFG_ATTR_NETPORT_PERM_ADDR:
+      if (mnl_attr_get_payload_len(attr) < UALOE_MAC_ADDRESS_SIZE) return MNL_CB_ERROR;
       memcpy(state->permanent_mac_addr, mnl_attr_get_payload(attr), UALOE_MAC_ADDRESS_SIZE);
       break;
     default:
