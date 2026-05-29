@@ -706,4 +706,16 @@ std::vector<KdTranslation> KernelDescriptorTranslator::translate_image(
   return translations;
 }
 
+std::optional<KdTranslation> KernelDescriptorTranslator::translate_descriptor(
+    std::span<const uint8_t> image, uint64_t descriptor_file_offset, uint64_t entry_text_offset,
+    const KernelDescriptorTranslationOptions &options) const {
+  if (descriptor_file_offset > image.size() || image.size() - descriptor_file_offset < sizeof(KD))
+    return std::nullopt;
+
+  KD desc{};
+  std::memcpy(&desc, image.data() + descriptor_file_offset, sizeof(desc));
+  return translate_one_descriptor(guest_arch_, host_arch_, descriptor_file_offset,
+                                  entry_text_offset, desc, options);
+}
+
 } // namespace rocjitsu
