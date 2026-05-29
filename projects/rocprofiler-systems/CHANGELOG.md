@@ -49,6 +49,8 @@ Full documentation for ROCm Systems Profiler is available at [https://rocm.docs.
   `--cputime` and `--realtime` to `--sampling-freq`, `--sampling-cputime` and
   `--sampling-realtime`, respectively. Old flags are still handled as a part of
   backward compatibility.
+- Allow presets to use `--gpus`/`--cpu`/`--ai-nics` flags without
+  `--device`/`--host` flags.
 
 ### Resolved issues
 
@@ -59,6 +61,14 @@ Full documentation for ROCm Systems Profiler is available at [https://rocm.docs.
 - Fixed the handling of "group-by-queue" option in the Perfetto generator.
 - Fix visualization of GPU counters, which made it look like there was activity
   between kernel dispatches.
+- Fixed hang due to mismatched versions of `binutils` between system and bundled
+  versions. Ensure that the vendored version of `binutils`'s symbols are hidden.
+- Fix for ASAN build on TheRock.
+- Fix issue that could cause certain events to appear in trace, when the should
+  have been excluded due to roctx region filtering.
+- Fix cmake issue that caused the wrong version of `elfutils` to be linked when
+  building for TheRock. The system version of `elfutils` was used, rather than
+  the vendored version causing package install failures.
 
 ## ROCm Systems Profiler 1.6.0 for ROCm 7.13.0
 
