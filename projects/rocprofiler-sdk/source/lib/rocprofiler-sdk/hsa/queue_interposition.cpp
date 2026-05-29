@@ -307,6 +307,18 @@ async_signal_handler(hsa_signal_t                            completion_signal,
         ++niterations;
     }
 
+    if(niterations >= max_iterations && signal_value >= starting_value &&
+       registration::get_fini_status() == 0)
+    {
+        ROCP_WARNING << fmt::format(
+            "Async signal handler timed out waiting on signal {{.handle={}}} after {} iterations "
+            "(value={}, starting_value={}); kernel-dispatch completion timing may be incomplete",
+            completion_signal.handle,
+            niterations,
+            signal_value,
+            starting_value);
+    }
+
     ROCP_INFO << fmt::format("Async signal handler invoked for signal {{.handle={} / {:3}}} with "
                              "value {} (original value={}, iterations={})",
                              completion_signal.handle,
