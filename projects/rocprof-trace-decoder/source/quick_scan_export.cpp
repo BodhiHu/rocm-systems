@@ -44,7 +44,11 @@
 #    define DELTA(x)
 #endif
 
-#define PUBLIC_API extern "C" __attribute__((visibility("default")))
+#if defined(_MSC_VER)
+#    define PUBLIC_API extern "C" __declspec(dllexport)
+#else
+#    define PUBLIC_API extern "C" __attribute__((visibility("default")))
+#endif
 
 namespace
 {

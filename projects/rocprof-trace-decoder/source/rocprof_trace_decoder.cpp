@@ -41,7 +41,11 @@
 #    include "rocprof_trace_decoder/cxx/code_printing.hpp"
 #endif
 
-#define PUBLIC_API __attribute__((visibility("default")))
+#if defined(_MSC_VER)
+#    define PUBLIC_API __declspec(dllexport)
+#else
+#    define PUBLIC_API __attribute__((visibility("default")))
+#endif
 #define RADT(x)    ROCPROFILER_THREAD_TRACE_DECODER_RECORD_##x
 
 // ============================================================================
