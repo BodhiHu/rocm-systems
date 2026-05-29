@@ -49,6 +49,7 @@ if(NOT DEFINED TTD_ALL_VERSIONS AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 endif()
 
 include(CMakePackageConfigHelpers)
+find_package(Threads REQUIRED)
 
 if(MSVC)
     add_compile_options($<$<CONFIG:Release>:/O2>)
@@ -240,7 +241,7 @@ if(TTD_DISASM_COMPILE_DEFS)
 endif()
 target_link_libraries(
     rocprof-trace-decoder
-    PRIVATE pthread
+    PRIVATE Threads::Threads
     PUBLIC ${TTD_DISASM_LINK_LIBS})
 set_target_properties(
     rocprof-trace-decoder
@@ -266,7 +267,7 @@ if(TTD_DISASM_COMPILE_DEFS)
 endif()
 target_link_libraries(
     rocprof-trace-decoder-static
-    PRIVATE pthread
+    PRIVATE Threads::Threads
     PUBLIC ${TTD_DISASM_LINK_LIBS})
 set_target_properties(rocprof-trace-decoder-static PROPERTIES OUTPUT_NAME rocprof-trace-decoder
                                                               ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -278,7 +279,7 @@ if(DEFINED BUILD_TESTS AND BUILD_TESTS)
         rocprof-trace-decoder-sanitized
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
         PUBLIC $<BUILD_INTERFACE:${TTD_PROJECT_SOURCE_DIR}/include>)
-    target_link_libraries(rocprof-trace-decoder-sanitized PRIVATE pthread ${TTD_DISASM_LINK_LIBS})
+    target_link_libraries(rocprof-trace-decoder-sanitized PRIVATE Threads::Threads ${TTD_DISASM_LINK_LIBS})
     if(TTD_DISASM_INCLUDE_DIRS)
         target_include_directories(rocprof-trace-decoder-sanitized PRIVATE ${TTD_DISASM_INCLUDE_DIRS})
     endif()
