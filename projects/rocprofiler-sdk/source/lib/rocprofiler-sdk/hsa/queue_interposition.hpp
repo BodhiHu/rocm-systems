@@ -1,6 +1,6 @@
 // MIT License
 //
-// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -53,7 +53,7 @@ struct QueueState
     void*    ring_buf  = nullptr;  ///< Pointer to the queue's packet ring buffer
     uint32_t ring_size = 0;        ///< Number of packets the ring can hold
     uint32_t ring_mask = 0;        ///< Mask for ring index wrapping (ring_size - 1)
-    uint32_t pkt_size  = 64;       ///< Packet size in bytes (64 for AQL, 256 for metadata)
+    uint32_t pkt_size  = 64;       ///< AQL packet size in bytes
 
     std::atomic<uint64_t> virtual_wptr{0};            ///< SDK-visible write index (virtualized)
     volatile uint64_t*    real_wdid       = nullptr;  ///< Pointer to actual queue write index
@@ -183,13 +183,12 @@ process_doorbell_impl(const queue_state_ptr_t& state,
 /**
  * @brief Create and register queue state
  *
- * Allocates a QueueState for the given queue and registers it in both the
- * queue registry and doorbell map. This should be called when a queue is
- * created by the application.
+ * Allocates a QueueState for the given queue and inserts it into the queue
+ * registry. Should be called when a queue is created by the application.
  *
  * @param queue The HSA queue to create state for
- * @param wdid_addr Pointer to the queue's real write doorbell index
- * @param rdid_addr Pointer to the queue's real read doorbell index
+ * @param overwrite If true, replace any existing entry for queue; if false,
+ *                  return the existing entry unchanged.
  */
 std::shared_ptr<QueueState>
 create_queue_state(const hsa_queue_t* queue, bool overwrite = false);
@@ -197,8 +196,8 @@ create_queue_state(const hsa_queue_t* queue, bool overwrite = false);
 /**
  * @brief Destroy and unregister queue state
  *
- * Removes the queue's state from the registry and doorbell map.
- * This should be called when a queue is destroyed by the application.
+ * Removes the queue's entry from the registry. Should be called when a queue
+ * is destroyed by the application.
  *
  * @param queue The HSA queue to destroy state for
  */
@@ -206,9 +205,13 @@ void
 destroy_queue_state(const hsa_queue_t* queue);
 
 /**
- * @brief Check if inline interception is currently installed and active
+ * @brief Check if queue interposition has been installed
  *
- * @return True if inline interception is installed and active, false otherwise
+ * Returns true once interposition_init() has run, regardless of whether
+ * interception is currently active. Used at queue construction time to choose
+ * between the legacy WriteInterceptor path and the interposition path.
+ *
+ * @return True if interposition_init() has been called, false otherwise
  */
 bool
 supports_queue_interposition();

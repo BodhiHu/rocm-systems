@@ -1,6 +1,6 @@
 // MIT License
 //
-// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -19,6 +19,15 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+
+// SDK-level HSA queue interposition: wraps hsa_queue_*_write_index_* and
+// hsa_signal_store_* to virtualize the queue write pointer. Producer threads
+// advance QueueState::virtual_wptr; the real write_dispatch_id only advances
+// at doorbell time after process_doorbell_impl runs the WriteInterceptor chain.
+// Tracing-only; the gate in registration.cpp forces the legacy
+// hsa_amd_queue_intercept_create path whenever a context registers
+// dispatch_counter_collection, dispatch_thread_trace, or pc_sampler.
+// See queue_interposition.hpp for the API.
 
 #include "lib/rocprofiler-sdk/hsa/queue_interposition.hpp"
 #include "lib/common/container/pool.hpp"
@@ -158,6 +167,8 @@ load_write_index_impl(const QueueState* state, std::memory_order order)
 
 namespace
 {
+// TLS handoff from process_doorbell_impl() to ring_buffer_writer(). Set on entry
+// and cleared on exit of process_doorbell_impl(); not valid outside that scope.
 thread_local QueueState*          tls_state                     = nullptr;
 thread_local uint64_t             tls_submit_pos                = 0;
 thread_local uint32_t             tls_pkt_size                  = 64;
@@ -335,6 +346,10 @@ async_signal_handler(hsa_signal_t                            completion_signal,
     }
 }
 
+// Local kernel-dispatch tracing path: swaps in pooled completion signals,
+// runs KERNEL_DISPATCH_ENQUEUE tracer hooks, and enqueues a completion-signal
+// waiter on the async signal handler pool. Strict 1:1 packet forwarding; does
+// not insert PM4 packets. Distinct from Queue::WriteInterceptor (legacy path).
 void
 write_interceptor(Queue*                                queue,
                   const void*                           packets,
@@ -361,7 +376,7 @@ write_interceptor(Queue*                                queue,
         return;
     }
 
-    // unique sequence id for the dispatch
+    // unique sequence id for the dispatch (global across all queues, matches SDK contract)
     static auto sequence_counter = std::atomic<rocprofiler_dispatch_id_t>{0};
 
     const auto* packets_arr          = static_cast<const rocprofiler_packet*>(packets);
@@ -1097,12 +1112,9 @@ interposition_init(CoreApiTable* core_table, bool enabled)
     // after update_table, or raw HSA functions otherwise)
     *get_next_table() = *core_table;
 
-    // check whether attachment is supported and if so, enable dynamic intercept
-    //
-    // s_intercept_dynamic.store(registration::supports_attachment(), std::memory_order_release);
-    //
-    // ironically, above causes hangs in attached apps but it is fine when attachment doesn't
-    // happen.
+    // Dynamic queue discovery: when enabled, the write-index wrappers create QueueState on
+    // first encounter for queues we did not observe at hsa_queue_create. Enabled only when
+    // attachment is not supported; in attachment mode this has been observed to deadlock.
     s_intercept_dynamic.store(!registration::supports_attachment(), std::memory_order_release);
 
     // mark that intercept has been installed
