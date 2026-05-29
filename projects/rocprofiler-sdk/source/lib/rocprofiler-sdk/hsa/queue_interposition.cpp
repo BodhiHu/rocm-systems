@@ -790,12 +790,6 @@ create_queue_state(const hsa_queue_t* queue, bool overwrite)
     state->next_scan_pos   = current_wdid;
     state->next_submit_pos = current_wdid;
 
-    if(!wdid_addr || !rdid_addr)
-    {
-        ROCP_ERROR << "Failed to get valid read/write dispatch ID addresses for queue " << queue;
-        return nullptr;
-    }
-
     return get_queue_registry().wlock([&](auto& map) {
         map[queue] = state;
         return state;
