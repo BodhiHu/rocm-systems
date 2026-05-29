@@ -1071,8 +1071,6 @@ class Roofline:
 
         self.__ai_data = ai_data
 
-        print(f"ai_data:\n{self.__ai_data}")
-
         workload_dir = self.__run_parameters.get("workload_dir", "")
         if not (Path(workload_dir) / "roofline.csv").is_file():
             console_log(
@@ -1236,27 +1234,26 @@ class Roofline:
 
             kernel_names = self.__ai_data.get("kernelNames", [])
             for i in range(len(self.__ai_data.get("kernelNames", []))):
-                if self.__ai_data[key]:
-                    # Zero intensity level means no data reported for this cache level
-                    if self.__ai_data[key][0][i] > 0 and self.__ai_data[key][1][i] > 0:
-                        plt.plot(
-                            [self.__ai_data[key][0][i]],
-                            [self.__ai_data[key][1][i]],
-                            label=f"AI_{cache_level}_{kernel_names[i][:40]}",
-                            color=color_scheme[cache_level],
-                            marker=kernel_markers[i % len(kernel_markers)],
-                        )
-                    val1 = (
-                        self.__ai_data[key][0][i]
-                        if i < len(self.__ai_data[key][0])
-                        else "N/A"
+                # Zero intensity level means no data reported for this cache level
+                if self.__ai_data[key][0][i] > 0 and self.__ai_data[key][1][i] > 0:
+                    plt.plot(
+                        [self.__ai_data[key][0][i]],
+                        [self.__ai_data[key][1][i]],
+                        label=f"AI_{cache_level}_{kernel_names[i][:40]}",
+                        color=color_scheme[cache_level],
+                        marker=kernel_markers[i % len(kernel_markers)],
                     )
-                    val2 = (
-                        self.__ai_data[key][1][i]
-                        if i < len(self.__ai_data[key][1])
-                        else "N/A"
-                    )
-                    console_debug("roofline", f"AI_{kernel_names[i]}: {val1}, {val2}")
+                val1 = (
+                    self.__ai_data[key][0][i]
+                    if i < len(self.__ai_data[key][0])
+                    else "N/A"
+                )
+                val2 = (
+                    self.__ai_data[key][1][i]
+                    if i < len(self.__ai_data[key][1])
+                    else "N/A"
+                )
+                console_debug("roofline", f"AI_{kernel_names[i]}: {val1}, {val2}")
         plt.xlabel(f"Arithmetic Intensity ({ops_flops}s/Byte)")
         plt.ylabel("Performance (GFLOP/sec)")
         wdir = self.__run_parameters.get("workload_dir", "")
