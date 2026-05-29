@@ -46,7 +46,7 @@
 #else
 #    define PUBLIC_API __attribute__((visibility("default")))
 #endif
-#define RADT(x)    ROCPROFILER_THREAD_TRACE_DECODER_RECORD_##x
+#define RADT(x) ROCPROFILER_THREAD_TRACE_DECODER_RECORD_##x
 
 // ============================================================================
 // ISA service adapter for the internal parser
