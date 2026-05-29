@@ -1560,7 +1560,9 @@ bool VirtualGPU::dispatchAqlPacketBatchFlat(const std::vector<uint8_t>& flatPack
             slot->reserved2 = timestamp_->command().profilingInfo().correlation_id_;
           }
         }
-        if (kernelNames != nullptr && i < kernelNames->size() &&
+        if ((IsLogEnabled(amd::LOG_DETAIL_DEBUG, amd::LOG_KERN2) ||
+             IsLogEnabled(amd::LOG_DETAIL_DEBUG, amd::LOG_AQL)) &&
+            kernelNames != nullptr && i < kernelNames->size() &&
             pktType == HSA_PACKET_TYPE_KERNEL_DISPATCH) {
           ClPrint(amd::LOG_DETAIL_DEBUG, amd::LOG_KERN2, "Graph ShaderName : %s, device id : %u",
                   (*kernelNames)[i]->c_str(), dev().index());
@@ -1585,8 +1587,10 @@ bool VirtualGPU::dispatchAqlPacketBatchFlat(const std::vector<uint8_t>& flatPack
                   slot->kernel_object, slot->kernarg_address,
                   slot->completion_signal, slot->reserved2,
                   Hsa::queue_load_read_index_scacquire(gpu_queue_), slotIdx);
-        } else if (pktType == HSA_PACKET_TYPE_BARRIER_AND ||
-                   pktType == HSA_PACKET_TYPE_BARRIER_OR) {
+        } else if ((IsLogEnabled(amd::LOG_DETAIL_DEBUG, amd::LOG_KERN2) ||
+                    IsLogEnabled(amd::LOG_DETAIL_DEBUG, amd::LOG_AQL)) &&
+                   (pktType == HSA_PACKET_TYPE_BARRIER_AND ||
+                    pktType == HSA_PACKET_TYPE_BARRIER_OR)) {
           // Inline barriers placed in the batch by BuildSyncPlan never go
           // through dispatchBarrierPacket, so log them here. Classify by
           // patched fields: dep_signal set -> cross-dep barrier, else
