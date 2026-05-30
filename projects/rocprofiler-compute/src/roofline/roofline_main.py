@@ -479,7 +479,6 @@ class Roofline:
         if ops_flops == "FLOP" and not skipAI:
             kernel_names = self.__ai_data.get("kernelNames", [])
             symbols_list = [SYMBOLS[i % len(SYMBOLS)] for i in range(len(kernel_names))]
-            show_in_legend = not self.__run_parameters["is_standalone"]
             if self.__ai_data["ai_l0"][0] and self.__mspec.gpu_arch == "gfx1151":
                 fig.add_trace(
                     go.Scatter(
@@ -492,7 +491,6 @@ class Roofline:
                             size=10,
                             symbol=symbols_list[: len(self.__ai_data["ai_l0"][0])],
                         ),
-                        showlegend=show_in_legend,
                     ),
                     **subplot_kwargs,
                 )
@@ -509,7 +507,6 @@ class Roofline:
                             size=10,
                             symbol=symbols_list[: len(self.__ai_data["ai_l1"][0])],
                         ),
-                        showlegend=show_in_legend,
                     ),
                     **subplot_kwargs,
                 )
@@ -526,7 +523,6 @@ class Roofline:
                             size=10,
                             symbol=symbols_list[: len(self.__ai_data["ai_l2"][0])],
                         ),
-                        showlegend=show_in_legend,
                     ),
                     **subplot_kwargs,
                 )
@@ -543,7 +539,6 @@ class Roofline:
                             size=10,
                             symbol=symbols_list[: len(self.__ai_data["ai_hbm"][0])],
                         ),
-                        showlegend=show_in_legend,
                     ),
                     **subplot_kwargs,
                 )
@@ -615,8 +610,10 @@ class Roofline:
 
                 all_dts = sorted(list(set(existing_dts + [dtype])))
                 all_dts_str = ", ".join(all_dts)
-                legend_name = f"{level.upper()}-{all_dts_str}<br>{value} GB/s"
-
+                legend_name = (
+                    f"{self.l0_l1_label_workaround(level).upper()}-"
+                    f"{all_dts_str}<br>{value} GB/s"
+                )
                 fig.update_traces(
                     patch={
                         "name": legend_name,
@@ -626,8 +623,10 @@ class Roofline:
                 )
             else:
                 # New bandwidth line with value in legend
-                legend_name = f"{level.upper()}-{dtype}<br>{value} GB/s"
-
+                legend_name = (
+                    f"{self.l0_l1_label_workaround(level).upper()}-"
+                    f"{dtype}<br>{value} GB/s"
+                )
                 fig.add_trace(
                     go.Scatter(
                         x=bw_line["x"],

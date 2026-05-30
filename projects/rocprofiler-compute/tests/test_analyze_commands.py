@@ -281,7 +281,6 @@ def test_roofline_missing_file_handling():
         "device_id": 0,
         "sort_type": "kernels",
         "mem_level": "ALL",
-        "is_standalone": True,
         "roofline_data_type": ["FP32"],
     }
 
@@ -318,7 +317,6 @@ def test_roofline_invalid_datatype_cli():
         "device_id": 0,
         "sort_type": "kernels",
         "mem_level": "ALL",
-        "is_standalone": True,
         "roofline_data_type": ["FP32"],
     }
 
