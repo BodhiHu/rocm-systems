@@ -6491,7 +6491,7 @@ def amdsmi_get_processor_handles_by_type(
         raise AmdSmiParameterException(processor_type, AmdSmiProcessorType)
 
     processor_handles = (amdsmi_wrapper.amdsmi_processor_handle * MAX_NUM_PROCESSES)()
-    processor_count = ctypes.c_uint32(0)
+    processor_count = ctypes.c_uint32(MAX_NUM_PROCESSES)
     ptr_processor_count = ctypes.pointer(processor_count)
 
     _check_res(
@@ -6502,7 +6502,7 @@ def amdsmi_get_processor_handles_by_type(
 
     entry = []
     for i in range(ptr_processor_count.contents.value):
-        entry.append(processor_handles[i])
+        entry.append(amdsmi_wrapper.amdsmi_processor_handle(processor_handles[i]))
     return {"processor_handles": entry, "processor_count": ptr_processor_count.contents.value}
 
 
