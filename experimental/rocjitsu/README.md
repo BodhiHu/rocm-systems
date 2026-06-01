@@ -104,7 +104,7 @@ sudo apt install libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
 ## Building
 
 ```bash
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+CC=clang CXX=clang++ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 
