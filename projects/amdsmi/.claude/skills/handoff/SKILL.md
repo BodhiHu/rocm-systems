@@ -50,7 +50,7 @@ Pass the path to the receiver. Workspace stays clean (no stray handoff files in 
 - <project rules: TDD first, verification-before-completion, no push w/o approval>
 
 ## Artifacts (by path — do NOT inline)
-- Spec: .claude/context/specs/<file>.md
+- Spec: ${TMPDIR:-/tmp}/amdsmi-agent-specs/<file>.md
 - Plan: .claude/context/plans/<file>.md (task N, lines X–Y)
 - Worktree: <abs path>
 - Related: <PR URL, issue, prior handoff path>

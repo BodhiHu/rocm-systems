@@ -13,7 +13,7 @@ Translate an approved spec into a concrete plan an engineer (or fresh subagent) 
 
 ## Required Inputs
 
-- An approved spec at `.claude/context/specs/YYYY-MM-DD-<topic>-design.md`
+- An approved spec at `${TMPDIR:-/tmp}/amdsmi-agent-specs/YYYY-MM-DD-<topic>-design.md`
 - Familiarity with the amd-smi project layout (see `project-layout` rule)
 
 If no spec exists, STOP and invoke the `interrogate` skill first.

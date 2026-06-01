@@ -1,7 +1,9 @@
 # amd-smi — Context Glossary
 
 > Agent-owned working knowledge. **Not public documentation** — for the AMD-SMI
-> agents only. Public docs live in `docs/`.
+> agents only. Public docs live in `docs/`. This is the only agent-owned file
+> checked into the repo; specs and other hand-off artifacts are ephemeral and
+> live under `${TMPDIR:-/tmp}/amdsmi-agent-specs/`.
 >
 > Canonical domain terms only: what a word *means* in amd-smi, and which meaning is
 > intended when it's ambiguous. No implementation walkthroughs, no API reference.

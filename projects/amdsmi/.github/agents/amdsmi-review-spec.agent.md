@@ -26,7 +26,7 @@ Find the originating spec, in this order. Stop at the first one that exists:
    their Confluence MCP set up; if it is not configured, note that and fall back.
 2. **Linked issue** — `Closes #N`, `Fixes #N`, a Jira/ticket key in the commit
    messages or PR description.
-3. **In-repo spec** — `.claude/context/specs/YYYY-MM-DD-<topic>-design.md` matching the
+3. **Session spec** — `${TMPDIR:-/tmp}/amdsmi-agent-specs/YYYY-MM-DD-<topic>-design.md` matching the
    branch/feature name.
 4. **User-supplied path** — a spec path passed in the dispatch.
 

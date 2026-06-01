@@ -25,9 +25,11 @@ spec — three sentences is fine, but it gets written and approved.
 
 ## Knowledge Lives Here (agent-owned, not public docs)
 
-- **Glossary:** `.claude/context/CONTEXT.md` — canonical domain terms.
-- **Decisions:** `.claude/context/decisions.md` — running log of *why* (newest on top).
-- **Specs:** `.claude/context/specs/YYYY-MM-DD-<topic>-design.md` — this skill's output.
+- **Glossary:** `.claude/context/CONTEXT.md` — canonical domain terms. The only
+  agent-owned file checked into the repo.
+- **Specs:** ephemeral. Write to `${TMPDIR:-/tmp}/amdsmi-agent-specs/YYYY-MM-DD-<topic>-design.md`.
+  Specs are scratch artifacts for the current session's hand-off chain; they are
+  deliberately **not** committed and disappear with the temp dir.
 
 ## 1. Source the Design
 
@@ -43,7 +45,7 @@ Pull the upstream material before asking the user anything you could read yourse
 
 If the MCP servers aren't reachable, ask the user to paste the page/ticket rather than
 guessing its contents. Record the Confluence page and/or ticket id in the spec for
-traceability. Read `CONTEXT.md` and `decisions.md` first — never re-open a logged decision.
+traceability. Read `CONTEXT.md` first for any pinned terms the design uses.
 
 If there is genuinely **no upstream design**, switch to generate mode: walk the user
 through the problem one question at a time, propose 2–3 approaches with a recommendation,
@@ -94,12 +96,11 @@ The spec is not done until every row is answered:
 ## 5. Record What You Learned
 
 - **`CONTEXT.md`** — add a resolved term the moment it's pinned; don't batch.
-- **`decisions.md`** — log a decision only when it is hard to reverse **and** surprising
-  without context **and** a real trade-off. Otherwise let the code speak.
-- **Spec** — write to `.claude/context/specs/YYYY-MM-DD-<topic>-design.md`, including the
-  upstream source link and any design-vs-code drift you reconciled. Self-review it
-  (placeholders, contradictions, scope, ambiguity, cascade completeness), fix inline,
-  then ask the user to approve.
+- **Spec** — write to `${TMPDIR:-/tmp}/amdsmi-agent-specs/YYYY-MM-DD-<topic>-design.md`,
+  including the upstream source link and any design-vs-code drift you reconciled.
+  `mkdir -p` the directory first. Self-review (placeholders, contradictions, scope,
+  ambiguity, cascade completeness), fix inline, then ask the user to approve.
+  The spec is session-scoped scratch; do not commit it.
 
 ## 6. Hand Off
 
@@ -108,10 +109,9 @@ here, and write no production code.
 
 ## Knowledge-Extraction Mode
 
-When there's no design and the user just wants to build out `CONTEXT.md` / `decisions.md`,
-run steps 2, 3, and 5 only: interrogate a subsystem, cross-check against the code (and
-the AMDSMI Confluence space for upstream intent), and record resolved terms and
-load-bearing decisions as you go.
+When there's no design and the user just wants to build out `CONTEXT.md`, run steps 2
+and 3 only: interrogate a subsystem, cross-check against the code (and the AMDSMI
+Confluence space for upstream intent), and record resolved terms as you go.
 
 ## Red Flags — STOP
 
