@@ -45,6 +45,17 @@ The table provides key details and support available for the different CDNA arch
   |mode             |           |                                 |Memory partition mode                |and Memory partition mode|
   +-----------------+-----------+---------------------------------+-------------------------------------+-------------------------+
 
+.. note::
+
+   CDNA4 architecture based GPUs (MI350X, MI355X) introduce an **L3 cache**
+   positioned between the :doc:`L2 cache <l2-cache>` and the memory / Infinity
+   Fabric™ interface. Earlier CDNA architectures (CDNA, CDNA2, and CDNA3) do not
+   have an L3 cache. Because L2-Fabric traffic on CDNA4 may be serviced by this
+   L3, the :ref:`L2-Fabric <l2-fabric>` **bandwidth** metrics reported by the
+   profiler may or may not reflect traffic that is ultimately serviced by the
+   accelerator's local HBM, a remote accelerator over Infinity Fabric (xGMI), or
+   a PCIe-connected device.
+
 **Data type support**
 
 .. list-table::

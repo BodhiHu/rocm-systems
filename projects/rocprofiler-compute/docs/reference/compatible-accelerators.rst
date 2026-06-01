@@ -41,6 +41,13 @@ ROCm Compute Profiler. See :doc:`rocm:reference/gpu-arch-specs` for full AMD GPU
       * - AMD Instinct MI50, MI60 (Vega 20)
         - No support ❌
 
+    .. note::
+
+       AMD Instinct™ MI350 (CDNA4) introduces an L3 cache that is not present on
+       earlier AMD Instinct accelerators. This affects the interpretation of
+       L2-Fabric bandwidth metrics. See
+       :doc:`/conceptual/cdna/cdna-performance-model` for more detail.
+
 
 
   .. tab-item:: AMD Ryzen APUs

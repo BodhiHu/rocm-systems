@@ -135,6 +135,17 @@ Infinity Fabric in more detail, as described by ROCm Compute Profiler metrics,
 while :ref:`l2-fabric` give detailed definitions of
 individual metrics.
 
+.. note::
+
+   On CDNA4 (MI350 series) accelerators, an L3 cache sits between the L2 cache
+   and the Infinity Fabric / memory interface. As a result, the L2-Fabric
+   **bandwidth** metrics in this section may or may not represent traffic that is
+   ultimately serviced by the accelerator's local HBM, a remote accelerator over
+   Infinity Fabric (xGMI), or a PCIe-connected device — some of this traffic may
+   instead be serviced by the L3 cache. This applies to CDNA4 only; earlier CDNA
+   architectures have no L3 cache. See :ref:`cdna-performance-model` for more
+   detail.
+
 .. _l2-request-flow:
 
 Request flow
