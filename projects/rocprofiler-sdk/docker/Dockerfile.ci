@@ -27,7 +27,7 @@ RUN set-euo pipefail; \
         wget -N -P /tmp/ https://repo.radeon.com/amdgpu-install/7.2/ubuntu/jammy/amdgpu-install_7.2.70200-1_all.deb && \
         apt-get install -y /tmp/amdgpu-install_7.2.70200-1_all.deb && \
         apt-get update && \
-        apt-get install -y git rocm-openmp-sdk libva-amdgpu-dev rocm-llvm-dev && \
+        apt-get install -y git rocm-openmp-sdk libva-amdgpu-dev mesa-amdgpu-va-drivers rocm-llvm-dev && \
         python3 -m pip install -U awscli pipx && \
         python3 -m pip install -U --user -r /root/requirements.txt; \
         echo -e 'PKG_CONFIG_PATH="/opt/amdgpu/lib64/pkgconfig:/opt/amdgpu/lib/pkgconfig:/opt/amdgpu/lib/$(uname -p)-linux-gnu/pkgconfig:${PKG_CONFIG_PATH}"\nexport PKG_CONFIG_PATH' > /etc/profile.d/amdgpu-pkg-config.sh; \
