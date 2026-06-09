@@ -160,7 +160,9 @@ public:
 
   /// @brief Set the execution plugin group (shared ownership).
   void set_plugin_group(std::shared_ptr<ExecutionPluginGroup> pg) {
-    plugin_group_ = pg ? pg : ExecutionPluginGroup::empty_group();
+    auto empty = ExecutionPluginGroup::empty_group();
+    plugin_group_ = pg ? std::move(pg) : empty;
+    plugin_hooks_enabled_ = plugin_group_.get() != empty.get();
   }
 
   /// @brief Return the execution plugin group.
@@ -326,7 +328,7 @@ public:
   // TODO(newling) consider cmake flag to build without plugins, this call
   // overhead might be non-negligible.
   uint32_t read_sgpr(uint32_t reg_idx) const {
-    if (auto *wf = sgpr_to_wave_[reg_idx]) {
+    if (auto *wf = sgpr_to_wave_[reg_idx]; plugin_hooks_enabled_ && wf) {
       plugin_group_->onAmdgpuReadSgpr(wf, reg_idx);
     }
     return sgpr_file_[reg_idx];
@@ -339,7 +341,7 @@ public:
 
   void notify_vgpr_read(const Wavefront *wf, uint32_t reg_idx, uint32_t lane_begin,
                         uint32_t lane_end, uint8_t byte_mask = 0xF) const {
-    if (wf)
+    if (plugin_hooks_enabled_ && wf)
       plugin_group_->onAmdgpuReadVgprs(wf, reg_idx, lane_begin, lane_end, byte_mask);
   }
 
@@ -487,6 +489,7 @@ protected:
   uint64_t private_aperture_limit_ = 0;
 
   std::shared_ptr<ExecutionPluginGroup> plugin_group_ = ExecutionPluginGroup::empty_group();
+  bool plugin_hooks_enabled_ = false;
 
   /// Reverse lookup: physical SGPR index -> owning wavefront (for race detection).
   /// Populated at dispatch_wf time. Null entries mean "not allocated".
@@ -571,7 +574,7 @@ public:
 
   /// @returns Lane value from the VGPR file.
   uint32_t read_vgpr(uint32_t reg_idx, uint32_t lane) const override {
-    if (auto *wf = vgpr_to_wave_[reg_idx]) {
+    if (auto *wf = vgpr_to_wave_[reg_idx]; this->plugin_hooks_enabled_ && wf) {
       this->plugin_group_->onAmdgpuReadVgprs(wf, reg_idx, lane, lane + 1);
     }
     return vgpr_file_[reg_idx][lane];
