@@ -11,6 +11,7 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
@@ -26,6 +27,16 @@ void write_event_slot(void *page, size_t page_size, uint32_t event_id, uint64_t 
     return;
   auto *slots = static_cast<uint64_t *>(page);
   std::atomic_ref<uint64_t>(slots[event_id]).store(value, std::memory_order_release);
+}
+
+void reset_event_slot_if_age(void *page, size_t page_size, uint32_t event_id, uint64_t age) {
+  if (!page || event_id >= page_size / sizeof(uint64_t))
+    return;
+  auto *slots = static_cast<uint64_t *>(page);
+  uint64_t expected = age;
+  std::atomic_ref<uint64_t>(slots[event_id])
+      .compare_exchange_strong(expected, KFD_SIGNAL_EVENT_LIMIT, std::memory_order_acq_rel,
+                               std::memory_order_acquire);
 }
 
 } // namespace
@@ -45,8 +56,15 @@ void EventState::adopt_page(void *ptr, size_t size) {
 
   std::lock_guard<std::mutex> lock(mutex_);
   for (const auto &[id, ev] : events_) {
-    if (ev.signaled)
-      write_event_slot(page, page_size, id, ev.event_age);
+    bool signaled = ev.signaled;
+    uint64_t age = ev.event_age;
+    if (ev.event_type == 0 && id < fast_events_.size()) {
+      uint64_t state = fast_events_[id].state.load(std::memory_order_acquire);
+      signaled = (fast_event_flags(state) & kFastEventSignaled) != 0;
+      age = fast_event_age(state);
+    }
+    if (signaled)
+      write_event_slot(page, page_size, id, age);
   }
 }
 
@@ -59,9 +77,17 @@ void EventState::signal_interrupt(uint32_t event_id) {
   if (event_id == 0) {
     for (auto &[id, ev] : events_) {
       if (ev.event_type == 0) {
-        ev.signaled = !ev.auto_reset || ev.waiters.empty();
-        if (!(++ev.event_age))
-          ev.event_age = 2;
+        ev.signaled = true;
+        ev.event_age = 1;
+        if (id < fast_events_.size()) {
+          auto &fast = fast_events_[id];
+          uint8_t flags = kFastEventValid | kFastEventSignal;
+          if (ev.auto_reset)
+            flags |= kFastEventAutoReset;
+          if (ev.signaled)
+            flags |= kFastEventSignaled;
+          fast.state.store(pack_fast_event_state(ev.event_age, flags), std::memory_order_release);
+        }
         write_event_slot(page, page_size, id, ev.event_age);
         util::Logger::cp("SIGNAL_BROADCAST: event_id=", id, " age=", ev.event_age,
                          " waiters=", ev.waiters.size());
@@ -73,9 +99,18 @@ void EventState::signal_interrupt(uint32_t event_id) {
   }
   auto it = events_.find(event_id);
   if (it != events_.end() && it->second.event_type == 0) {
-    it->second.signaled = !it->second.auto_reset || it->second.waiters.empty();
-    if (!(++it->second.event_age))
-      it->second.event_age = 2;
+    it->second.signaled = true;
+    it->second.event_age = 1;
+    if (event_id < fast_events_.size()) {
+      auto &fast = fast_events_[event_id];
+      uint8_t flags = kFastEventValid | kFastEventSignal;
+      if (it->second.auto_reset)
+        flags |= kFastEventAutoReset;
+      if (it->second.signaled)
+        flags |= kFastEventSignaled;
+      fast.state.store(pack_fast_event_state(it->second.event_age, flags),
+                       std::memory_order_release);
+    }
     write_event_slot(page, page_size, event_id, it->second.event_age);
     util::Logger::cp("SIGNAL_INTERRUPT: event_id=", event_id, " age=", it->second.event_age,
                      " waiters=", it->second.waiters.size(), " page=", page ? "valid" : "null");
@@ -126,9 +161,16 @@ int EventState::create_event(void *arg, uint32_t gpu_id) {
   ev.event_id = next_event_id_++;
   ev.event_type = args->event_type;
   ev.auto_reset = args->auto_reset != 0;
-  ev.event_age = 1;
+  ev.event_age = 0;
 
   events_[ev.event_id] = ev;
+  auto &fast = fast_events_[ev.event_id];
+  uint8_t flags = kFastEventValid;
+  if (ev.event_type == 0)
+    flags |= kFastEventSignal;
+  if (ev.auto_reset)
+    flags |= kFastEventAutoReset;
+  fast.state.store(pack_fast_event_state(ev.event_age, flags), std::memory_order_release);
 
   args->event_id = ev.event_id;
   args->event_trigger_data = ev.event_id;
@@ -155,6 +197,8 @@ int EventState::destroy_event(void *arg) {
         cv->notify_one();
       events_.erase(it);
     }
+    if (args->event_id < fast_events_.size())
+      fast_events_[args->event_id].state.store(0, std::memory_order_release);
   }
   write_event_slot(page, page_size, args->event_id, KFD_SIGNAL_EVENT_LIMIT);
   return 0;
@@ -171,9 +215,19 @@ int EventState::set_event(void *arg) {
                        " events_.size()=", events_.size());
     return -EINVAL;
   }
-  it->second.signaled = !it->second.auto_reset || it->second.waiters.empty();
-  if (!(++it->second.event_age))
-    it->second.event_age = 2;
+  it->second.signaled = true;
+  it->second.event_age = 1;
+  if (args->event_id < fast_events_.size()) {
+    auto &fast = fast_events_[args->event_id];
+    uint8_t flags = kFastEventValid;
+    if (it->second.event_type == 0)
+      flags |= kFastEventSignal;
+    if (it->second.auto_reset)
+      flags |= kFastEventAutoReset;
+    if (it->second.signaled)
+      flags |= kFastEventSignaled;
+    fast.state.store(pack_fast_event_state(it->second.event_age, flags), std::memory_order_release);
+  }
   write_event_slot(page, page_size, args->event_id, it->second.event_age);
   util::Logger::cp("SET_EVENT: event_id=", args->event_id, " age=", it->second.event_age,
                    " waiters=", it->second.waiters.size());
@@ -191,6 +245,13 @@ int EventState::reset_event(void *arg) {
   if (it == events_.end())
     return -EINVAL;
   it->second.signaled = false;
+  it->second.event_age = 0;
+  if (args->event_id < fast_events_.size()) {
+    auto &fast = fast_events_[args->event_id];
+    uint64_t state = fast.state.load(std::memory_order_acquire);
+    uint8_t flags = fast_event_flags(state) & ~kFastEventSignaled;
+    fast.state.store(pack_fast_event_state(0, flags), std::memory_order_release);
+  }
   write_event_slot(page, page_size, args->event_id, KFD_SIGNAL_EVENT_LIMIT);
   return 0;
 }
@@ -209,32 +270,162 @@ int EventState::wait_events(void *arg, uint32_t process_id) {
          << "(age=" << ev_data[i].signal_event_data.last_event_age << ")";
   });
 
-  auto satisfied = [](const GpuEvent &ev, const kfd_event_data &ed) -> bool {
+  auto signal_event_age = [&](const GpuEvent &ev) -> uint64_t {
+    if (ev.event_type == 0 && ev.event_id < fast_events_.size()) {
+      uint64_t state = fast_events_[ev.event_id].state.load(std::memory_order_acquire);
+      return fast_event_age(state);
+    }
+    return ev.event_age;
+  };
+
+  auto satisfied = [&](const GpuEvent &ev, const kfd_event_data &ed) -> bool {
     if (ev.event_type == 0) {
       uint64_t caller_age = ed.signal_event_data.last_event_age;
-      if (caller_age == 0)
-        return ev.signaled;
-      return ev.event_age != caller_age;
+      uint64_t age = signal_event_age(ev);
+      return (caller_age != 0) ? (age >= caller_age) : (age > 0);
     }
     return ev.signaled;
   };
 
-  std::condition_variable my_cv;
-  std::unique_lock<std::mutex> lock(mutex_);
+  bool is_poll = (args->timeout == 0);
 
-  for (uint32_t i = 0; i < args->num_events; ++i) {
-    auto it = events_.find(ev_data[i].event_id);
-    if (it != events_.end())
-      it->second.waiters.push_back(&my_cv);
+  auto clear_fast_signaled_if_age = [&](uint32_t event_id, uint64_t age) {
+    if (event_id >= fast_events_.size())
+      return false;
+    auto &fast = fast_events_[event_id];
+    uint64_t state = fast.state.load(std::memory_order_acquire);
+    while (fast_event_age(state) == age) {
+      uint8_t flags = fast_event_flags(state) & ~kFastEventSignaled;
+      uint64_t desired = pack_fast_event_state(0, flags);
+      if (fast.state.compare_exchange_weak(state, desired, std::memory_order_acq_rel,
+                                           std::memory_order_acquire))
+        return true;
+    }
+    return false;
+  };
+
+  if (args->num_events == 1 && !closing_.load(std::memory_order_acquire)) {
+    uint32_t event_id = ev_data[0].event_id;
+    if (event_id < fast_events_.size()) {
+      auto &fast = fast_events_[event_id];
+      uint64_t state = fast.state.load(std::memory_order_acquire);
+      uint8_t flags = fast_event_flags(state);
+      constexpr uint8_t fast_signal_no_auto = kFastEventValid | kFastEventSignal;
+      if ((flags & (kFastEventValid | kFastEventSignal | kFastEventAutoReset)) ==
+          fast_signal_no_auto) {
+        uint64_t age = fast_event_age(state);
+        uint64_t caller_age = ev_data[0].signal_event_data.last_event_age;
+        bool ready = caller_age == 0 ? ((flags & kFastEventSignaled) != 0) : age >= caller_age;
+        if (ready || is_poll) {
+          if (ready) {
+            ev_data[0].signal_event_data.last_event_age = age;
+            args->wait_result = KFD_IOC_WAIT_RESULT_COMPLETE;
+          } else {
+            args->wait_result = KFD_IOC_WAIT_RESULT_TIMEOUT;
+          }
+          return 0;
+        }
+      }
+    }
   }
 
-  auto unregister_waiters = [&]() {
+  if (args->num_events > 1 && !closing_.load(std::memory_order_acquire)) {
+    bool all_fast_signal = true;
+    bool all_satisfied = true;
+    bool any_satisfied = false;
+    constexpr uint8_t fast_signal = kFastEventValid | kFastEventSignal;
+
     for (uint32_t i = 0; i < args->num_events; ++i) {
-      auto it = events_.find(ev_data[i].event_id);
-      if (it != events_.end())
-        std::erase(it->second.waiters, &my_cv);
+      uint32_t event_id = ev_data[i].event_id;
+      if (event_id >= fast_events_.size()) {
+        all_fast_signal = false;
+        break;
+      }
+
+      auto &fast = fast_events_[event_id];
+      uint64_t state = fast.state.load(std::memory_order_acquire);
+      uint8_t flags = fast_event_flags(state);
+      if ((flags & (kFastEventValid | kFastEventSignal)) != fast_signal) {
+        all_fast_signal = false;
+        break;
+      }
+
+      uint64_t caller_age = ev_data[i].signal_event_data.last_event_age;
+      if (caller_age == 0 && (flags & kFastEventAutoReset) != 0) {
+        all_fast_signal = false;
+        break;
+      }
+
+      uint64_t age = fast_event_age(state);
+      bool ready = caller_age == 0 ? ((flags & kFastEventSignaled) != 0) : age >= caller_age;
+      any_satisfied |= ready;
+      all_satisfied &= ready;
     }
-  };
+
+    if (all_fast_signal) {
+      bool ready = wait_all ? all_satisfied : any_satisfied;
+      if (ready || is_poll) {
+        if (ready) {
+          for (uint32_t i = 0; i < args->num_events; ++i) {
+            auto &fast = fast_events_[ev_data[i].event_id];
+            uint64_t state = fast.state.load(std::memory_order_acquire);
+            uint8_t flags = fast_event_flags(state);
+            uint64_t age = fast_event_age(state);
+            uint64_t caller_age = ev_data[i].signal_event_data.last_event_age;
+            bool event_ready =
+                caller_age == 0 ? ((flags & kFastEventSignaled) != 0) : age >= caller_age;
+            if (event_ready) {
+              ev_data[i].signal_event_data.last_event_age = age;
+              if ((flags & kFastEventAutoReset) != 0) {
+                clear_fast_signaled_if_age(ev_data[i].event_id, age);
+                reset_event_slot_if_age(page, page_size, ev_data[i].event_id, age);
+              }
+            }
+          }
+          args->wait_result = KFD_IOC_WAIT_RESULT_COMPLETE;
+        } else {
+          args->wait_result = KFD_IOC_WAIT_RESULT_TIMEOUT;
+        }
+        return 0;
+      }
+    }
+  }
+
+  std::unique_lock<std::mutex> lock(mutex_);
+
+  if (args->num_events == 1) {
+    if (closing_)
+      return -EBADF;
+
+    auto it = events_.find(ev_data[0].event_id);
+    if (it == events_.end()) {
+      args->wait_result = KFD_IOC_WAIT_RESULT_FAIL;
+      return 0;
+    }
+
+    bool ready = satisfied(it->second, ev_data[0]);
+    if (ready || is_poll) {
+      if (ready) {
+        uint64_t ready_age = 0;
+        if (it->second.event_type == 0)
+          ready_age = signal_event_age(it->second);
+        if (it->second.event_type == 0)
+          ev_data[0].signal_event_data.last_event_age = ready_age;
+        if (it->second.auto_reset) {
+          it->second.signaled = false;
+          if (it->second.event_type == 0) {
+            clear_fast_signaled_if_age(it->second.event_id, ready_age);
+            write_event_slot(page, page_size, it->second.event_id, KFD_SIGNAL_EVENT_LIMIT);
+          }
+          it->second.event_age = 0;
+        }
+        args->wait_result = KFD_IOC_WAIT_RESULT_COMPLETE;
+      } else {
+        args->wait_result = KFD_IOC_WAIT_RESULT_TIMEOUT;
+      }
+      return 0;
+    }
+  }
 
   auto is_ready = [&]() -> bool {
     if (closing_)
@@ -253,16 +444,30 @@ int EventState::wait_events(void *arg, uint32_t process_id) {
     return wait_all ? all_satisfied : any_satisfied;
   };
 
-  bool is_poll = (args->timeout == 0);
-  if (is_poll) {
-    // Poll mode.
-  } else if (args->timeout >= 0xFFFFFFFEu) {
-    my_cv.wait(lock, is_ready);
-  } else {
-    my_cv.wait_for(lock, std::chrono::milliseconds(args->timeout), is_ready);
-  }
+  bool ready_before_wait = is_ready();
+  if (!is_poll && !ready_before_wait) {
+    std::condition_variable my_cv;
+    for (uint32_t i = 0; i < args->num_events; ++i) {
+      auto it = events_.find(ev_data[i].event_id);
+      if (it != events_.end())
+        it->second.waiters.push_back(&my_cv);
+    }
 
-  unregister_waiters();
+    auto unregister_waiters = [&]() {
+      for (uint32_t i = 0; i < args->num_events; ++i) {
+        auto it = events_.find(ev_data[i].event_id);
+        if (it != events_.end())
+          std::erase(it->second.waiters, &my_cv);
+      }
+    };
+
+    if (args->timeout >= 0xFFFFFFFEu)
+      my_cv.wait(lock, is_ready);
+    else
+      my_cv.wait_for(lock, std::chrono::milliseconds(args->timeout), is_ready);
+
+    unregister_waiters();
+  }
 
   if (closing_)
     return -EBADF;
@@ -279,12 +484,18 @@ int EventState::wait_events(void *arg, uint32_t process_id) {
     }
     if (satisfied(it->second, ev_data[i])) {
       any_ready = true;
+      uint64_t ready_age = 0;
       if (it->second.event_type == 0)
-        ev_data[i].signal_event_data.last_event_age = it->second.event_age;
+        ready_age = signal_event_age(it->second);
+      if (it->second.event_type == 0)
+        ev_data[i].signal_event_data.last_event_age = ready_age;
       if (it->second.auto_reset) {
         it->second.signaled = false;
-        if (it->second.event_type == 0)
+        if (it->second.event_type == 0) {
+          clear_fast_signaled_if_age(it->second.event_id, ready_age);
           write_event_slot(page, page_size, it->second.event_id, KFD_SIGNAL_EVENT_LIMIT);
+        }
+        it->second.event_age = 0;
       }
     } else {
       all_ready = false;

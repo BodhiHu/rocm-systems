@@ -18,11 +18,15 @@ RJ_DIAGNOSTIC_POP
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <elf.h>
 #include <format>
 #include <limits>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <sys/mman.h>
@@ -62,11 +66,22 @@ static_assert(sizeof(AmdExtKernelDispatchPacket) == 64);
 
 uint32_t nonzero_or_one(uint32_t v) { return v == 0 ? 1 : v; }
 
-uint32_t read_memory_u32(GpuMemory *memory, uint64_t addr) {
-  uint32_t value = 0;
-  for (uint32_t i = 0; i < sizeof(value); ++i)
-    value |= static_cast<uint32_t>(memory->read8(addr + i)) << (i * 8);
-  return value;
+uint32_t read_memory_u32(GpuMemory *memory, uint64_t addr, uint32_t vmid) {
+  return memory->read32(addr, vmid);
+}
+
+void flush_dispatch_acquire_caches(const std::vector<ComputeUnitCore *> &cus,
+                                   const std::vector<L2Cache *> &l2_caches, uint32_t vmid) {
+  std::set<L2Cache *> flushed_l2s;
+  for (auto *cu : cus) {
+    cu->flush_l1(vmid);
+    if (auto *l2 = cu->l2(); l2 && flushed_l2s.insert(l2).second)
+      l2->flush_all(vmid);
+  }
+  for (auto *l2 : l2_caches) {
+    if (l2 && flushed_l2s.insert(l2).second)
+      l2->flush_all(vmid);
+  }
 }
 
 bool sgpr_count_is_descriptor_encoded(rj_code_arch_t arch, uint32_t sgpr_gran) {
@@ -86,7 +101,64 @@ bool sgpr_count_is_descriptor_encoded(rj_code_arch_t arch, uint32_t sgpr_gran) {
   }
 }
 
+bool cp_profile_enabled() {
+  static bool enabled = std::getenv("RJ_CP_PROFILE") != nullptr;
+  return enabled;
+}
+
+struct CpProfileCounters {
+  std::atomic<uint64_t> dispatch_calls{0};
+  std::atomic<uint64_t> dispatch_wgs{0};
+  std::atomic<uint64_t> zero_dispatch_calls{0};
+  std::atomic<uint64_t> max_wgs_per_dispatch_call{0};
+
+  ~CpProfileCounters() {
+    if (!cp_profile_enabled())
+      return;
+
+    uint64_t dispatches = dispatch_calls.load(std::memory_order_relaxed);
+    uint64_t wgs = dispatch_wgs.load(std::memory_order_relaxed);
+    double avg_wgs = dispatches ? static_cast<double>(wgs) / dispatches : 0.0;
+
+    std::fprintf(
+        stderr,
+        "RJ_CP_PROFILE dispatch_calls=%llu dispatch_wgs=%llu "
+        "zero_dispatch_calls=%llu avg_wgs_per_dispatch_call=%.2f "
+        "max_wgs_per_dispatch_call=%llu\n",
+        static_cast<unsigned long long>(dispatches), static_cast<unsigned long long>(wgs),
+        static_cast<unsigned long long>(zero_dispatch_calls.load(std::memory_order_relaxed)),
+        avg_wgs,
+        static_cast<unsigned long long>(max_wgs_per_dispatch_call.load(std::memory_order_relaxed)));
+  }
+};
+
+CpProfileCounters &cp_profile_counters() {
+  static CpProfileCounters counters;
+  return counters;
+}
+
+void atomic_max(std::atomic<uint64_t> &target, uint64_t value) {
+  uint64_t observed = target.load(std::memory_order_relaxed);
+  while (observed < value &&
+         !target.compare_exchange_weak(observed, value, std::memory_order_relaxed,
+                                       std::memory_order_relaxed)) {
+  }
+}
+
 } // namespace
+
+CommandProcessor::CommandProcessor(std::string name) : simdojo::Component(std::move(name)) {}
+
+CommandProcessor::~CommandProcessor() { stop_doorbell_monitor(); }
+
+void CommandProcessor::set_dispatch_threads(uint32_t threads) {
+  threads = std::max(threads, 1u);
+  if (dispatch_threads_ == threads)
+    return;
+  dispatch_threads_ = threads;
+  for (auto *spi : spis_)
+    spi->reset_dispatch_pool();
+}
 
 void CommandProcessor::init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf,
                                            const DispatchEntry &pkt, uint32_t global_wg_id,
@@ -165,7 +237,8 @@ void CommandProcessor::init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf,
 
       uint64_t preload_addr = pkt.kernarg_addr + static_cast<uint64_t>(preload_offset) * 4;
       for (uint32_t i = 0; i < preload_length; ++i)
-        cu->write_sgpr(sbase + idx + i, read_memory_u32(memory_, preload_addr + i * 4));
+        cu->write_sgpr(sbase + idx + i,
+                       read_memory_u32(memory_, preload_addr + i * 4, pkt.process_id));
       util::Logger::vm("CP: init_wf kernarg preload s[", idx, ":", idx + preload_length - 1,
                        "] length=", preload_length, " offset=", preload_offset, " sbase=", sbase);
       idx += preload_length;
@@ -289,7 +362,7 @@ void CommandProcessor::init_wavefront_regs(ComputeUnitCore *cu, Wavefront *wf,
 void CommandProcessor::startup() {
   doorbell_event_.set_handler(
       [this](simdojo::Tick ts, simdojo::Message *) { handle_doorbell(ts); });
-  completion_ = std::make_unique<CompletionTracker>(memory_, cus_);
+  completion_ = std::make_unique<CompletionTracker>(memory_, cus_, l2_caches_);
   completion_->set_plugin_group(plugin_group_);
   if (interrupt_cb_)
     completion_->set_interrupt_callback(interrupt_cb_);
@@ -516,7 +589,6 @@ uint32_t CommandProcessor::dispatch_workgroups(DispatchEntry &entry) {
   uint32_t dispatched = 0;
   while (entry.dispatched_wgs < entry.total_wgs) {
     uint32_t global_wg_id = entry.dispatched_wgs + entry.workgroup_id_offset;
-
     // SPI selects the CU based on resource availability.
     ComputeUnitCore *cu = nullptr;
     if (!spis_.empty()) {
@@ -564,6 +636,15 @@ uint32_t CommandProcessor::dispatch_workgroups(DispatchEntry &entry) {
 
     ++entry.dispatched_wgs;
     ++dispatched;
+  }
+
+  if (cp_profile_enabled()) {
+    auto &profile = cp_profile_counters();
+    profile.dispatch_calls.fetch_add(1, std::memory_order_relaxed);
+    profile.dispatch_wgs.fetch_add(dispatched, std::memory_order_relaxed);
+    if (dispatched == 0)
+      profile.zero_dispatch_calls.fetch_add(1, std::memory_order_relaxed);
+    atomic_max(profile.max_wgs_per_dispatch_call, dispatched);
   }
   return dispatched;
 }
@@ -658,6 +739,14 @@ void CommandProcessor::process_queues() {
         break; // CU backpressure.
     }
   }
+}
+
+bool CommandProcessor::has_active_cus() const {
+  for (auto *cu : cus_) {
+    if (cu->has_active_wfs())
+      return true;
+  }
+  return false;
 }
 
 rocr::llvm::amdhsa::kernel_descriptor_t
@@ -767,10 +856,8 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
   // latest host/agent writes (kernarg data, input buffers, etc.).
   // On real hardware the CP issues GL1_INV + GL2_INV for SYSTEM/AGENT scope.
   uint32_t acquire_scope = (pkt.header >> HSA_PACKET_HEADER_SCACQUIRE_FENCE_SCOPE) & 0x3;
-  if (acquire_scope >= HSA_FENCE_SCOPE_AGENT && !cus_.empty()) {
-    for (auto *cu : cus_)
-      cu->flush_all(queue.process_id);
-  }
+  if (acquire_scope >= HSA_FENCE_SCOPE_AGENT && !cus_.empty())
+    flush_dispatch_acquire_caches(cus_, l2_caches_, queue.process_id);
 
   std::string kernel_sym;
   if (host_accessible && memory_) {
@@ -975,8 +1062,12 @@ void CommandProcessor::fetch_from_queue(HwQueue &queue, HwQueueState &qs) {
       dp.dispatched_wgs = 0;
       dp.completion_signal = sig;
       dp.host_signal = false;
+      dp.barrier_bit = true;
 
       qs.entries.push_back(std::move(dp));
+      ++read_idx;
+      process_limit = read_idx;
+      break;
     } else if (pkt_type == HSA_PACKET_TYPE_VENDOR_SPECIFIC) {
       AmdExtKernelDispatchPacket ext{};
       std::memcpy(&ext, &pkt, sizeof(ext));
@@ -1048,7 +1139,9 @@ void CommandProcessor::fetch_packets() {
     fetch_from_queue(hw_queues_[i], new_queue_states_[i]);
 }
 
-void CommandProcessor::handle_doorbell(simdojo::Tick) {
+void CommandProcessor::handle_doorbell(simdojo::Tick timestamp) { handle_doorbell_sync(timestamp); }
+
+void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
   util::Logger::cp(
       [&](auto &os) { os << std::format("{}: DOORBELL queues={}", name(), hw_queues_.size()); });
 
@@ -1073,6 +1166,37 @@ void CommandProcessor::handle_doorbell(simdojo::Tick) {
     os << std::format("{}: FETCHED {} new entries (total={})", name(),
                       entries_after - entries_before, entries_after);
   });
+
+  // While the lock is dropped, CU workers may append completions to
+  // new_queue_states_ (re-drained and indices re-validated after relock).
+  // Assumes no concurrent queue registration/unregistration during the
+  // unlock window — unregister_queue() erasing new_queue_states_ would
+  // invalidate references held by the dispatch loop.
+  auto run_dispatch_workers = [&]() {
+    if (dispatch_threads_ <= 1 || !has_active_cus())
+      return false;
+    lock.unlock();
+    // Wavefront execution is driven by the SPIs, which own the worker pools;
+    // the CP only orchestrates queue fetch, dispatch, and completion. SPI-less
+    // topologies (direct add_compute_unit test harnesses) fall back to driving
+    // the CUs directly.
+    bool ran = false;
+    if (!spis_.empty()) {
+      for (auto *spi : spis_)
+        ran |= spi->run_active_cus_once(dispatch_threads_);
+    } else {
+      for (auto *cu : cus_) {
+        if (cu->has_active_wfs()) {
+          cu->run_quantum();
+          ran = true;
+        }
+      }
+    }
+    lock.lock();
+    if (completion_)
+      completion_->drain_completions(new_queue_states_);
+    return ran;
+  };
 
   // Phase 1: Dispatch-Execute-Complete loop (functional mode).
   bool progress = true;
@@ -1119,6 +1243,10 @@ void CommandProcessor::handle_doorbell(simdojo::Tick) {
           if (sent > 0)
             progress = true;
 
+          bool ran_workers = run_dispatch_workers();
+          if (ran_workers)
+            progress = true;
+
           if (completion_)
             completion_->drain_completions(new_queue_states_);
 
@@ -1132,7 +1260,7 @@ void CommandProcessor::handle_doorbell(simdojo::Tick) {
             ++qs.next_dispatch_idx;
             break;
           }
-          if (sent == 0) {
+          if (sent == 0 && !ran_workers) {
             backpressure = true;
             break;
           }
@@ -1141,6 +1269,9 @@ void CommandProcessor::handle_doorbell(simdojo::Tick) {
           break;
       }
     }
+
+    if (run_dispatch_workers())
+      progress = true;
   }
 
   // Final drain: catch any entries that became fully_completed during the

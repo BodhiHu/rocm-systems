@@ -24,11 +24,13 @@ RJ_DIAGNOSTIC_POP
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
-#include <unordered_map>
+#include <string_view>
 #include <vector>
 
 #ifdef HAS_DEVICE_KERNELS
@@ -53,6 +55,17 @@ static constexpr uint64_t KERNARG_ADDR = 0x400000;
 
 using KD = rocr::llvm::amdhsa::kernel_descriptor_t;
 
+std::optional<uint32_t> env_u32(const char *name) {
+  const char *value = std::getenv(name);
+  if (!value || !value[0])
+    return std::nullopt;
+  char *end = nullptr;
+  unsigned long parsed = std::strtoul(value, &end, 10);
+  if (end == value)
+    return std::nullopt;
+  return static_cast<uint32_t>(parsed);
+}
+
 KD read_kd(const CodeObject &co) {
   for (const auto *sec : co.rodata_sections())
     if (sec->size() >= sizeof(KD)) {
@@ -63,7 +76,7 @@ KD read_kd(const CodeObject &co) {
   return {};
 }
 
-double run_kernel(const char *kernel_name, uint32_t N, uint32_t num_threads) {
+double run_kernel(const char *kernel_name, uint32_t N, uint32_t total_wgs, uint32_t num_threads) {
   Executable exec(kernel_path(kernel_name));
   if (!exec.is_valid())
     return -1;
@@ -73,30 +86,14 @@ double run_kernel(const char *kernel_name, uint32_t N, uint32_t num_threads) {
   auto loaded = config::load_config(CONFIG_PATH, rocjitsu::kEmbeddedSchema);
   auto *soc = loaded.soc();
   auto *memory = loaded.memory();
-  loaded.engine_config.num_threads = num_threads;
+  loaded.engine_config.num_threads = 1;
   auto engine = std::make_unique<simdojo::SimulationEngine>(loaded.engine_config);
   engine->topology().set_root(loaded.take_root());
   loaded.wire_links(engine->topology());
-
-  if (num_threads > 1) {
-    std::unordered_map<simdojo::Component *, simdojo::PartitionID> xcd_map;
-    for (uint32_t i = 0; i < soc->num_xcds(); ++i)
-      xcd_map[soc->xcd(i)] = i % num_threads;
-    engine->topology().partition_manual(
-        num_threads, [&](simdojo::Component *c) -> simdojo::PartitionID {
-          for (auto *p = static_cast<simdojo::Component *>(c); p != nullptr;
-               p = static_cast<simdojo::Component *>(p->parent())) {
-            auto it = xcd_map.find(p);
-            if (it != xcd_map.end())
-              return it->second;
-          }
-          return 0;
-        });
-  }
+  soc->for_each_cp([num_threads](auto *cp) { cp->set_dispatch_threads(num_threads); });
   engine->build();
 
-  memory->load_image(reinterpret_cast<const uint8_t *>(co->image_data()), co->image_size(),
-                     KD_ADDR);
+  co->load_to_memory(memory, KD_ADDR);
   uint64_t kernel_object = KD_ADDR + co->kernel_descriptor_offset(kernel_name);
   if (kernel_object == KD_ADDR)
     return -1;
@@ -105,7 +102,7 @@ double run_kernel(const char *kernel_name, uint32_t N, uint32_t num_threads) {
   size_t elems = static_cast<size_t>(N) * N;
   bool is_vector_add = (std::string(kernel_name) == "vector_add");
   if (is_vector_add)
-    elems = TOTAL_CUS * WF_SIZE;
+    elems = static_cast<size_t>(total_wgs) * WF_SIZE;
 
   size_t data_bytes = elems * sizeof(float);
   std::vector<float> A(elems), B(elems);
@@ -127,7 +124,7 @@ double run_kernel(const char *kernel_name, uint32_t N, uint32_t num_threads) {
   memory->load_image(reinterpret_cast<const uint8_t *>(&args), sizeof(args), KERNARG_ADDR);
 
   // Dispatch across all XCDs via AQL queues.
-  uint32_t wgs_per_xcd = TOTAL_CUS / TOTAL_XCDS;
+  uint32_t wgs_per_xcd = total_wgs / TOTAL_XCDS;
   for (uint32_t xi = 0; xi < TOTAL_XCDS; ++xi) {
     auto *cp = soc->xcd(xi)->command_processor();
     cp->set_workgroup_id_offset(xi * wgs_per_xcd);
@@ -149,11 +146,12 @@ int main() {
   struct Kernel {
     const char *name;
     uint32_t N;
+    uint32_t total_wgs;
   };
   Kernel kernels[] = {
-      {"vector_add", 0}, // N unused for vector_add
-      {"matmul_tiled", 128},
-      {"matmul_mfma", 64},
+      {"vector_add", 0, TOTAL_CUS * 32}, // N unused for vector_add
+      {"matmul_tiled", 256, (256 * 256) / WF_SIZE},
+      {"matmul_mfma", 128, (128 / 4) * (128 / 4)},
   };
 
   std::cout << "threads";
@@ -161,15 +159,27 @@ int main() {
     std::cout << "," << k.name;
   std::cout << "\n";
 
-  constexpr int RUNS = 3;
+  constexpr int RUNS = 1;
 
-  for (uint32_t t = 1; t <= TOTAL_XCDS; ++t) {
+  uint32_t min_threads = env_u32("RJ_SCALING_MIN_THREADS").value_or(1);
+  uint32_t max_threads = env_u32("RJ_SCALING_MAX_THREADS").value_or(TOTAL_XCDS);
+  min_threads = std::clamp(min_threads, 1u, TOTAL_XCDS);
+  max_threads = std::clamp(max_threads, min_threads, TOTAL_XCDS);
+  std::string_view kernel_filter;
+  if (const char *env = std::getenv("RJ_SCALING_KERNEL"))
+    kernel_filter = env;
+
+  for (uint32_t t = min_threads; t <= max_threads; ++t) {
     std::cout << t;
     for (auto &k : kernels) {
+      if (!kernel_filter.empty() && kernel_filter != k.name) {
+        std::cout << ",nan";
+        continue;
+      }
       // Take the median of RUNS.
       std::vector<double> times;
       for (int r = 0; r < RUNS; ++r) {
-        double ms = run_kernel(k.name, k.N, t);
+        double ms = run_kernel(k.name, k.N, k.total_wgs, t);
         times.push_back(ms);
       }
       std::sort(times.begin(), times.end());

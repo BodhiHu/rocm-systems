@@ -84,8 +84,8 @@ enum class SdmaPacketDialect {
 /// not on global CU idle. Signals fire in per-queue submission order.
 class CommandProcessor : public simdojo::Component {
 public:
-  explicit CommandProcessor(std::string name) : simdojo::Component(std::move(name)) {}
-  ~CommandProcessor() override { stop_doorbell_monitor(); }
+  explicit CommandProcessor(std::string name);
+  ~CommandProcessor() override;
 
   void set_memory(GpuMemory *mem) { memory_ = mem; }
   void add_l2_cache(L2Cache *l2) { l2_caches_.push_back(l2); }
@@ -94,6 +94,8 @@ public:
   void set_packed_tid(bool v) { packed_tid_ = v; }
   void set_sdma_packet_dialect(SdmaPacketDialect dialect) { sdma_packet_dialect_ = dialect; }
   SdmaPacketDialect sdma_packet_dialect() const { return sdma_packet_dialect_; }
+  void set_dispatch_threads(uint32_t threads);
+  uint32_t dispatch_threads() const { return dispatch_threads_; }
   /// @brief Update doorbell_base for all queues belonging to a process.
   /// @details Called when the doorbell page is mmap'd after queue creation.
   void set_doorbell_base(uint32_t process_id, void *base);
@@ -178,12 +180,10 @@ private:
   /// @brief Dispatch workgroups from entry to CUs. Returns number dispatched.
   uint32_t dispatch_workgroups(DispatchEntry &entry);
 
-  /// @brief Asynchronous Compute Engine (ACE): dispatch workgroups from all
-  /// active queues to SPIs and run CUs to completion.
-  bool ace_dispatch_all();
-
   /// @brief Process all queues: dispatch undispatched entries, handle non-kernel entries.
   void process_queues();
+
+  bool has_active_cus() const;
 
   /// @brief Called from CU on_idle callback. In functional mode with quantum>0,
   /// checks for stalled dispatches that can resume.
@@ -191,6 +191,8 @@ private:
 
   /// @brief Queue scheduling: select next queue with undispatched entries.
   HwQueueState *schedule_next_queue();
+
+  void handle_doorbell_sync(simdojo::Tick timestamp);
 
   /// @brief Check if barrier is satisfied for an entry.
   bool barrier_satisfied(const HwQueueState &qs, size_t idx) const;
@@ -233,6 +235,7 @@ private:
   SdmaPacketDialect sdma_packet_dialect_ = SdmaPacketDialect::Legacy;
   uint32_t next_dispatch_id_ = 1;
   size_t total_dispatched_ = 0;
+  uint32_t dispatch_threads_ = 1;
 
   simdojo::Event doorbell_event_{this, simdojo::EventType::TIMER_CALLBACK};
   std::recursive_mutex hw_queue_mutex_;
