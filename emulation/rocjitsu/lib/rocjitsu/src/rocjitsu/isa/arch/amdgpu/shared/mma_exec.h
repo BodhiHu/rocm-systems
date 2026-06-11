@@ -626,39 +626,35 @@ void exec_f32_mixed(amdgpu::ComputeUnitCore &cu, uint32_t M, uint32_t N, uint32_
     uint32_t lane;
     uint32_t val;
   };
-  constexpr size_t MAX_RESULTS = 1024;
-  const size_t result_capacity = static_cast<size_t>(M) * N * B;
-  std::array<Result, MAX_RESULTS> stack_results;
-  std::vector<Result> heap_results;
-  Result *results = stack_results.data();
-  if (result_capacity > stack_results.size()) {
-    heap_results.resize(result_capacity);
-    results = heap_results.data();
-  }
-  size_t result_count = 0;
-  auto append_result = [&](Result result) { results[result_count++] = result; };
-  for (uint32_t b = 0; b < B; ++b) {
-    for (uint32_t row = 0; row < M; ++row) {
-      for (uint32_t col = 0; col < N; ++col) {
-        // AMD convention: i=row (register dimension), j=col (lane dimension).
-        auto out = output_loc_32(M, N, row, col, b);
-        float acc = (const_acc != ACC_FROM_VGPR)
-                        ? std::bit_cast<float>(const_acc)
-                        : std::bit_cast<float>(read_vgpr_for_mma(cu, s2 + out.reg, out.lane));
-        for (uint32_t k = 0; k < K; ++k) {
-          auto al = input_loc(M, K, B, row, k, b, a_bits);
-          auto bl = input_loc(N, K, B, col, k, b, b_bits);
-          // Apply cbsz/abid lane permutation to A input.
-          if (cbsz != 0)
-            al.lane = permute_a_lane(al.lane, cbsz, abid);
-          // Apply blgp lane permutation to B input.
-          if (blgp != 0)
-            bl.lane = permute_b_lane(bl.lane, blgp);
-          float a_val = ea(cu, s0, al);
-          float b_val = eb(cu, s1, bl);
-          acc += a_val * b_val;
+  std::vector<Result> results;
+  results.reserve(M * N * B);
+
+  // Scalar reference: D[i][j] = C[i][j] + sum_k A[i][k] * B[k][j], accumulated
+  // per output in K order (non-fused multiply-add).
+  auto run_scalar = [&]() {
+    for (uint32_t b = 0; b < B; ++b) {
+      for (uint32_t row = 0; row < M; ++row) {
+        for (uint32_t col = 0; col < N; ++col) {
+          // AMD convention: i=row (register dimension), j=col (lane dimension).
+          auto out = output_loc_32(M, N, row, col, b);
+          float acc = (const_acc != ACC_FROM_VGPR)
+                          ? std::bit_cast<float>(const_acc)
+                          : std::bit_cast<float>(cu.read_vgpr(s2 + out.reg, out.lane));
+          for (uint32_t k = 0; k < K; ++k) {
+            auto al = input_loc(M, K, B, row, k, b, a_bits);
+            auto bl = input_loc(N, K, B, col, k, b, b_bits);
+            // Apply cbsz/abid lane permutation to A input.
+            if (cbsz != 0)
+              al.lane = permute_a_lane(al.lane, cbsz, abid);
+            // Apply blgp lane permutation to B input.
+            if (blgp != 0)
+              bl.lane = permute_b_lane(bl.lane, blgp);
+            float a_val = ea(cu, s0, al);
+            float b_val = eb(cu, s1, bl);
+            acc += a_val * b_val;
+          }
+          results.push_back({out.reg, out.lane, std::bit_cast<uint32_t>(acc)});
         }
-        append_result({out.reg, out.lane, std::bit_cast<uint32_t>(acc)});
       }
     }
   };
@@ -726,9 +722,8 @@ void exec_f32_mixed(amdgpu::ComputeUnitCore &cu, uint32_t M, uint32_t N, uint32_
   }
 
   bool has_nan = false;
-  for (size_t i = 0; i < result_count; ++i) {
-    const auto &r = results[i];
-    write_vgpr_for_mma(cu, dst + r.reg, r.lane, r.val);
+  for (const auto &r : results) {
+    cu.write_vgpr(dst + r.reg, r.lane, r.val);
     float fval = std::bit_cast<float>(r.val);
     if (std::isnan(fval) || std::isinf(fval))
       has_nan = true;
@@ -737,8 +732,7 @@ void exec_f32_mixed(amdgpu::ComputeUnitCore &cu, uint32_t M, uint32_t N, uint32_
     util::Logger::vm([&](auto &os) {
       os << std::format("MFMA_NAN_DETECTED dst=v{} s0=v{} s1=v{} s2=v{} M={} N={} K={}", dst, s0,
                         s1, s2, M, N, K);
-      for (size_t i = 0; i < result_count; ++i) {
-        const auto &r = results[i];
+      for (const auto &r : results) {
         float fval = std::bit_cast<float>(r.val);
         if (std::isnan(fval) || std::isinf(fval))
           os << std::format("\n[rj log VM]   reg={} lane={} val={:#x}({}) "
