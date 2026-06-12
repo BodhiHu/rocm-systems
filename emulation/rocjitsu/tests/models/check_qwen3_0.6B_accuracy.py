@@ -61,9 +61,9 @@ def make_hook(store: dict, name: str):
             t = t.float()
             print(f">>>>> float ok")
             print(f">>>>> tensor: shape={t.shape} dtype={t.dtype} device={t.device}")
+            t = t.cpu()
+            print(f">>>>> cpu ok")
             # print('\n', t, '\n')
-            # t = t.cpu()
-            # print(f">>>>> cpu ok")
             store[name] = t
         else:
             store[name] = tensor.detach().float().cpu()
@@ -141,8 +141,10 @@ all_pass = True
 common_layers = [k for k in cpu_outputs if k in cuda_outputs]
 
 for name in common_layers:
+    print(f"{name:<50} ", end="", flush=True)
+
     cpu_t  = cpu_outputs[name]
-    cuda_t = cuda_outputs[name].cpu()
+    cuda_t = cuda_outputs[name]
 
     if cpu_t.shape != cuda_t.shape:
         print(f"{name:<50} shape mismatch  cpu={cpu_t.shape} cuda={cuda_t.shape}")
@@ -158,9 +160,10 @@ for name in common_layers:
 
     passed   = (max_err < ATOL) and (cos_sim > COS_SIM_THRESH)
     all_pass = all_pass and passed
-    flag     = "✓" if passed else "✗ FAIL"
+    flag     = "✓ PASS" if passed else "✗ FAIL"
 
-    print(f"{name:<50} {str(tuple(cpu_t.shape)):<20} {max_err:>16.3e} {cos_sim:>16.6f} {flag:>16}")
+    # print(f"{name:<50} {str(tuple(cpu_t.shape)):<20} {max_err:>16.3e} {cos_sim:>16.6f} {flag:>16}")
+    print(f"{str(tuple(cpu_t.shape)):<20} {max_err:>16.3e} {cos_sim:>16.6f} {flag:>16}")
 
 print("-" * 128)
 print(f"\nOverall: {'ALL PASS ✓' if all_pass else 'SOME LAYERS FAILED ✗'}")
