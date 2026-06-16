@@ -37,6 +37,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <map>
 
 #include "rocjitsu/base/rj_compiler.h"
 #define HSA_LARGE_MODEL 1

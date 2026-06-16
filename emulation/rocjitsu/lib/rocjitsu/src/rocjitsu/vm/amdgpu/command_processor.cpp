@@ -1198,6 +1198,14 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
     return ran;
   };
 
+  // @hubodhi: track dispatch dead loops:
+  //   key: hw_queue index
+  //   value: [last_dispatch_idx, looped_count]
+  std::map<size_t, std::array<int, 2>> _queue_loop_info;
+  for (size_t qi = 0; qi < hw_queues_.size(); ++qi) {
+    _queue_loop_info[qi] = {-1, 0};
+  }
+
   // Phase 1: Dispatch-Execute-Complete loop (functional mode).
   bool progress = true;
   while (progress) {
@@ -1211,8 +1219,34 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
       while (qs.next_dispatch_idx < qs.entries.size()) {
         auto &entry = qs.entries[qs.next_dispatch_idx];
 
-        if (entry.barrier_bit && !barrier_satisfied(qs, qs.next_dispatch_idx))
+        // @hubodhi: update loop tracks info:
+        if (_queue_loop_info[qi][0] == static_cast<int>(qs.next_dispatch_idx)) {
+          _queue_loop_info[qi][1] += 1;
+        } else {
+          _queue_loop_info[qi][0] = static_cast<int>(qs.next_dispatch_idx);
+          _queue_loop_info[qi][1] = 0;
+        }
+
+        if (entry.barrier_bit && !barrier_satisfied(qs, qs.next_dispatch_idx)) {
+          // @hubodhi: detected potential barrier dead loop:
+          if (_queue_loop_info[qi][1] >= 100) {
+            util::Logger::warn(
+              "[CommandProcessor] detected potential barrier dead loop: queue index = ", qi,
+              ", dispatch index = ", qs.next_dispatch_idx,
+              ", looped count = ", _queue_loop_info[qi][1]
+            );
+            for (size_t i = 0; i < qs.next_dispatch_idx; ++i) {
+              util::Logger::warn(
+                "[CommandProcessor] >> prior dispatch entry ", i,
+                ", dispatched_wgs = ", qs.entries[i].dispatched_wgs,
+                ", completed_wgs = ", qs.entries[i].completed_wgs,
+                ", total_wgs = ", qs.entries[i].total_wgs
+              );
+            }
+          }
+
           break;
+        }
 
         if (entry.is_non_kernel()) {
           entry.completed_wgs = entry.total_wgs;
