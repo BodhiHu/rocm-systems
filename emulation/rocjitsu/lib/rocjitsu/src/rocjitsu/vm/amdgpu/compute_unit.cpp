@@ -607,6 +607,27 @@ void ComputeUnitCore::issue_instruction(Wavefront *active) {
     }
   }
 
+  // @hubodhi: print instruction info for debugging only
+  if constexpr (util::Logger::synced_exec_print) {
+    static thread_local auto last_print = std::chrono::system_clock::now() - std::chrono::seconds(3);
+    static std::unordered_map<uint32_t, std::ofstream> wf_log_files;
+
+    std::ostream* os = &std::cout;
+    if (util::Logger::__dump_wf_instrs.load(std::memory_order_relaxed)) {
+      auto& ofs = wf_log_files.try_emplace(
+          active->wf_id(),
+          std::format("wf_{}_insts.txt", active->wf_id())
+      ).first->second;
+      os = &ofs;
+      last_print = std::chrono::system_clock::now() - std::chrono::seconds(1000);
+    }
+    util::Logger::synced_print_per_sec(last_print, *os, [&](auto& out) {
+      out << "EXEC wf=" << std::format("{:06d}", active->wf_id())
+          << ", pc=" << active->pc
+          << ", inst=" << inst->mnemonic();
+    });
+  }
+
   execute_instruction(inst, *active);
   if (plugin_hooks_enabled_)
     plugin_group_->onAmdgpuAfterExecuteInstruction(active->pc, *inst, *active);

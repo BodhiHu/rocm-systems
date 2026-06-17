@@ -1228,21 +1228,26 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
         }
 
         if (entry.barrier_bit && !barrier_satisfied(qs, qs.next_dispatch_idx)) {
-          // @hubodhi: detected potential barrier dead loop:
+          // @hubodhi: detected potential barrier dead loop,
+          // and print warnings max once per second:
           if (_queue_loop_info[qi][1] >= 100) {
-            util::Logger::warn(
-              "[CommandProcessor] detected potential barrier dead loop: queue index = ", qi,
-              ", dispatch index = ", qs.next_dispatch_idx,
-              ", looped count = ", _queue_loop_info[qi][1]
-            );
-            for (size_t i = 0; i < qs.next_dispatch_idx; ++i) {
-              util::Logger::warn(
-                "[CommandProcessor] >> prior dispatch entry ", i,
-                ", dispatched_wgs = ", qs.entries[i].dispatched_wgs,
-                ", completed_wgs = ", qs.entries[i].completed_wgs,
-                ", total_wgs = ", qs.entries[i].total_wgs
-              );
-            }
+            static thread_local auto last_print =
+              std::chrono::system_clock::now() - std::chrono::seconds(3);
+
+            util::Logger::synced_print_per_sec(last_print, std::cout, [&](auto& out) {
+              out << "[CommandProcessor] detected potential barrier dead loop:\n"
+                  << "\t\t>> queue index = " << qi
+                  << ", dispatch index = " << qs.next_dispatch_idx
+                  << ", looped count = " << _queue_loop_info[qi][1]
+                  << "\n";
+              for (size_t i = 0; i < qs.next_dispatch_idx; ++i) {
+                out << "\t\t>> prior dispatch entry " << i
+                    << ", dispatched_wgs = " << qs.entries[i].dispatched_wgs
+                    << ", completed_wgs = " << qs.entries[i].completed_wgs
+                    << ", total_wgs = " << qs.entries[i].total_wgs;
+              }
+            });
+            util::Logger::__dump_wf_instrs.store(true, std::memory_order_relaxed);
           }
 
           break;
