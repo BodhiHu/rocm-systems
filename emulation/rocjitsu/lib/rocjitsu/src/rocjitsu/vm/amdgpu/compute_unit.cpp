@@ -624,7 +624,7 @@ void ComputeUnitCore::issue_instruction(Wavefront *active) {
     util::Logger::synced_print_per_sec(last_print, *os, [&](auto& out) {
       out << "EXEC wf=" << std::format("{:06d}", active->wf_id())
           << ", pc=" << active->pc
-          << ", inst=" << inst->mnemonic();
+          << ", inst= " << inst->disassemble();
     });
   }
 
