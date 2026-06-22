@@ -174,13 +174,13 @@ void ScalarMemPipeline::initiate_access(Instruction &inst, Wavefront &wf) {
   if (d.is_load) {
     if (d.elem_size < 4) {
       uint8_t bytes[4] = {};
-      l1_->load_bytes(d.addr, d.elem_size, bytes, wf.process_id());
+      l1_->load_bytes(d.addr, d.elem_size, bytes, wf.process_id(), d.mtype);
       d.response_data[0] = extend_scalar_load(bytes, d.elem_size, d.sign_extend);
     } else {
-      l1_->load(d.addr, d.num_dwords, d.response_data, wf.process_id());
+      l1_->load(d.addr, d.num_dwords, d.response_data, wf.process_id(), d.mtype);
     }
   } else {
-    l1_->store(d.addr, d.num_dwords, d.store_data, wf.process_id());
+    l1_->store(d.addr, d.num_dwords, d.store_data, wf.process_id(), d.mtype);
   }
 }
 

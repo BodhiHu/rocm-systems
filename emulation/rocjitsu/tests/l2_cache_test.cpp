@@ -371,4 +371,130 @@ TEST(GpuMemoryTest, BlockAccessHandlesPageBoundaries) {
   EXPECT_EQ(output, input);
 }
 
+
+// ---------------------------------------------------------------------------
+// L1VectorCache NT (non-temporal) tests: verify NT bypasses V$ on load/store,
+// going directly to L2.  L1VectorCache uses the 'non_temporal' boolean
+// parameter rather than Mtype::NT to decide bypass.
+// ---------------------------------------------------------------------------
+
+TEST(L1VectorCacheTest, NtStoreBypassesVectorCache) {
+  GpuMemory memory("memory");
+  L2Cache l2("l2");
+  l2.set_backing_memory(&memory);
+  L1VectorCache l1(&l2);
+  l1.set_memory(&memory);
+
+  constexpr uint32_t kElemSize = sizeof(uint32_t);
+  constexpr uint32_t kNumElems = 1;
+  constexpr uint64_t kBase = 0x600000;
+  constexpr uint64_t kMask = 1ULL << 0;
+
+  std::array<uint64_t, 64> addrs{};
+  addrs[0] = kBase;
+
+  uint32_t nt_val = 0xDEADBEEF;
+  std::array<uint8_t, 64 * kElemSize> src{};
+  std::memcpy(src.data(), &nt_val, sizeof(nt_val));
+
+  // NT store bypasses V$, goes directly to L2 (which writes through to memory).
+  l1.store(addrs.data(), kMask, kElemSize, kNumElems, src.data(), Mtype::RW, true);
+
+  // After NT store, memory should have the data (L2 write-through).
+  uint32_t mem_val = memory.read32(kBase);
+  EXPECT_EQ(mem_val, nt_val) << "NT store must reach memory via L2";
+}
+
+TEST(L1VectorCacheTest, NtLoadBypassesVectorCache) {
+  GpuMemory memory("memory");
+  L2Cache l2("l2");
+  l2.set_backing_memory(&memory);
+  L1VectorCache l1(&l2);
+  l1.set_memory(&memory);
+
+  constexpr uint32_t kElemSize = sizeof(uint32_t);
+  constexpr uint32_t kNumElems = 1;
+  constexpr uint64_t kBase = 0x680000;
+  constexpr uint64_t kMask = 1ULL << 0;
+
+  std::array<uint64_t, 64> addrs{};
+  addrs[0] = kBase;
+
+  // Write data to memory directly (bypassing all caches).
+  uint32_t mem_val = 0xFACEFEED;
+  memory.write32(kBase, mem_val);
+
+  // NT load bypasses V$, reads directly from L2 (which misses and fetches from memory).
+  std::array<uint8_t, 64 * kElemSize> dst{};
+  l1.load(addrs.data(), kMask, kElemSize, kNumElems, dst.data(), Mtype::RW, true);
+
+  uint32_t loaded = 0;
+  std::memcpy(&loaded, dst.data(), sizeof(loaded));
+  EXPECT_EQ(loaded, mem_val) << "NT load must read correct value from memory via L2";
+}
+
+TEST(L1VectorCacheTest, NtStoreThenRwLoad) {
+  GpuMemory memory("memory");
+  L2Cache l2("l2");
+  l2.set_backing_memory(&memory);
+  L1VectorCache l1(&l2);
+  l1.set_memory(&memory);
+
+  constexpr uint32_t kElemSize = sizeof(uint32_t);
+  constexpr uint32_t kNumElems = 1;
+  constexpr uint64_t kBase = 0x700000;
+  constexpr uint64_t kMask = 1ULL << 0;
+
+  std::array<uint64_t, 64> addrs{};
+  addrs[0] = kBase;
+
+  uint32_t nt_val = 0x11223344;
+  std::array<uint8_t, 64 * kElemSize> src{};
+  std::memcpy(src.data(), &nt_val, sizeof(nt_val));
+
+  // NT store bypasses V$, goes to L2 (write-through to memory).
+  l1.store(addrs.data(), kMask, kElemSize, kNumElems, src.data(), Mtype::RW, true);
+
+  // RW load: V$ miss → fetch from L2 → should see NT-stored data.
+  std::array<uint8_t, 64 * kElemSize> dst{};
+  l1.load(addrs.data(), kMask, kElemSize, kNumElems, dst.data(), Mtype::RW, false);
+
+  uint32_t loaded = 0;
+  std::memcpy(&loaded, dst.data(), sizeof(loaded));
+  EXPECT_EQ(loaded, nt_val) << "RW load after NT store must see the stored data";
+}
+
+TEST(L1VectorCacheTest, RwStoreThenNtLoad) {
+  GpuMemory memory("memory");
+  L2Cache l2("l2");
+  l2.set_backing_memory(&memory);
+  L1VectorCache l1(&l2);
+  l1.set_memory(&memory);
+
+  constexpr uint32_t kElemSize = sizeof(uint32_t);
+  constexpr uint32_t kNumElems = 1;
+  constexpr uint64_t kBase = 0x780000;
+  constexpr uint64_t kMask = 1ULL << 0;
+
+  std::array<uint64_t, 64> addrs{};
+  addrs[0] = kBase;
+
+  uint32_t rw_val = 0x55667788;
+  std::array<uint8_t, 64 * kElemSize> src{};
+  std::memcpy(src.data(), &rw_val, sizeof(rw_val));
+
+  // RW store: allocated in V$ (clean, write-through to L2).
+  l1.store(addrs.data(), kMask, kElemSize, kNumElems, src.data(), Mtype::RW, false);
+
+  // NT load: bypasses V$, reads from L2.
+  // L2 has the data from the RW store (write-through).
+  std::array<uint8_t, 64 * kElemSize> dst{};
+  l1.load(addrs.data(), kMask, kElemSize, kNumElems, dst.data(), Mtype::RW, true);
+
+  uint32_t loaded = 0;
+  std::memcpy(&loaded, dst.data(), sizeof(loaded));
+  EXPECT_EQ(loaded, rw_val) << "NT load after RW store must see the stored data via L2";
+}
+
+
 } // namespace

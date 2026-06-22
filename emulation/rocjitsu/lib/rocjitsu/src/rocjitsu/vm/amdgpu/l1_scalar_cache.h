@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 namespace rocjitsu {
 namespace amdgpu {
@@ -46,13 +47,18 @@ public:
   ///
   /// Fetches from K$ on hit, or fills from L2 on miss. Handles requests
   /// that span multiple cache lines.
-  void load(uint64_t addr, uint32_t num_dwords, uint32_t *dst, uint32_t vmid = 0);
+  /// @param mtype_override If set, overrides the PTE-derived mtype for cache
+  ///        behavior (e.g., glc forces Mtype::CC to bypass K$ and L2 caches).
+  void load(uint64_t addr, uint32_t num_dwords, uint32_t *dst, uint32_t vmid = 0,
+            std::optional<Mtype> mtype_override = std::nullopt);
 
   /// @brief Scalar load: read num_bytes contiguous bytes from addr.
-  void load_bytes(uint64_t addr, uint32_t num_bytes, uint8_t *dst, uint32_t vmid = 0);
+  void load_bytes(uint64_t addr, uint32_t num_bytes, uint8_t *dst, uint32_t vmid = 0,
+                  std::optional<Mtype> mtype_override = std::nullopt);
 
   /// @brief Scalar store: write num_dwords contiguous dwords to addr.
-  void store(uint64_t addr, uint32_t num_dwords, const uint32_t *src, uint32_t vmid = 0);
+  void store(uint64_t addr, uint32_t num_dwords, const uint32_t *src, uint32_t vmid = 0,
+             std::optional<Mtype> mtype_override = std::nullopt);
 
   /// @brief Write back all dirty K$ lines to L2 (s_dcache_wb).
   void writeback_all(uint32_t vmid = 0);

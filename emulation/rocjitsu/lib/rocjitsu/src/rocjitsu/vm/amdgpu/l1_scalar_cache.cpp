@@ -34,7 +34,8 @@ void L1ScalarCache::ensure_line(uint64_t addr, uint32_t vmid) {
   cache_.fill_line(addr, line_buf);
 }
 
-void L1ScalarCache::store(uint64_t addr, uint32_t num_dwords, const uint32_t *src, uint32_t vmid) {
+void L1ScalarCache::store(uint64_t addr, uint32_t num_dwords, const uint32_t *src, uint32_t vmid,
+                          std::optional<Mtype> mtype_override) {
   for (uint32_t i = 0; i < num_dwords; ++i) {
     uint64_t ea = addr + i * 4;
     uint8_t buf[4];
@@ -47,6 +48,10 @@ void L1ScalarCache::store(uint64_t addr, uint32_t num_dwords, const uint32_t *sr
           std::min<uint32_t>(sizeof(buf) - copied, CacheStore::LINE_SIZE - line_offset);
 
       Mtype mtype = Mtype::RW;
+      if (mtype_override.has_value())
+        mtype = effective_mtype(mtype_override.value(),
+                                memory_ ? memory_->pte_mtype(chunk_addr, vmid) : Mtype::RW);
+      else
       if (memory_)
         mtype = memory_->pte_mtype(chunk_addr, vmid);
 
@@ -59,6 +64,12 @@ void L1ScalarCache::store(uint64_t addr, uint32_t num_dwords, const uint32_t *sr
       if (mtype == Mtype::CC) {
         cache_.invalidate(chunk_addr);
         l2_->write(chunk_addr, buf + copied, chunk, Mtype::CC, vmid);
+        copied += chunk;
+        continue;
+      }
+
+      if (mtype == Mtype::NT) {
+        l2_->write(chunk_addr, buf + copied, chunk, Mtype::NT, vmid);
         copied += chunk;
         continue;
       }
@@ -83,7 +94,8 @@ void L1ScalarCache::writeback_all(uint32_t vmid) {
   });
 }
 
-void L1ScalarCache::load(uint64_t addr, uint32_t num_dwords, uint32_t *dst, uint32_t vmid) {
+void L1ScalarCache::load(uint64_t addr, uint32_t num_dwords, uint32_t *dst, uint32_t vmid,
+                          std::optional<Mtype> mtype_override) {
   for (uint32_t i = 0; i < num_dwords; ++i) {
     uint64_t ea = addr + i * 4;
     uint8_t buf[4]{};
@@ -95,6 +107,10 @@ void L1ScalarCache::load(uint64_t addr, uint32_t num_dwords, uint32_t *dst, uint
           std::min<uint32_t>(sizeof(buf) - copied, CacheStore::LINE_SIZE - line_offset);
 
       Mtype mtype = Mtype::RW;
+      if (mtype_override.has_value())
+        mtype = effective_mtype(mtype_override.value(),
+                                memory_ ? memory_->pte_mtype(chunk_addr, vmid) : Mtype::RW);
+      else
       if (memory_)
         mtype = memory_->pte_mtype(chunk_addr, vmid);
 
@@ -103,6 +119,8 @@ void L1ScalarCache::load(uint64_t addr, uint32_t num_dwords, uint32_t *dst, uint
       } else if (mtype == Mtype::CC) {
         cache_.invalidate(chunk_addr);
         l2_->read(chunk_addr, buf + copied, chunk, Mtype::CC, vmid);
+      } else if (mtype == Mtype::NT) {
+        l2_->read(chunk_addr, buf + copied, chunk, Mtype::NT, vmid);
       } else {
         ensure_line(chunk_addr, vmid);
         cache_.read_line(chunk_addr, buf + copied, line_offset, chunk);
@@ -113,7 +131,8 @@ void L1ScalarCache::load(uint64_t addr, uint32_t num_dwords, uint32_t *dst, uint
   }
 }
 
-void L1ScalarCache::load_bytes(uint64_t addr, uint32_t num_bytes, uint8_t *dst, uint32_t vmid) {
+void L1ScalarCache::load_bytes(uint64_t addr, uint32_t num_bytes, uint8_t *dst, uint32_t vmid,
+                              std::optional<Mtype> mtype_override) {
   uint32_t copied = 0;
   while (copied < num_bytes) {
     uint64_t ea = addr + copied;
@@ -121,6 +140,10 @@ void L1ScalarCache::load_bytes(uint64_t addr, uint32_t num_bytes, uint8_t *dst, 
     uint32_t chunk = std::min(num_bytes - copied, CacheStore::LINE_SIZE - line_offset);
 
     Mtype mtype = Mtype::RW;
+    if (mtype_override.has_value())
+      mtype = effective_mtype(mtype_override.value(),
+                              memory_ ? memory_->pte_mtype(ea, vmid) : Mtype::RW);
+    else
     if (memory_)
       mtype = memory_->pte_mtype(ea, vmid);
 
@@ -129,6 +152,8 @@ void L1ScalarCache::load_bytes(uint64_t addr, uint32_t num_bytes, uint8_t *dst, 
     } else if (mtype == Mtype::CC) {
       cache_.invalidate(ea);
       l2_->read(ea, dst + copied, chunk, Mtype::CC, vmid);
+    } else if (mtype == Mtype::NT) {
+      l2_->read(ea, dst + copied, chunk, Mtype::NT, vmid);
     } else {
       ensure_line(ea, vmid);
       cache_.read_line(ea, dst + copied, line_offset, chunk);

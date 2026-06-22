@@ -1216,6 +1216,10 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
         continue;
       auto &qs = new_queue_states_[qi];
 
+      static thread_local auto tmp = std::chrono::system_clock::now() - std::chrono::seconds(3);
+      util::Logger::synced_print_per_sec(tmp, std::cout, [&](auto& out) {
+        out << "[CommandProcessor] enterring queue entries ...";
+      });
       while (qs.next_dispatch_idx < qs.entries.size()) {
         auto &entry = qs.entries[qs.next_dispatch_idx];
 
@@ -1228,6 +1232,10 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
         }
 
         if (entry.barrier_bit && !barrier_satisfied(qs, qs.next_dispatch_idx)) {
+          static thread_local auto tmp = std::chrono::system_clock::now() - std::chrono::seconds(3);
+          util::Logger::synced_print_per_sec(tmp, std::cout, [&](auto& out) {
+            out << "[CommandProcessor] barrier not satisfied";
+          });
           // @hubodhi: detected potential barrier dead loop,
           // and print warnings max once per second:
           if (_queue_loop_info[qi][1] >= 100) {
@@ -1247,6 +1255,8 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
                     << ", total_wgs = " << qs.entries[i].total_wgs;
               }
             });
+            // Since we had found a dead loop, mark `__dump_wf_instrs` to true
+            // to dump the wf instructions:
             util::Logger::__dump_wf_instrs.store(true, std::memory_order_relaxed);
           }
 
@@ -1282,6 +1292,10 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
           if (sent > 0)
             progress = true;
 
+          static thread_local auto tmp = std::chrono::system_clock::now() - std::chrono::seconds(3);
+          util::Logger::synced_print_per_sec(tmp, std::cout, [&](auto& out) {
+            out << "[CommandProcessor] for loop: run_dispatch_workers ...";
+          });
           bool ran_workers = run_dispatch_workers();
           if (ran_workers)
             progress = true;
@@ -1309,6 +1323,10 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
       }
     }
 
+    static thread_local auto tmp2 = std::chrono::system_clock::now() - std::chrono::seconds(3);
+    util::Logger::synced_print_per_sec(tmp2, std::cout, [&](auto& out) {
+      out << "[CommandProcessor] for loop break, run_dispatch_workers ...";
+    });
     if (run_dispatch_workers())
       progress = true;
   }

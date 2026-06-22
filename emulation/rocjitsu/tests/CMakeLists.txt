@@ -43,6 +43,8 @@ add_executable(
     vector_add_test.cpp
     gfx1250_sim_test.cpp
     l2_cache_test.cpp
+    l1_scalar_cache_test.cpp
+    smem_load_store_test.cpp
     simdojo_sim_test.cpp
     partitioning_test.cpp
     simulated_driver_test.cpp
