@@ -1245,7 +1245,7 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
             util::Logger::synced_print_per_sec(last_print, std::cout, [&](auto& out) {
               out << "[CommandProcessor] detected potential barrier dead loop:\n"
                   << "\t\t>> queue index = " << qi
-                  << ", dispatch index = " << qs.next_dispatch_idx
+                  << ", dispatch entry = " << qs.next_dispatch_idx
                   << ", looped count = " << _queue_loop_info[qi][1]
                   << "\n";
               for (size_t i = 0; i < qs.next_dispatch_idx; ++i) {
@@ -1294,7 +1294,12 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
 
           static thread_local auto tmp = std::chrono::system_clock::now() - std::chrono::seconds(3);
           util::Logger::synced_print_per_sec(tmp, std::cout, [&](auto& out) {
-            out << "[CommandProcessor] for loop: run_dispatch_workers ...";
+            out << "[CommandProcessor] for loop: run_dispatch_workers:"
+                << " queue index = " << qi << ", dispatch entry = " << qs.next_dispatch_idx
+                << ", sent = " << sent
+                << ", dispatched_wgs = " << qs.entries[qs.next_dispatch_idx].dispatched_wgs
+                << ", completed_wgs = " << qs.entries[qs.next_dispatch_idx].completed_wgs
+                << ", total_wgs = " << qs.entries[qs.next_dispatch_idx].total_wgs;
           });
           bool ran_workers = run_dispatch_workers();
           if (ran_workers)
@@ -1309,6 +1314,7 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
           if (post.dispatch_id != dispatch_id)
             break;
 
+          // if (post.fully_dispatched() && post.fully_completed()) {
           if (post.fully_dispatched()) {
             ++qs.next_dispatch_idx;
             break;

@@ -200,7 +200,7 @@ public:
       auto now_t = std::chrono::system_clock::to_time_t(now);
 
       std::osyncstream sync_os(os);
-      sync_os << "$--> " << std::put_time(std::localtime(&now_t), "%H:%M:%S") << ' ';
+      sync_os << std::put_time(std::localtime(&now_t), "[%H:%M:%S]") << ' ';
 
       printer(sync_os);
       sync_os << '\n' << std::flush;
