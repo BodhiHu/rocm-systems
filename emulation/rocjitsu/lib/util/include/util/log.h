@@ -10,6 +10,7 @@
 #include <mutex>
 #include <ostream>
 #include <sstream>
+#include <fstream>
 #include <string_view>
 #include <chrono>
 #include <syncstream>
@@ -182,13 +183,15 @@ public:
     print<GROUP_DBT_HOOKS>(std::forward<Fn>(fn));
   }
 
-#define SYNCED_EXEC_PRINT
-#ifdef SYNCED_EXEC_PRINT
-  static constexpr bool synced_exec_print = true;
+// #define SYNCED_VM_DBG_PRINT
+#ifdef SYNCED_VM_DBG_PRINT
+  static constexpr bool synced_vm_dbg_print = true;
 #else
-  static constexpr bool synced_exec_print = false;
+  static constexpr bool synced_vm_dbg_print = false;
 #endif
-  inline static std::atomic<bool> __dump_wf_instrs{false};
+
+  inline static std::atomic<bool> __potential_barrier_dead_loop_detected{false};
+
   /// @brief Helper to print at most once per second, with a timestamp.
   template <typename Func>
   static void synced_print_per_sec(

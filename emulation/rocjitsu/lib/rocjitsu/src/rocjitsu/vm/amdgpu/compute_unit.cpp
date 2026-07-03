@@ -549,6 +549,7 @@ void ComputeUnitCore::issue_instruction(Wavefront *active) {
                      std::hex, active->pc, " words=[0x", words[0], ",0x", words[1], ",0x", words[2],
                      ",0x", words[3], "]", std::dec, " what=", e.what());
     active->halt();
+    assert(false && "Instruction decode exception");
     return;
   }
   if (!inst) {
@@ -607,26 +608,15 @@ void ComputeUnitCore::issue_instruction(Wavefront *active) {
     }
   }
 
-  // @hubodhi: print instruction info for debugging only
-  if constexpr (util::Logger::synced_exec_print) {
-    // static std::map<size_t, size_t> wf_s_cbranch_scc0_cnts;
-    // auto inst_s = std::string_view(inst->disassemble());
-    // if (inst_s.find("s_cbranch_scc0 65530") != std::string_view::npos) {
-    //   wf_s_cbranch_scc0_cnts[active->wf_id()] += 1;
-    //   // if `s_cbranch_scc0 65530` happens too many times for the same wavefront,
-    //   // then we think it's a branch-jump dead loop, and set the `__dump_wf_instrs` flag:
-    //   if (wf_s_cbranch_scc0_cnts[active->wf_id()] > 1000) {
-    //     util::Logger::__dump_wf_instrs.store(true, std::memory_order_relaxed);
-    //   }
-    // }
+  if constexpr (util::Logger::synced_vm_dbg_print) {
     static thread_local auto last_print = std::chrono::system_clock::now() - std::chrono::seconds(3);
     static std::unordered_map<uint32_t, std::ofstream> wf_log_files;
 
     std::ostream* os = &std::cout;
-    if (util::Logger::__dump_wf_instrs.load(std::memory_order_relaxed)) {
+    if (util::Logger::__potential_barrier_dead_loop_detected.load(std::memory_order_relaxed)) {
       auto& ofs = wf_log_files.try_emplace(
           active->wf_id(),
-          std::format("/tmp/rocjit_debug/wf_{}_insts.txt", active->wf_id())
+          std::format("/tmp/rocivm_debug/wf_{}_insts.txt", active->wf_id())
       ).first->second;
       os = &ofs;
       last_print = std::chrono::system_clock::now() - std::chrono::seconds(1000);

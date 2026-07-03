@@ -55,36 +55,25 @@ def make_hook(store: dict, name: str):
         else:
             tensor = output
 
-        if name == "lm_head":
-            t = tensor.detach()
-            print(f">>>>> detach ok")
-            t = t.float()
-            print(f">>>>> float ok")
-            print(f">>>>> tensor: shape={t.shape} dtype={t.dtype} device={t.device}")
-            t = t.cpu()
-            print(f">>>>> cpu ok")
-            # print('\n', t, '\n')
-            store[name] = t
-        else:
-            store[name] = tensor.detach().float().cpu()
+        store[name] = tensor.detach().float().cpu()
 
         if tensor.device.type == "cuda":
-            print(f">>> [cuda] layer out: {name}")
+            print(f"[cuda] layer out: {name}")
         elif tensor.device.type == "cpu":
-            print(f">>> [ cpu] layer out: {name}")
+            print(f"[ cpu] layer out: {name}")
         else:
-            print(f">>> ERROR: Unexpected device {tensor.device.type} for layer {name}")
+            print(f"ERROR: Unexpected device {tensor.device.type} for layer {name}")
 
     return hook
 
 def make_pre_hook(device, pre_store: dict, name: str):
     def pre_hook(module, input, kwargs):
         if device == "cuda":
-            print(f">>> [cuda] layer inp: {name}")
+            print(f"[cuda] layer inp: {name}")
         elif device == "cpu":
-            print(f">>> [ cpu] layer inp: {name}")
+            print(f"[ cpu] layer inp: {name}")
         else:
-            print(f">>> ERROR: Unexpected device {device}")
+            print(f"ERROR: Unexpected device {device}")
 
     return pre_hook
 
@@ -121,14 +110,16 @@ model_cuda.eval()
 model_cpu.eval()
 
 with torch.no_grad():
-    print(">>> cuda model:\n", model_cuda)
-    _ = model_cuda(**model_inputs_cuda)
-    print(">>> cpu  model:\n", model_cpu)
-    _ = model_cpu(**model_inputs_cpu)
+    print("cuda model:\n", model_cuda)
+    # out_cuda = model_cuda(**model_inputs_cuda)
+    generated_ids_cuda = model_cuda.generate(**model_inputs_cuda, max_new_tokens=1)
+    print("cpu  model:\n", model_cpu)
+    # out_cpu = model_cpu(**model_inputs_cpu)
+    generated_ids_cpu = model_cpu.generate(**model_inputs_cpu, max_new_tokens=1)
 
-# Remove hooks
-for h in handles_cpu + handles_cuda:
-    h.remove()
+# # Remove hooks
+# for h in handles_cpu + handles_cuda:
+#     h.remove()
 
 # ── Layer-by-layer comparison ─────────────────────────────────────────────────
 print(f"\n{'Layer':<50} {'Shape':<20} {'MaxAbsErr':>16} {'CosSim':>16} {'Pass':>16}")
@@ -167,18 +158,13 @@ for name in common_layers:
 
 print("-" * 128)
 print(f"\nOverall: {'ALL PASS ✓' if all_pass else 'SOME LAYERS FAILED ✗'}")
-print(f"Layers compared: {len(common_layers)}")
 
-only_cpu  = set(cpu_outputs)  - set(cuda_outputs)
-only_cuda = set(cuda_outputs) - set(cpu_outputs)
-if only_cpu:
-    print(f"Layers only in CPU  : {only_cpu}")
-if only_cuda:
-    print(f"Layers only in CUDA : {only_cuda}")
+generated_ids_cuda = model_cuda.generate(**model_inputs_cuda, max_new_tokens=1)
+output_ids = generated_ids_cuda[0][len(model_inputs_cuda.input_ids[0]):].tolist()
+print(f"[cuda] Generated token ids : {output_ids}")
+print(f"[cuda] Decoded             : {tokenizer.decode(output_ids, skip_special_tokens=True)}")
 
-# ── Optional: original generation (CUDA model) ───────────────────────────────
-print("\nRunning generation...")
-generated_ids = model_cuda.generate(**model_inputs_cuda, max_new_tokens=1)
-output_ids = generated_ids[0][len(model_inputs_cuda.input_ids[0]):].tolist()
-print(f"Generated token ids : {output_ids}")
-print(f"Decoded             : {tokenizer.decode(output_ids, skip_special_tokens=True)}")
+generated_ids_cpu = model_cpu.generate(**model_inputs_cpu, max_new_tokens=1)
+output_ids = generated_ids_cpu[0][len(model_inputs_cpu.input_ids[0]):].tolist()
+print(f"[cpu] Generated token ids : {output_ids}")
+print(f"[cpu] Decoded             : {tokenizer.decode(output_ids, skip_special_tokens=True)}")

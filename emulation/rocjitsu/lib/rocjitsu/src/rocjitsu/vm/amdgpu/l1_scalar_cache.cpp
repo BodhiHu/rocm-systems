@@ -9,12 +9,6 @@
 #include <algorithm>
 #include <cstring>
 
-static const bool is_off_cache = [] {
-    const bool is_off = (std::getenv("OFF_CACHE") != nullptr);
-    std::cout << "[rocjit] cache is: " << (is_off ? "OFF" : "ON") << std::endl;
-    return is_off;
-}();
-
 namespace rocjitsu {
 namespace amdgpu {
 
@@ -61,10 +55,6 @@ void L1ScalarCache::store(uint64_t addr, uint32_t num_dwords, const uint32_t *sr
       if (memory_)
         mtype = memory_->pte_mtype(chunk_addr, vmid);
 
-      if (is_off_cache) {
-        mtype = Mtype::UC;
-      }
-
       if (mtype == Mtype::UC) {
         l2_->write(chunk_addr, buf + copied, chunk, Mtype::UC, vmid);
         copied += chunk;
@@ -99,10 +89,6 @@ void L1ScalarCache::store(uint64_t addr, uint32_t num_dwords, const uint32_t *sr
 
 void L1ScalarCache::writeback_all(uint32_t vmid) {
   cache_.for_each_dirty([this, vmid](simdojo::CacheTag &tag, uint64_t line_addr, uint8_t *data) {
-    if (is_off_cache) {
-      assert(false && "cache is disabled, there should not be dirty cache");
-    }
-
     l2_->writeback_line(line_addr, data, Mtype::RW, vmid);
     tag.dirty = false;
   });
@@ -127,10 +113,6 @@ void L1ScalarCache::load(uint64_t addr, uint32_t num_dwords, uint32_t *dst, uint
       else
       if (memory_)
         mtype = memory_->pte_mtype(chunk_addr, vmid);
-
-      if (is_off_cache) {
-        mtype = Mtype::UC;
-      }
 
       if (mtype == Mtype::UC) {
         l2_->read(chunk_addr, buf + copied, chunk, Mtype::UC, vmid);
@@ -164,10 +146,6 @@ void L1ScalarCache::load_bytes(uint64_t addr, uint32_t num_bytes, uint8_t *dst, 
     else
     if (memory_)
       mtype = memory_->pte_mtype(ea, vmid);
-
-    if (is_off_cache) {
-      mtype = Mtype::UC;
-    }
 
     if (mtype == Mtype::UC) {
       l2_->read(ea, dst + copied, chunk, Mtype::UC, vmid);
