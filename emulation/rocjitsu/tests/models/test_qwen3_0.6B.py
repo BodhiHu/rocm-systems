@@ -8,12 +8,12 @@ model = AutoModelForCausalLM.from_pretrained(
     model_name,
     torch_dtype="auto",
     # device_map="auto"
-    # device_map="cuda"
-    device_map="cpu"
+    device_map="cuda"
+    # device_map="cpu"
 )
 
 # prepare the model input
-prompt = "Give me a short introduction to large language model."
+prompt = "Hi."
 messages = [
     {"role": "user", "content": prompt}
 ]

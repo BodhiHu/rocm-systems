@@ -4,6 +4,11 @@ import torch
 import torch.nn as nn
 from collections import OrderedDict
 
+# 關掉隨機性
+# torch.manual_seed(0)
+# torch.cuda.manual_seed_all(0)
+# torch.use_deterministic_algorithms(True)
+
 model_name = "/data/models/Qwen3-0.6B"
 
 # Load tokenizer
