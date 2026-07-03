@@ -164,12 +164,12 @@ for name in common_layers:
 print("-" * 128)
 print(f"\nOverall: {'ALL PASS ✓' if all_pass else 'SOME LAYERS FAILED ✗'}")
 
-generated_ids_cuda = model_cuda.generate(**model_inputs_cuda, max_new_tokens=1)
+# generated_ids_cuda = model_cuda.generate(**model_inputs_cuda, max_new_tokens=1)
 output_ids = generated_ids_cuda[0][len(model_inputs_cuda.input_ids[0]):].tolist()
 print(f"[cuda] Generated token ids : {output_ids}")
 print(f"[cuda] Decoded             : {tokenizer.decode(output_ids, skip_special_tokens=True)}")
 
-generated_ids_cpu = model_cpu.generate(**model_inputs_cpu, max_new_tokens=1)
+# generated_ids_cpu = model_cpu.generate(**model_inputs_cpu, max_new_tokens=1)
 output_ids = generated_ids_cpu[0][len(model_inputs_cpu.input_ids[0]):].tolist()
 print(f"[cpu] Generated token ids : {output_ids}")
 print(f"[cpu] Decoded             : {tokenizer.decode(output_ids, skip_special_tokens=True)}")

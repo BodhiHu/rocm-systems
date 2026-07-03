@@ -1,3 +1,4 @@
+import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model_name = "/data/models/Qwen3-0.6B"
@@ -10,7 +11,7 @@ model = AutoModelForCausalLM.from_pretrained(
     # device_map="auto"
     device_map="cuda"
     # device_map="cpu"
-)
+).eval()
 
 # prepare the model input
 prompt = "Hi."
@@ -18,7 +19,7 @@ messages = [
     {"role": "user", "content": prompt}
 ]
 
-print(f">>> using device: {model.device}")
+print(f"using device: {model.device}")
 
 text = tokenizer.apply_chat_template(
     messages,
@@ -28,12 +29,13 @@ text = tokenizer.apply_chat_template(
 )
 model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
 
-# conduct text completion
-generated_ids = model.generate(
-    **model_inputs,
-    max_new_tokens=1
-)
-output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
+with torch.no_grad():
+    # conduct text completion
+    generated_ids = model.generate(
+        **model_inputs,
+        max_new_tokens=1
+    )
+    output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
 
 # parsing thinking content
 try:
