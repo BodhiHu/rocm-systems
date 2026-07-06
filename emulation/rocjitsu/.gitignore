@@ -24,6 +24,7 @@
 *.swp
 .vscode
 build
+build_*
 third_party
 Testing
 tmp

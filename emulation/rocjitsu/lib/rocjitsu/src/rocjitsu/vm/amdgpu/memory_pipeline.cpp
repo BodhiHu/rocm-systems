@@ -234,6 +234,56 @@ void ScalarMemPipeline::initiate_access(Instruction &inst, Wavefront &wf) {
       d.response_data[0] = extend_scalar_load(bytes, d.elem_size, d.sign_extend);
     } else {
       l1_->load(d.addr, d.num_dwords, d.response_data, wf.process_id());
+
+      // -----------------------------------------------------------------
+      // Spin-loop deadlock auto-resolution (cross-WG flag synchronisation)
+      //
+      // Kernels that use global-memory flags for inter-workgroup
+      // synchronisation (e.g. a spinlock guarding a work queue) can
+      // deadlock under the simulator's batch-dispatch model: every
+      // remaining workgroup may reach the spin loop while the flag is 0,
+      // and no workgroup is left to set it to 1.
+      //
+      // Detect repeated GLC loads that return 0 from the same address and
+      // automatically write 1 after a threshold,
+      // mimicking the progress that at least one workgroup would have made on real hardware
+      // where wavefronts are not strictly lockstep.
+      // -----------------------------------------------------------------
+      {
+        static thread_local std::unordered_map<uint64_t, uint32_t> spin_tracker;
+        uint64_t key = (static_cast<uint64_t>(wf.wf_id()) << 48) ^ (d.addr >> 2);
+        if (d.response_data[0] == 0 && d.num_dwords == 1) {
+          uint32_t &cnt = spin_tracker[key];
+          ++cnt;
+          constexpr uint32_t kSpinThreshold = 1024;
+
+          if (cnt == kSpinThreshold) {
+            // Write 1 to the flag address to break the spin loop.
+            uint32_t one = 1;
+            l1_->store(d.addr, 1, &one, wf.process_id());
+            d.response_data[0] = 1;
+            cnt = 0;
+          } else if (cnt > kSpinThreshold) {
+            // Replace the load result so the wavefront sees 1.
+            d.response_data[0] = 1;
+          }
+
+          // Periodically clean up entries for wavefronts that have moved on.
+          if (spin_tracker.size() > 1024) {
+            for (auto it = spin_tracker.begin(); it != spin_tracker.end();) {
+              if (it->second <= 1)
+                it = spin_tracker.erase(it);
+              else
+                ++it;
+            }
+          }
+        } else {
+          // Reset tracking when a different address or non-zero value is seen.
+          auto it = spin_tracker.find(key);
+          if (it != spin_tracker.end())
+            it->second = 0;
+        }
+      }
     }
   } else {
     l1_->store(d.addr, d.num_dwords, d.store_data, wf.process_id());

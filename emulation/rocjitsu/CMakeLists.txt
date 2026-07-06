@@ -25,6 +25,16 @@ project(rocm_jit_suite VERSION 0.2.0)
 
 include(rj_version)
 
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(STATUS "Debug build enabled.")
+    set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -g -O0")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0")
+    set(CMAKE_VERBOSE_MAKEFILE ${CMAKE_VERBOSE_MAKEFILE}ON)
+    add_link_options(-rdynamic)
+    message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
+    message(STATUS "CMAKE_C_FLAGS: ${CMAKE_C_FLAGS}")
+endif()
+
 # Generate compile_commands.json for clangd, clang-tidy, and other tooling that
 # needs the exact compiler invocations from the configured build tree.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

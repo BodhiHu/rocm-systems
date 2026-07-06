@@ -368,6 +368,11 @@ void ComputeUnitCore::issue_instruction(Wavefront *active) {
       util::Logger::vm("CU ", this->name(), ": wf", active->wf_id(), " HALT(InvalidInst) pc=0x",
                        std::hex, active->pc, " words=[0x", words[0], ",0x", words[1], ",0x",
                        words[2], ",0x", words[3], "]", std::dec, " what=", e.what());
+      std::cerr << "[rocjit] ERROR: Instruction decode exception: CU " << this->name() << ": wf" << active->wf_id() << " HALT(InvalidInst) pc=0x"
+                << std::hex << active->pc << " words=[0x" << words[0] << ",0x" << words[1]
+                << ",0x" << words[2] << ",0x" << words[3] << "]" << std::dec
+                << " what=" << e.what() << std::endl;
+      assert(false && "Instruction decode exception");
       active->halt();
       return;
     }
@@ -424,6 +429,27 @@ void ComputeUnitCore::issue_instruction(Wavefront *active) {
           delete inst;
         return;
       }
+    }
+  }
+
+  if constexpr (util::Logger::synced_vm_dbg_print) {
+    static thread_local auto last_print = std::chrono::system_clock::now() - std::chrono::seconds(3);
+    static std::unordered_map<uint32_t, std::ofstream> wf_log_files;
+
+    std::ostream* os = &std::cout;
+    if (util::Logger::__potential_barrier_dead_loop_detected.load(std::memory_order_relaxed)) {
+      auto& ofs = wf_log_files.try_emplace(
+          active->wf_id(),
+          std::format("/tmp/rocivm_logs/wf_{}_insts.txt", active->wf_id())
+      ).first->second;
+      os = &ofs;
+      last_print = std::chrono::system_clock::now() - std::chrono::seconds(1000);
+
+      util::Logger::synced_print_per_sec(last_print, *os, [&](auto& out) {
+        out << "EXEC wf=" << std::format("{:06d}", active->wf_id())
+            << ", pc=" << active->pc
+            << ", inst= " << inst->disassemble();
+      });
     }
   }
 

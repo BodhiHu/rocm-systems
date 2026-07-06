@@ -1392,6 +1392,14 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
     return ran;
   };
 
+  // @hubodhi: track queue dispatch loops to detect potential barrier dead loops:
+  //   key: hw_queue index
+  //   value: [last_dispatch_idx, looped_count]
+  std::map<size_t, std::array<int, 2>> queue_dispatch_loop_info;
+  for (size_t qi = 0; qi < hw_queues_.size(); ++qi) {
+    queue_dispatch_loop_info[qi] = {-1, 0};
+  }
+
   // Phase 1: Dispatch-Execute-Complete loop (functional mode).
   //
   // Wrapped in a rescan loop. A dependent kernel the host submits *while this
@@ -1420,8 +1428,41 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
         while (qs.next_dispatch_idx < qs.entries.size()) {
           auto &entry = qs.entries[qs.next_dispatch_idx];
 
-          if (entry.barrier_bit && !barrier_satisfied(qs, qs.next_dispatch_idx))
+          // @hubodhi: update loop tracks info:
+          if (queue_dispatch_loop_info[qi][0] == static_cast<int>(qs.next_dispatch_idx)) {
+            queue_dispatch_loop_info[qi][1] += 1;
+          } else {
+            queue_dispatch_loop_info[qi][0] = static_cast<int>(qs.next_dispatch_idx);
+            queue_dispatch_loop_info[qi][1] = 0;
+          }
+
+          if (entry.barrier_bit && !barrier_satisfied(qs, qs.next_dispatch_idx)) {
+            // detected potential barrier dead loop,
+            // and print warnings max once per second:
+            if (queue_dispatch_loop_info[qi][1] >= 100) {
+              // TODO: 將 __potential_barrier_dead_loop_detected flag 放到一個合適的全局變量:
+              util::Logger::__potential_barrier_dead_loop_detected.store(true, std::memory_order_relaxed);
+
+              if constexpr (util::Logger::synced_vm_dbg_print) {
+                static thread_local auto last_print =
+                  std::chrono::system_clock::now() - std::chrono::seconds(3);
+                util::Logger::synced_print_per_sec(last_print, std::cout, [&](auto& out) {
+                  out << "[CommandProcessor] detected potential barrier dead loop, insts dumped to /tmp/rocivm_logs/:\n"
+                      << "\t\t>> queue index = " << qi
+                      << ", dispatch entry = " << qs.next_dispatch_idx
+                      << ", looped count = " << queue_dispatch_loop_info[qi][1]
+                      << "\n";
+                  for (size_t i = 0; i < qs.next_dispatch_idx; ++i) {
+                    out << "\t\t>> prior dispatch entry " << i
+                        << ", dispatched_wgs = " << qs.entries[i].dispatched_wgs
+                        << ", completed_wgs = " << qs.entries[i].completed_wgs
+                        << ", total_wgs = " << qs.entries[i].total_wgs;
+                  }
+                });
+              }
+            }
             break;
+          }
 
           if (entry.is_non_kernel()) {
             entry.completed_wgs = entry.total_wgs;
