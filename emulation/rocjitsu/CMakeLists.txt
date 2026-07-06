@@ -220,7 +220,7 @@ include(FetchContent)
 # Google Test
 FetchContent_Declare(
     googletest
-    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_REPOSITORY https://gitee.com/ahmi-ai/googletest.git
     GIT_TAG v1.15.2
 )
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
@@ -229,7 +229,7 @@ set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 # FlatBuffers - serialization for config, checkpoint, and wire format.
 FetchContent_Declare(
     flatbuffers
-    GIT_REPOSITORY https://github.com/google/flatbuffers.git
+    GIT_REPOSITORY https://gitee.com/ahmi-ai/flatbuffers.git
     GIT_TAG v24.3.25
 )
 set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
