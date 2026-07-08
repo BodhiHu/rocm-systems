@@ -11,13 +11,8 @@
 #include <ostream>
 #include <sstream>
 #include <string_view>
-#include <map>
-#include <fstream>
-#include <chrono>
-#include <syncstream>
-#include <atomic>
-#include <string>
-#include <filesystem>
+
+#include "util/vm_trace.h"
 
 namespace util {
 
@@ -183,34 +178,6 @@ public:
     requires std::invocable<Fn, std::ostringstream &>
   static void dbt_hooks(Fn &&fn) {
     print<GROUP_DBT_HOOKS>(std::forward<Fn>(fn));
-  }
-
-#define SYNCED_VM_DBG_PRINT
-#ifdef SYNCED_VM_DBG_PRINT
-  static constexpr bool synced_vm_dbg_print = true;
-#else
-  static constexpr bool synced_vm_dbg_print = false;
-#endif
-
-  inline static std::atomic<bool> __potential_barrier_dead_loop_detected{false};
-
-  /// @brief Helper to print at most once per second, with a timestamp.
-  template <typename Func>
-  static void synced_print_per_sec(
-    std::chrono::system_clock::time_point& last_print,
-    std::ostream& os, Func&& printer
-  ) {
-    auto now = std::chrono::system_clock::now();
-    if (now - last_print >= std::chrono::seconds(1)) {
-      auto now_t = std::chrono::system_clock::to_time_t(now);
-
-      std::osyncstream sync_os(os);
-      sync_os << std::put_time(std::localtime(&now_t), "[%H:%M:%S]") << ' ';
-
-      printer(sync_os);
-      sync_os << '\n' << std::flush;
-      last_print = now;
-    }
   }
 
 private:
