@@ -609,23 +609,75 @@ void ComputeUnitCore::issue_instruction(Wavefront *active) {
   }
 
   if constexpr (util::Logger::synced_vm_dbg_print) {
-    static thread_local auto last_print = std::chrono::system_clock::now() - std::chrono::seconds(3);
+    static constexpr size_t kHistorySize = 200;
+    struct InstRecord {
+      std::chrono::system_clock::time_point timestamp;
+      uint32_t wf_id;
+      uint64_t pc;
+      std::string disasm;
+    };
+    static std::map<uint32_t, std::vector<InstRecord>> inst_history;
+    static std::map<uint32_t, size_t> hist_cnt;
     static std::unordered_map<uint32_t, std::ofstream> wf_log_files;
 
-    std::ostream* os = &std::cout;
-    if (util::Logger::__potential_barrier_dead_loop_detected.load(std::memory_order_relaxed)) {
-      auto& ofs = wf_log_files.try_emplace(
-          active->wf_id(),
-          std::format("/tmp/rocivm_debug/wf_{}_insts.txt", active->wf_id())
-      ).first->second;
-      os = &ofs;
-      last_print = std::chrono::system_clock::now() - std::chrono::seconds(1000);
+    uint32_t wf_id = active->wf_id();
+    uint64_t pc = active->pc;
+    size_t wf_hist_cnt = 0;
+
+    static std::mutex history_mutex;
+    {
+      // LOCK HERE UNTIL THE END OF THIS BLOCK:
+      // This is to ensure that the instruction history logging is thread-safe.
+      std::lock_guard<std::mutex> lock(history_mutex);
+
+      if (inst_history[wf_id].size() < kHistorySize) {
+        inst_history[wf_id].resize(kHistorySize);
+        hist_cnt[wf_id] = 0;
+      }
+      wf_hist_cnt = hist_cnt[wf_id];
+
+      auto &rec = inst_history[wf_id][wf_hist_cnt];
+      rec.wf_id = wf_id;
+      rec.pc = pc;
+      rec.disasm = inst->disassemble();
+      rec.timestamp = std::chrono::system_clock::now();
     }
-    util::Logger::synced_print_per_sec(last_print, *os, [&](auto& out) {
-      out << "EXEC wf=" << std::format("{:06d}", active->wf_id())
-          << ", pc=" << active->pc
-          << ", inst= " << inst->disassemble();
-    });
+
+    bool is_trap = std::string_view(inst->mnemonic()).find("s_trap") != std::string_view::npos;
+    bool deadlock = util::Logger::__potential_barrier_dead_loop_detected.load(std::memory_order_relaxed);
+
+    // Flush when:
+    //  - a trap fires
+    //  - OR detected barrier dead-loop
+    //  /*- OR the history window is full*/
+    if (is_trap || deadlock /*|| wf_hist_cnt == (kHistorySize-1)*/) {
+      std::ostream *os = &std::cout;
+
+      std::filesystem::create_directories("/tmp/rocivm_logs");
+      auto &ofs = wf_log_files.try_emplace(
+        wf_id,
+        std::format("/tmp/rocivm_logs/wf_{}_insts.txt", wf_id)
+      ).first->second;
+
+      os = &ofs;
+
+      for (size_t i = 0; i <= wf_hist_cnt; ++i) {
+        auto &r = inst_history[wf_id][i];
+        std::string time = std::to_string(r.timestamp.time_since_epoch().count());
+        for (int i = time.length() - 3; i > 0; i -= 3) {
+            time.insert(i, ",");
+        }
+
+        *os << "[" << time << "] "
+            << "EXEC wf=" << std::format("{:04d}", wf_id) << ", pc=" << r.pc
+            << ", inst= " << r.disasm << '\n';
+      }
+      *os << std::flush;
+
+      hist_cnt[wf_id] = 0;
+    } else {
+      hist_cnt[wf_id] = (hist_cnt[wf_id] + 1) % kHistorySize;
+    }
   }
 
   execute_instruction(inst, *active);

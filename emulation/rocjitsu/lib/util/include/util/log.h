@@ -16,6 +16,7 @@
 #include <syncstream>
 #include <atomic>
 #include <string>
+#include <filesystem>
 
 namespace util {
 
@@ -183,7 +184,7 @@ public:
     print<GROUP_DBT_HOOKS>(std::forward<Fn>(fn));
   }
 
-// #define SYNCED_VM_DBG_PRINT
+#define SYNCED_VM_DBG_PRINT
 #ifdef SYNCED_VM_DBG_PRINT
   static constexpr bool synced_vm_dbg_print = true;
 #else
