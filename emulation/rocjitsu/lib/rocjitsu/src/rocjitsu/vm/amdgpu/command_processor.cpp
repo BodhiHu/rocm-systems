@@ -1231,13 +1231,12 @@ void CommandProcessor::handle_doorbell_sync(simdojo::Tick) {
           // detected potential barrier dead loop,
           // and print warnings max once per second:
           if (queue_dispatch_loop_info[qi][1] >= 100) {
-            // TODO: 將 __potential_barrier_dead_loop_detected flag 放到一個合適的全局變量:
-            util::Logger::__potential_barrier_dead_loop_detected.store(true, std::memory_order_relaxed);
+            util::vm_trace::__potential_barrier_dead_loop_detected.store(true, std::memory_order_relaxed);
 
-            if constexpr (util::Logger::synced_vm_dbg_print) {
+            if constexpr (util::vm_trace::synced_vm_dbg_print) {
               static thread_local auto last_print =
                 std::chrono::system_clock::now() - std::chrono::seconds(3);
-              util::Logger::synced_print_per_sec(last_print, std::cout, [&](auto& out) {
+              util::vm_trace::synced_print_per_sec(last_print, std::cout, [&](auto& out) {
                 out << "[CommandProcessor] detected potential barrier dead loop:\n"
                     << "\t\t>> queue index = " << qi
                     << ", dispatch entry = " << qs.next_dispatch_idx

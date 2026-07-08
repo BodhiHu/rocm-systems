@@ -3,11 +3,30 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 import torch
 import torch.nn as nn
 from collections import OrderedDict
+import numpy as np
+import random
 
-# 關掉隨機性
-# torch.manual_seed(0)
-# torch.cuda.manual_seed_all(0)
-# torch.use_deterministic_algorithms(True)
+# 關掉隨機性 -----------------------------------------
+def set_seed(seed=0):
+    # Python 隨機種子
+    random.seed(seed)
+    # NumPy 隨機種子
+    np.random.seed(seed)
+    # PyTorch CPU 種子
+    torch.manual_seed(seed)
+    # PyTorch GPU 種子
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+set_seed(0)
+# 確定性演算法
+torch.use_deterministic_algorithms(True)
+# 禁用 CUDA 的 benchmarking（會動態選擇演算法）
+torch.backends.cudnn.benchmark = False
+# 使用確定性模式的 cuDNN
+torch.backends.cudnn.deterministic = True
+# 關掉隨機性 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 model_name = "/data/models/Qwen3-0.6B"
 
