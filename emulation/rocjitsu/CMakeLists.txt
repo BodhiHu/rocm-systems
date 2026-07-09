@@ -16,10 +16,18 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR ENABLE_DBG_SYMBOLS)
         message(STATUS "Debug build enabled.")
     endif()
     message(STATUS "Debug symbols enabled.")
-    set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -g -O0")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0")
-    set(CMAKE_VERBOSE_MAKEFILE ${CMAKE_VERBOSE_MAKEFILE}ON)
+    # **-g -O0** vs **-g3 -Og**: See below for the difference.
+    set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -g3 -Og")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -Og")
+    # `add_compile_options` is important for overriding the default compile flags in Release build:
+    add_compile_options(
+        # -g -O0                  # generates debug info and disables optimizations
+        -g3 -Og                 # generates more debug info and enables debug level optimizations
+        -fno-inline             # disables function inlining
+        -fno-omit-frame-pointer # keeps the frame pointer for easier stack traces
+    )
     add_link_options(-rdynamic)
+    set(CMAKE_VERBOSE_MAKEFILE ${CMAKE_VERBOSE_MAKEFILE}ON)
     message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
     message(STATUS "CMAKE_C_FLAGS: ${CMAKE_C_FLAGS}")
 endif()
