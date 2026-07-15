@@ -9,6 +9,7 @@
 #include "embedded_schema.h"
 #include "rocjitsu/config/config_loader.h"
 #include "rocjitsu/isa/instruction.h"
+#include "rocjitsu/vm/plugins/profiled_execution_plugin.h"
 #include "rocjitsu/vm/soc.h"
 
 #include "rocjitsu/base/rj_compiler.h"
@@ -196,6 +197,12 @@ public:
     }
     events.push_back(e);
   }
+};
+
+class ParallelSafePlugin final : public ExecutionPlugin {
+public:
+  ParallelSafePlugin() : ExecutionPlugin("parallel_safe") {}
+  bool requires_serial_execution() const override { return false; }
 };
 
 const char *kindName(HookEvent::Kind k) {
@@ -466,6 +473,30 @@ TEST(ExecutionPluginTest, NoPluginNoCrash) {
   PluginFixture f;
   const uint32_t code[] = {S_NOP, S_ENDPGM};
   f.run_kernel(code, 2);
+}
+
+TEST(ExecutionPluginTest, GroupCapabilitiesComeFromContainedPlugins) {
+  ExecutionPluginGroup group;
+  EXPECT_FALSE(group.has_hooks());
+  EXPECT_FALSE(group.requires_serial_execution());
+
+  ASSERT_TRUE(group.add(std::make_unique<ParallelSafePlugin>()));
+  EXPECT_TRUE(group.has_hooks());
+  EXPECT_FALSE(group.requires_serial_execution());
+
+  ASSERT_TRUE(group.add(std::make_unique<OrderingPlugin>()));
+  EXPECT_TRUE(group.requires_serial_execution());
+}
+
+TEST(ExecutionPluginTest, ProfileDecoratorIsAConservativePlugin) {
+  auto nested = std::make_unique<ExecutionPluginGroup>();
+  nested->add(std::make_unique<ParallelSafePlugin>());
+  auto profile = std::make_unique<ProfiledExecutionPlugin>(std::move(nested));
+
+  ExecutionPluginGroup group;
+  ASSERT_TRUE(group.add(std::move(profile)));
+  EXPECT_TRUE(group.has_hooks());
+  EXPECT_TRUE(group.requires_serial_execution());
 }
 
 // -- Ordering tests ----------------------------------------------------------
