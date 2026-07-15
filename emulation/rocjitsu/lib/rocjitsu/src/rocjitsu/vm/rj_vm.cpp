@@ -6,6 +6,7 @@
 #include "embedded_schema.h"
 #include "rocjitsu/config/checkpoint.h"
 #include "rocjitsu/kmd/linux/simulated_kfd.h"
+#include "rocjitsu/vm/amdgpu/partitioning.h"
 #include "rocjitsu/vm/rj_vm_impl.h"
 #include "rocjitsu/vm/soc.h"
 
@@ -15,10 +16,13 @@ RJ_DIAGNOSTIC_IGNORE_PEDANTIC
 #include "linux/uapi/kfd_ioctl.h"
 RJ_DIAGNOSTIC_POP
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <sys/ioctl.h>
+#include <vector>
 
 using namespace rocjitsu;
 
@@ -31,6 +35,18 @@ rj_status_t create_from_loaded(config::LoadedConfig &loaded, rj_vm_mode_t mode, 
   auto s = std::make_unique<rj_vm_t>();
   s->soc = loaded.soc();
   auto num_xcds = s->soc->num_xcds();
+  uint32_t partition_xcds = num_xcds;
+  if (loaded.num_gpus > 1) {
+    for (auto &eb : loaded.extra_gpu_builds) {
+      if (auto *extra_soc = dynamic_cast<SoC *>(eb.root.get()))
+        partition_xcds += extra_soc->num_xcds();
+    }
+  }
+  // XCD partitions (config num_threads): run each XCD on its own engine
+  // partition/thread so the XCDs execute concurrently across their separate L2s.
+  uint32_t xcd_partitions =
+      std::clamp<uint32_t>(loaded.engine_config.num_threads, 1u, std::max(partition_xcds, 1u));
+  loaded.engine_config.num_threads = xcd_partitions;
 
   bool serve = (mode == RJ_VM_MODE_LOCAL || mode == RJ_VM_MODE_DAEMON);
   bool daemon = (mode == RJ_VM_MODE_DAEMON);
@@ -41,14 +57,17 @@ rj_status_t create_from_loaded(config::LoadedConfig &loaded, rj_vm_mode_t mode, 
 
   s->engine_config = loaded.engine_config;
   s->engine = std::make_unique<simdojo::SimulationEngine>(loaded.engine_config);
+  std::vector<SoC *> partition_socs;
 
   if (loaded.num_gpus > 1 && !loaded.extra_gpu_builds.empty()) {
     std::vector<std::unique_ptr<SoC>> socs;
     std::vector<uint32_t> gpu_ids;
+    partition_socs.reserve(loaded.extra_gpu_builds.size() + 1);
 
     auto root0 = loaded.take_root();
     root0.release();
     socs.push_back(std::unique_ptr<SoC>(s->soc));
+    partition_socs.push_back(s->soc);
     gpu_ids.push_back(loaded.devices.empty() ? 0 : loaded.devices[0].gpu_id);
 
     for (size_t i = 0; i < loaded.extra_gpu_builds.size(); ++i) {
@@ -58,6 +77,7 @@ rj_status_t create_from_loaded(config::LoadedConfig &loaded, rj_vm_mode_t mode, 
         continue;
       eb.root.release();
       socs.push_back(std::unique_ptr<SoC>(extra_soc));
+      partition_socs.push_back(extra_soc);
       gpu_ids.push_back(i + 1 < loaded.devices.size() ? loaded.devices[i + 1].gpu_id : 0);
     }
 
@@ -66,11 +86,15 @@ rj_status_t create_from_loaded(config::LoadedConfig &loaded, rj_vm_mode_t mode, 
     s->engine->topology().set_root(std::move(vm_ptr));
     loaded.wire_links(s->engine->topology());
     s->soc->wire_backing(s->engine->topology());
-    for (auto &eb : loaded.extra_gpu_builds) {
+    for (size_t i = 0; i < loaded.extra_gpu_builds.size(); ++i) {
+      auto &eb = loaded.extra_gpu_builds[i];
       s->engine->topology().wire_links(eb.link_specs, loaded.exec_mode);
-      auto *extra_soc = dynamic_cast<SoC *>(s->vm->soc());
-      if (extra_soc)
-        extra_soc->wire_backing(s->engine->topology());
+      if (i + 1 < partition_socs.size())
+        partition_socs[i + 1]->wire_backing(s->engine->topology());
+    }
+    for (auto *soc : partition_socs) {
+      if (loaded.soc_dispatch)
+        soc->set_soc_dispatch(true);
     }
   } else {
     auto root = loaded.take_root();
@@ -80,7 +104,14 @@ rj_status_t create_from_loaded(config::LoadedConfig &loaded, rj_vm_mode_t mode, 
     s->engine->topology().set_root(std::move(vm_ptr));
     loaded.wire_links(s->engine->topology());
     s->soc->wire_backing(s->engine->topology());
+    partition_socs.push_back(s->soc);
+    if (loaded.soc_dispatch)
+      s->soc->set_soc_dispatch(true);
   }
+  if (xcd_partitions > 1)
+    amdgpu::partition_topology_by_xcds(
+        s->engine->topology(), std::span<SoC *>(partition_socs.data(), partition_socs.size()),
+        xcd_partitions);
   s->engine->build();
 
   if (serve) {

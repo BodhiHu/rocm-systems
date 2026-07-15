@@ -53,9 +53,28 @@ Pre-built configs are in `configs/`:
 | Field | Type | Description |
 |---|---|---|
 | `max_ticks` | int | Maximum simulation ticks (0 = unlimited) |
-| `num_threads` | int | Worker threads for PDES engine |
-| `exec_mode` | string | `"functional"` or `"cycle"` |
+| `num_threads` | int | Simdojo engine partitions (one per XCD when partitioned) |
+| `soc_dispatch` | bool | Consolidate cross-XCD dispatch onto each SoC's primary CP for single-stream multi-XCD work distribution |
+| `exec_mode` | string | `"functional"` or `"clocked"` |
 | `vm.arch` | string | Architecture: `cdna3`, `cdna4`, etc. |
+
+### Simulation threading and dispatch
+
+`num_threads` controls Simdojo engine partitions, not the CU dispatch
+worker pool. The value is clamped to the number of XCDs visible to the
+VM. With `num_threads: 1`, all XCDs stay in one engine partition. With
+`num_threads: 4` on the 8-XCD CDNA4 configs, whole XCD subtrees are
+assigned round-robin to four partitions; with `num_threads: 8`, each
+XCD gets its own partition. A single XCD is never split across
+partitions.
+
+`soc_dispatch` controls which command processor (CP) accepts queues for
+a SoC. With `false`, queues are assigned round-robin across XCD CPs, so
+each dispatch is limited to the CUs visible to the CP on its assigned
+XCD. With `true`, all queues use the primary CP (`xcd[0].cp`). During
+initialization, the primary CP is given the other XCDs' SPIs, CUs, and
+L2 caches, so a single large dispatch can spread workgroups across all
+XCDs while each CU still uses its own XCD-local L2 path.
 
 ### Topology
 

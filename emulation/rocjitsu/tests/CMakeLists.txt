@@ -336,6 +336,7 @@ add_executable(
     gfx1250_sim_test.cpp
     l2_cache_test.cpp
     simdojo_sim_test.cpp
+    partitioning_test.cpp
     simulated_kfd_test.cpp
     decode_smoke_test.cpp
     smem_sbase_operand_test.cpp
