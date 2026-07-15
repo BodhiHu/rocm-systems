@@ -69,7 +69,7 @@ class CommandProcessor;
 /// to construct.
 class ComputeUnitCore : public simdojo::CompositeComponent {
 public:
-  static constexpr uint32_t kFunctionalQuantum = 1024;
+  static constexpr uint32_t kFunctionalQuantum = 16384;
 
   /// @brief Configuration for a compute unit.
   struct Config {
@@ -78,6 +78,7 @@ public:
     uint32_t sgprs_per_wf; ///< Scalar GPRs per wavefront (allocation granularity).
     uint32_t vgprs_per_wf; ///< Vector GPRs per wavefront (allocation granularity).
     uint32_t lds_size_kb;  ///< Local Data Share size in kilobytes.
+    uint32_t functional_quantum = kFunctionalQuantum; ///< Max instructions per functional slice.
   };
 
   ~ComputeUnitCore() override = default;
@@ -135,6 +136,28 @@ public:
   /// components can publish the state on which the wavefront is polling.
   void request_functional_yield() { functional_yield_requested_ = true; }
 
+  uint32_t functional_quantum() const {
+    return config_.functional_quantum == 0 ? UINT32_MAX : config_.functional_quantum;
+  }
+
+  /// @brief Execute up to one functional quantum of instructions on this CU.
+  /// @returns true if any active wavefronts were stepped.
+  bool run_quantum() {
+    // A request left by direct step() execution must not shorten this quantum.
+    functional_yield_requested_ = false;
+    bool ran = false;
+    for (uint32_t i = 0, quantum = functional_quantum(); i < quantum; ++i) {
+      if (!has_active_wfs())
+        break;
+      ran = true;
+      if (!step())
+        break;
+      if (std::exchange(functional_yield_requested_, false))
+        break;
+    }
+    return ran;
+  }
+
   /// @brief Signal that work has been dispatched; begin processing.
   ///
   /// @details Schedules an engine event that calls advance() repeatedly
@@ -188,7 +211,9 @@ public:
 
   /// @brief Set the execution plugin group (shared ownership).
   void set_plugin_group(std::shared_ptr<ExecutionPluginGroup> pg) {
-    plugin_group_ = pg ? pg : ExecutionPluginGroup::empty_group();
+    auto empty = ExecutionPluginGroup::empty_group();
+    plugin_group_ = pg ? std::move(pg) : empty;
+    plugin_hooks_enabled_ = plugin_group_->has_hooks();
   }
 
   /// @brief Return the execution plugin group.
@@ -370,9 +395,13 @@ public:
   /// @returns Register value.
   // TODO(newling) consider cmake flag to build without plugins, this call
   // overhead might be non-negligible.
+  bool plugin_hooks_enabled() const { return plugin_hooks_enabled_; }
+
   uint32_t read_sgpr(uint32_t reg_idx) const {
-    if (auto *wf = sgpr_to_wave_[reg_idx]) {
-      plugin_group_->onAmdgpuReadSgpr(wf, reg_idx);
+    if (plugin_hooks_enabled_) {
+      if (auto *wf = sgpr_to_wave_[reg_idx]) {
+        plugin_group_->onAmdgpuReadSgpr(wf, reg_idx);
+      }
     }
     return sgpr_file_[reg_idx];
   }
@@ -384,7 +413,7 @@ public:
 
   void notify_vgpr_read(const Wavefront *wf, uint32_t reg_idx, uint32_t lane_begin,
                         uint32_t lane_end, uint8_t byte_mask = 0xF) const {
-    if (wf)
+    if (plugin_hooks_enabled_ && wf)
       plugin_group_->onAmdgpuReadVgprs(wf, reg_idx, lane_begin, lane_end, byte_mask);
   }
 
@@ -535,6 +564,7 @@ protected:
   uint64_t private_aperture_limit_ = 0;
 
   std::shared_ptr<ExecutionPluginGroup> plugin_group_ = ExecutionPluginGroup::empty_group();
+  bool plugin_hooks_enabled_ = false;
 
   /// Reverse lookup: physical SGPR index -> owning wavefront (for race detection).
   /// Populated at dispatch_wf time. Null entries mean "not allocated".
@@ -566,7 +596,7 @@ public:
     if constexpr (Mode == simdojo::ExecMode::FUNCTIONAL) {
       // A request left by direct step() execution must not shorten this quantum.
       functional_yield_requested_ = false;
-      for (uint32_t i = 0; i < kFunctionalQuantum && step(); ++i) {
+      for (uint32_t i = 0, quantum = this->functional_quantum(); i < quantum && step(); ++i) {
         if (std::exchange(functional_yield_requested_, false))
           break;
       }
@@ -632,8 +662,10 @@ public:
 
   /// @returns Lane value from the VGPR file.
   uint32_t read_vgpr(uint32_t reg_idx, uint32_t lane) const override {
-    if (auto *wf = vgpr_to_wave_[reg_idx]) {
-      this->plugin_group_->onAmdgpuReadVgprs(wf, reg_idx, lane, lane + 1);
+    if (this->plugin_hooks_enabled_) {
+      if (auto *wf = vgpr_to_wave_[reg_idx]) {
+        this->plugin_group_->onAmdgpuReadVgprs(wf, reg_idx, lane, lane + 1);
+      }
     }
     return vgpr_file_[reg_idx][lane];
   }
